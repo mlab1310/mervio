@@ -23,3 +23,11 @@ venv/
 build/
 dist/
 *.egg-info/
+
+# --- Mission 004.0: donnees volumineuses ou externes, jamais versionnees ---
+data/external/*
+!data/external/README.md
+data/synthetic/*
+!data/synthetic/README.md
+data/benchmark/*
+!data/benchmark/README.md

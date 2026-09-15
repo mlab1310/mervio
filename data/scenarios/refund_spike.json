@@ -1,0 +1,36 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "no_anomaly",
+      "expected": "revenue",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "anomaly",
+      "expected": "refunds:up",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "kpi_above",
+      "expected": [
+        "refund_rate",
+        0.08
+      ],
+      "note": "",
+      "status": "MATCH"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "flat",
+    "possible_secondary_causes": [],
+    "primary_root_cause": "refund_increase",
+    "recommendation_category": "returns_quality",
+    "revenue_direction": "flat"
+  },
+  "injected": "probabilite de remboursement x6, derniere semaine",
+  "scenario": "refund_spike",
+  "window": "last_week"
+}

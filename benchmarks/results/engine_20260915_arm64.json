@@ -1,0 +1,234 @@
+{
+  "benchmark": "mervio-engine",
+  "dataset": "synthetic healthy_store / fashion_eu / 365 days / seed 42",
+  "recorded_utc": "2026-09-15T16:18:59Z",
+  "machine": {
+    "platform": "macOS-26.4-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.11.16",
+    "cpu_count": 18
+  },
+  "runs": [
+    {
+      "target_orders": 100,
+      "orders": 97,
+      "order_rows": 134,
+      "orders_csv_mb": 0.02,
+      "generation_s": 0.018,
+      "parse": {
+        "status": "ok",
+        "timings_s": {
+          "csv_parse_orders": 0.0007
+        },
+        "rows": 134,
+        "peak_rss_mb": 20.5
+      },
+      "stages": {
+        "status": "ok",
+        "timings_s": {
+          "ingest_normalize_validate": 0.0119,
+          "window_slice": 0.0,
+          "kpis": 0.0,
+          "profitability": 0.0,
+          "time_series": 0.0037,
+          "anomaly_detection": 0.0003,
+          "comparisons": 0.0019,
+          "root_cause": 0.0001,
+          "business_health": 0.0,
+          "insights": 0.0,
+          "report_assembly": 0.001,
+          "json_serialization": 0.0003
+        },
+        "orders": 97,
+        "report_bytes": 34209,
+        "peak_rss_mb": 27.2
+      },
+      "end_to_end": {
+        "status": "ok",
+        "timings_s": {
+          "run_analysis": 0.0195,
+          "json_serialization": 0.0003
+        },
+        "peak_rss_mb": 27.1,
+        "health_score": 81
+      }
+    },
+    {
+      "target_orders": 1000,
+      "orders": 1002,
+      "order_rows": 1364,
+      "orders_csv_mb": 0.2,
+      "generation_s": 0.035,
+      "parse": {
+        "status": "ok",
+        "timings_s": {
+          "csv_parse_orders": 0.0059
+        },
+        "rows": 1364,
+        "peak_rss_mb": 22.9
+      },
+      "stages": {
+        "status": "ok",
+        "timings_s": {
+          "ingest_normalize_validate": 0.0302,
+          "window_slice": 0.0001,
+          "kpis": 0.0001,
+          "profitability": 0.0,
+          "time_series": 0.0079,
+          "anomaly_detection": 0.0004,
+          "comparisons": 0.0041,
+          "root_cause": 0.0003,
+          "business_health": 0.0001,
+          "insights": 0.0,
+          "report_assembly": 0.0011,
+          "json_serialization": 0.0003
+        },
+        "orders": 1002,
+        "report_bytes": 38124,
+        "peak_rss_mb": 29.5
+      },
+      "end_to_end": {
+        "status": "ok",
+        "timings_s": {
+          "run_analysis": 0.0445,
+          "json_serialization": 0.0003
+        },
+        "peak_rss_mb": 29.6,
+        "health_score": 65
+      }
+    },
+    {
+      "target_orders": 10000,
+      "orders": 9968,
+      "order_rows": 13340,
+      "orders_csv_mb": 2.01,
+      "generation_s": 0.195,
+      "parse": {
+        "status": "ok",
+        "timings_s": {
+          "csv_parse_orders": 0.0513
+        },
+        "rows": 13340,
+        "peak_rss_mb": 49.1
+      },
+      "stages": {
+        "status": "ok",
+        "timings_s": {
+          "ingest_normalize_validate": 0.2204,
+          "window_slice": 0.0007,
+          "kpis": 0.0003,
+          "profitability": 0.0001,
+          "time_series": 0.0531,
+          "anomaly_detection": 0.0004,
+          "comparisons": 0.0281,
+          "root_cause": 0.0015,
+          "business_health": 0.0002,
+          "insights": 0.0001,
+          "report_assembly": 0.0014,
+          "json_serialization": 0.0003
+        },
+        "orders": 9968,
+        "report_bytes": 36453,
+        "peak_rss_mb": 69.9
+      },
+      "end_to_end": {
+        "status": "ok",
+        "timings_s": {
+          "run_analysis": 0.308,
+          "json_serialization": 0.0003
+        },
+        "peak_rss_mb": 69.9,
+        "health_score": 70
+      }
+    },
+    {
+      "target_orders": 100000,
+      "orders": 99921,
+      "order_rows": 133628,
+      "orders_csv_mb": 20.11,
+      "generation_s": 1.712,
+      "parse": {
+        "status": "ok",
+        "timings_s": {
+          "csv_parse_orders": 0.5102
+        },
+        "rows": 133628,
+        "peak_rss_mb": 311.0
+      },
+      "stages": {
+        "status": "ok",
+        "timings_s": {
+          "ingest_normalize_validate": 2.3826,
+          "window_slice": 0.009,
+          "kpis": 0.0032,
+          "profitability": 0.0011,
+          "time_series": 0.8452,
+          "anomaly_detection": 0.0004,
+          "comparisons": 0.4427,
+          "root_cause": 0.0185,
+          "business_health": 0.0015,
+          "insights": 0.0013,
+          "report_assembly": 0.0037,
+          "json_serialization": 0.0003
+        },
+        "orders": 99921,
+        "report_bytes": 35324,
+        "peak_rss_mb": 515.2
+      },
+      "end_to_end": {
+        "status": "ok",
+        "timings_s": {
+          "run_analysis": 3.6354,
+          "json_serialization": 0.0003
+        },
+        "peak_rss_mb": 515.2,
+        "health_score": 78
+      }
+    },
+    {
+      "target_orders": 1000000,
+      "orders": 999146,
+      "order_rows": 1336419,
+      "orders_csv_mb": 201.22,
+      "generation_s": 16.637,
+      "parse": {
+        "status": "ok",
+        "timings_s": {
+          "csv_parse_orders": 5.5202
+        },
+        "rows": 1336419,
+        "peak_rss_mb": 2015.0
+      },
+      "stages": {
+        "status": "ok",
+        "timings_s": {
+          "ingest_normalize_validate": 27.3092,
+          "window_slice": 0.1144,
+          "kpis": 0.0422,
+          "profitability": 0.0151,
+          "time_series": 11.3911,
+          "anomaly_detection": 0.0004,
+          "comparisons": 5.9482,
+          "root_cause": 0.2723,
+          "business_health": 0.0164,
+          "insights": 0.015,
+          "report_assembly": 0.0341,
+          "json_serialization": 0.0003
+        },
+        "orders": 999146,
+        "report_bytes": 35643,
+        "peak_rss_mb": 3741.7
+      },
+      "end_to_end": {
+        "status": "ok",
+        "timings_s": {
+          "run_analysis": 45.3841,
+          "json_serialization": 0.0004
+        },
+        "peak_rss_mb": 3740.6,
+        "health_score": 78
+      }
+    }
+  ],
+  "recorded_utc_1m": "2026-09-15T16:19:20Z"
+}

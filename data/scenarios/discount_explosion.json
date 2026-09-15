@@ -1,0 +1,42 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "aov_wow",
+      "expected": "down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "orders_wow",
+      "expected": "flat",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "primary_factor",
+      "expected": "average_order_value",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "recommendation_category",
+      "expected": "discount_policy",
+      "note": "le moteur ne suit pas le taux de remise: il recommande sur le panier moyen",
+      "status": "KNOWN_GAP"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "flat",
+    "possible_secondary_causes": [
+      "aov_decline",
+      "margin_erosion"
+    ],
+    "primary_root_cause": "discount_increase",
+    "recommendation_category": "discount_policy",
+    "revenue_direction": "down"
+  },
+  "injected": "80 % des commandes remisees a 35 %, derniere semaine",
+  "scenario": "discount_explosion",
+  "window": "last_week"
+}

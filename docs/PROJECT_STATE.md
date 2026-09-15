@@ -1,7 +1,7 @@
 # PROJECT STATE
 
-**Mis à jour :** 15 septembre 2026 — fin de la Mission 003.3
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 623 / 623 · **Dépendances runtime :** 0
+**Mis à jour :** 15 septembre 2026 — Mission 004.0 (gate recherche et architecture, branche `mission-004.0`)
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 656 / 656 · **Dépendances runtime :** 0
 **Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, sémantique des commandes et remboursements décidée ; aucun export CSV natif de marchand
 
 ## Où en est Mervio
@@ -197,7 +197,31 @@ Détail : `~/mervio-validation/reports/MISSION-003.3-*.md` (hors dépôt).
 - Une seule devise par analyse ; aucune conversion.
 - Taux de réachat intra-période. Pas de saisonnalité.
 
+## Mission 004.0 — recherche, benchmark et gate d'architecture
+
+Aucun fichier existant du moteur modifié ; contrats 003.3 intacts.
+
+- **Générateur synthétique déterministe** `mervio.synthetic` (stdlib) :
+  - formats des connecteurs existants plus tables canoniques (clients, sessions, stock, expéditions) ;
+  - manifeste `synthetic` / `not_for_production` avec SHA-256 ;
+  - validation relationnelle ;
+  - 17 scénarios avec vérité terrain confrontés au vrai moteur : 170/170 sur 2 profils et 5 graines.
+  Les angles morts sont testés en `KNOWN_GAP` : trafic organique, attrition, remise vs panier moyen, marge,
+  stock, expédition, saisonnalité.
+- **Benchmark du moteur :** 100 000 commandes en 3,6 s et 515 Mo ; 1 M en 45 s et 3,7 Go. Croissance quasi
+  linéaire. Goulots : ingestion ~60 %, séries et comparaisons ~38 %. Aucune optimisation (ADR-004-012).
+- **Recherche :** 8 dépôts clonés et notés, ~30 bibliothèques qualifiées, matrice de licences, jeux publics
+  (seul UCI Online Retail II est commercialement utilisable), benchmark UX.
+- **Architecture :** monolithe modulaire FastAPI + worker PostgreSQL + Next.js ; multi-tenancy par clés + RLS ;
+  API REST v1 sur rapports persistés ; connecteurs brut → canonique ; provenance au grain de l'exécution ;
+  LLM contrat 1.0 côté worker (ADR-004-001 à 012).
+- 33 tests ajoutés (générateur, isolation du moteur, scénarios).
+
+Détail : `docs/MISSION_004_0_HANDOFF.md`, `research/`.
+
 ## Prochaine étape
+
+0. Mission 004.1 (persistance et isolation tenant), puis 004.2 à 004.6 selon `docs/MISSION_004_0_HANDOFF.md`.
 
 1. Obtenir d'un marchand pilote un export CSV **natif** Shopify (avec remises
    partielles, et si possible Stripe et Google Ads) et le passer dans

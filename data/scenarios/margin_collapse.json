@@ -1,0 +1,42 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "revenue_wow",
+      "expected": "flat",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "kpi_below",
+      "expected": [
+        "gross_margin",
+        0.2
+      ],
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "insight_present",
+      "expected": "low_margin_product",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "margin_trend",
+      "expected": "down",
+      "note": "l'export produits ne porte qu'un cout courant: aucune evolution de marge n'est observable",
+      "status": "KNOWN_GAP"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "flat",
+    "possible_secondary_causes": [],
+    "primary_root_cause": "cost_increase",
+    "recommendation_category": "cost_supplier",
+    "revenue_direction": "flat"
+  },
+  "injected": "cout unitaire de tous les produits x2,4 (instantane de l'export produits)",
+  "scenario": "margin_collapse",
+  "window": "always"
+}

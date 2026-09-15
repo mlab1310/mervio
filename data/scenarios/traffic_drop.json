@@ -1,0 +1,45 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "revenue_wow",
+      "expected": "down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "orders_wow",
+      "expected": "down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "anomaly",
+      "expected": "paid_clicks:down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "primary_factor",
+      "expected": "paid_traffic",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "recommendation_category",
+      "expected": "acquisition",
+      "note": "",
+      "status": "MATCH"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "down",
+    "possible_secondary_causes": [],
+    "primary_root_cause": "traffic_decline",
+    "recommendation_category": "acquisition",
+    "revenue_direction": "down"
+  },
+  "injected": "trafic paye et organique -35 %, conversion inchangee, derniere semaine",
+  "scenario": "traffic_drop",
+  "window": "last_week"
+}

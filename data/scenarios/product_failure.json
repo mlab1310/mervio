@@ -1,0 +1,37 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "revenue_wow",
+      "expected": "down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "top_product_contributor",
+      "expected": [
+        0
+      ],
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "primary_factor",
+      "expected": "product_demand_collapse",
+      "note": "la decomposition du moteur ne connait que trafic, conversion et panier moyen",
+      "status": "KNOWN_GAP"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "down",
+    "possible_secondary_causes": [
+      "refund_increase"
+    ],
+    "primary_root_cause": "product_demand_collapse",
+    "recommendation_category": "product_quality",
+    "revenue_direction": "down"
+  },
+  "injected": "produit n°1 du CA: 90 % des demandes abandonnees et remboursements x8, derniere semaine",
+  "scenario": "product_failure",
+  "window": "last_week"
+}

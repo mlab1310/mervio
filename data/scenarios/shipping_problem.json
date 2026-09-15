@@ -1,0 +1,29 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "anomaly",
+      "expected": "refunds:up",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "primary_factor",
+      "expected": "fulfillment_delay",
+      "note": "aucune donnee d'expedition ingeree par le moteur",
+      "status": "KNOWN_GAP"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "down",
+    "possible_secondary_causes": [
+      "refund_increase"
+    ],
+    "primary_root_cause": "fulfillment_delay",
+    "recommendation_category": "fulfillment_logistics",
+    "revenue_direction": "down"
+  },
+  "injected": "60 % de livraisons en retard, remboursements x4, conversion -10 %, derniere semaine",
+  "scenario": "shipping_problem",
+  "window": "last_week"
+}
