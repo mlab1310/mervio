@@ -11,6 +11,20 @@ COGS, marge brute, frais de paiement, taux de réachat, concentration top 5.
 Chaque `Metric` porte `definition`, `formula`, `sources`, `period`,
 `data_quality`, `notes`.
 
+### Chiffre d'affaires et signaux
+
+- CA net = Σ `Order.subtotal`, sous-total **après** remises (D-041). Aucune
+  soustraction de remise dans l'analytique ; un test structurel l'interdit.
+- Un CA négatif ne provient que de montants source négatifs : il est conservé,
+  jamais ramené à zéro. KPI `revenue` marqué `incomplete` avec une note,
+  avertissements `negative_subtotal` et `negative_period_revenue` (D-043).
+- Commandes annulées (`Cancelled at` renseigné, indépendamment du statut
+  financier), non encaissées (`pending`, `authorized`, `partially_paid`,
+  `voided`, `expired`), à `Subtotal` nul et issues d'un brouillon : **comptées**
+  comme toute commande, et signalées avec leur nombre et leur montant
+  (`cancelled_orders_counted`, `unsettled_orders_counted`,
+  `zero_value_orders_counted`, `draft_orders_counted`). Règle non établie (D-043).
+
 ### Zéro vs inconnu
 
 | Situation | Valeur | Raison |

@@ -1,8 +1,8 @@
 # PROJECT STATE
 
-**Mis à jour :** 15 septembre 2026 — fin de la Mission 003
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 535 / 535 · **Dépendances runtime :** 0
-**Maturité :** tests internes — aucune validation sur export marchand réel
+**Mis à jour :** 15 septembre 2026 — fin de la Mission 003.2
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 601 / 601 · **Dépendances runtime :** 0
+**Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, aucun export CSV natif de marchand
 
 ## Où en est Mervio
 
@@ -131,12 +131,31 @@ Kaggle (CSV + XLSX) a pu être testé ; il reste non supporté (D-028).
 
 Détail : `docs/REAL_DATA_VALIDATION_003.md`.
 
+## Missions 003.1 et 003.2 — registre de ventes réel
+
+Source : pièce OH5 (TTAB 92078800), registre de ventes réel déposé
+publiquement, reconstruit depuis le PDF sans donnée personnelle (hors dépôt).
+106 commandes, 119 lignes, USD, 2018-01 → 2020-10. Ce n'est pas l'export CSV
+d'origine.
+
+- 003.1 : `NO-GO`. Remises soustraites deux fois (−45,4 % de CA sur 12 mois,
+  mois négatifs, fausses anomalies), dates tableur rejetées.
+- 003.2 : remise corrigée (D-041), dates à barres sans devinette (D-042),
+  CA négatif et commandes à sémantique non établie signalés (D-043). Sur le
+  fichier reconstruit d'origine : 119/119 lignes acceptées, CA net, commandes,
+  unités, remboursements et les 36 mois de série rapprochés du calcul
+  indépendant ; anomalies 3 → 1.
+- Toujours ouverts : traitement des annulations, brouillons et montants nuls ;
+  base des remboursements ; remise partielle non observée ; export CSV natif,
+  Stripe et Google Ads réels.
+
+Détail : `~/mervio-validation/reports/` (hors dépôt).
+
 ## Limites assumées
 
-- **Le moteur n'a jamais vu les données d'un vrai marchand.** La mission 001.6
-  a confronté Mervio à un dataset externe de 60 000 lignes, mais synthétique :
-  colonnes dérivées exactes au centième, zéro valeur manquante, zéro doublon.
-  Aucun export réel ne ressemble à cela. La limite reste entière.
+- **Un seul registre réel, reconstruit depuis un PDF.** OH5 (106 commandes, un
+  marchand) ne représente pas les marchands Shopify ; aucun export CSV natif,
+  aucune remise partielle, aucun email client n'a encore été analysé.
   Procédure dans `docs/REAL_DATA_TEST.md`.
 - Dépense publicitaire = Google Ads uniquement.
 - Trafic approximé par les clics payants.
@@ -146,9 +165,9 @@ Détail : `docs/REAL_DATA_VALIDATION_003.md`.
 
 ## Prochaine étape
 
-1. Passer un **vrai** export Shopify (et si possible Stripe et Google Ads)
-   dans `scripts/validate_real_export.py`, trancher la convention du
-   `Subtotal` et le traitement des commandes annulées, puis écrire un test de
-   régression pour chaque écart rencontré.
+1. Passer un export CSV **natif** Shopify (avec remises partielles, et si
+   possible Stripe et Google Ads) dans `scripts/validate_real_export.py`,
+   décider du traitement des commandes annulées, brouillons et à montant nul
+   (D-043), puis écrire un test de régression pour chaque écart rencontré.
 2. Brancher un premier fournisseur réel derrière `LLMProvider` et mesurer le
    taux de réponses rejetées par le validateur sur les scénarios golden.

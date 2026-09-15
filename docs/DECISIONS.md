@@ -11,6 +11,7 @@ livrable manuellement pour un premier client payant et reste le cœur du SaaS.
 ## D-002 — CA net = subtotal − remise, hors port et hors taxes
 Le port facturé n'est pas du CA produit ; la TVA n'appartient pas à l'entreprise.
 **Conséquence :** les chiffres Mervio seront inférieurs au « total des ventes » affiché par Shopify. À expliquer en démo, systématiquement.
+**Statut (15/09/2026) :** le périmètre « hors port et hors taxes » reste en vigueur ; la formule `subtotal − remise` est **remplacée par D-041**.
 
 ## D-003 — `Optional[float]` plutôt que valeurs par défaut
 Un coût absent reste `None`. C'est ce qui permet de dire « non calculable ».
@@ -162,3 +163,21 @@ latin-1 décode n'importe quel octet : un classeur `.xlsx` réel était « lu »
 ## D-040 — Aucune convention de CA n'est changée sans export réel
 L'API Shopify définit le sous-total comme postérieur aux remises ; l'aide de l'export CSV ne le précise pas. Changer D-002 sur cette seule base pourrait corriger une erreur ou en créer une.
 **Conséquence :** D-002 est conservée. Le harnais `validate_real_export.py` tranche empiriquement à partir de la colonne `Total` ; la décision sera prise sur le premier export réel, pas avant. De même, le traitement des commandes annulées et impayées (aujourd'hui comptées dans le CA) attend une décision produit documentée.
+**Statut (15/09/2026) :** tranchée pour la remise par D-041 (preuve réelle OH5) ; le traitement des commandes annulées et impayées reste ouvert (D-043).
+
+## D-041 — Le sous-total Shopify est déjà net des remises
+**Règle précédente (D-002) :** CA net = `Subtotal − Discount Amount`.
+**Preuve :** registre de ventes réel déposé publiquement (TTAB 92078800, pièce OH5, Mission 003.1), reconstruit sans donnée personnelle : 30 commandes remisées sur 30 vérifient `Subtotal = Σ lignes − remise` et `Total = Subtotal + Shipping + Taxes`, 0 exception ; les 76 commandes non remisées sont cohérentes. L'API Admin Shopify définit `subtotalPriceSet` comme la somme des lignes après remises ; l'aide de l'export CSV ne le précise pas. L'ancienne formule sous-estimait le CA de 45,4 % sur 12 mois, produisait trois mois négatifs et deux fausses anomalies.
+**Nouvelle règle :** dans le modèle normalisé, `Order.subtotal` est le sous-total après remises de commande et `net_revenue = subtotal` ; `discount` est informatif. Le connecteur Shopify reprend `Subtotal` tel quel et signale en erreur (`subtotal_convention_contradiction`) tout fichier dont les `Total` supposent un sous-total avant remise, sans changer de convention en silence. Un futur connecteur à sous-total avant remise convertit à l'ingestion.
+**Portée :** export commandes Shopify. Les fixtures synthétiques, qui encodaient la convention inverse, sont régénérées (seul `Subtotal` change, le CA net est identique).
+**Limites :** toutes les remises observées sont à 100 % ; la remise partielle repose sur la documentation Shopify. `Discount Amount` peut inclure une remise sur le port : sans effet sur le CA net, non vérifié.
+
+## D-042 — L'ordre jour/mois d'une date n'est jamais deviné
+**Règle précédente :** formats essayés dans l'ordre `J/M/AAAA H:MM:SS`, `J/M/AAAA`, `M/J/AAAA` ; `M/J/AAAA H:MM` non supporté. Un export tableur réel (OH5) était entièrement rejeté, et `04/05/2020` était lu 4 mai sans signal.
+**Nouvelle règle :** les dates à barres (`J/M/AAAA` ou `M/J/AAAA`, heure optionnelle `H:MM` ou `H:MM:SS`) ne sont lues que si l'ordre est déclaré par l'appelant ou lisible dans la valeur (une composante > 12). Chaque connecteur (Shopify, Stripe, Google Ads) établit une convention par fichier à partir des valeurs discriminantes : appliquée aux valeurs ambiguës avec une trace `date_order_inferred` ; colonne sans valeur discriminante, lignes rejetées (`ambiguous_date_order`) ; ordres mélangés, dates à barres rejetées (`date_order_conflict`). L'inspecteur applique la même règle par colonne. ISO 8601 inchangé.
+**Limites :** une date à barres n'a pas de fuseau (traitée comme UTC) ; un fichier dont toutes les dates ont jour et mois ≤ 12 est refusé plutôt que deviné ; aucune configuration explicite de locale n'existe encore.
+
+## D-043 — Annulations, commandes non encaissées, brouillons et montants nuls : visibles, pas requalifiés
+**Constat (OH5) :** 17 commandes annulées dont 15 au statut `paid`, dates d'annulation illisibles ; 42 commandes à `Subtotal` nul (40 à `Total` nul) ; 30 commandes issues d'un brouillon ; 3 remboursements égaux au `Total` taxes et port compris ; aucune date de remboursement.
+**Décision :** aucune règle d'exclusion n'est établie par une seule source. Ces commandes restent comptées dans les commandes, le CA et le panier moyen ; le connecteur Shopify publie leur nombre et leur montant (`cancelled_orders_counted`, `unsettled_orders_counted`, `zero_value_orders_counted`, `draft_orders_counted`). L'annulation (`Cancelled at`) et le statut financier sont deux signaux indépendants. Un CA négatif est conservé et signalé (`negative_subtotal`, `negative_period_revenue`), jamais ramené à zéro. Le taux de remboursement déclare sa base hétérogène.
+**Ouvert :** définition produit du CA et du panier moyen pour ces commandes ; date réelle des remboursements (non vérifiable avec l'export commandes).
