@@ -5,12 +5,15 @@
 ```
 DATA -> INGESTION -> NORMALIZATION -> VALIDATION -> ANALYTICS
      -> ANOMALY -> ROOT CAUSE -> BUSINESS HEALTH -> [STRUCTURED REPORT]
-     -> (mission suivante) LLM -> RECOMMENDATION -> ACTION
+     -> LLM CONTEXT -> PROVIDER -> STRUCTURED RESPONSE -> VALIDATION
+     -> (missions suivantes) RECOMMENDATION -> ACTION
 ```
 
 La mission 001 construit la chaîne **jusqu'au rapport structuré inclus**.
-La couche LLM n'existe pas encore : seule son interface d'entrée est posée
-(`mervio.llm.context`).
+La mission 002 ajoute la couche d'interprétation LLM au-dessus du rapport,
+sans le modifier : contexte versionné et borné, abstraction fournisseur,
+validation de la réponse. Aucun fournisseur réel n'est branché. Contrat
+complet : `LLM_CONTRACT.md`.
 
 ## Arborescence
 
@@ -46,7 +49,15 @@ src/mervio/
   reporting/
     executive.py       rapport lisible par un dirigeant
     writers.py         report.json / report.txt / data_quality.json
-  llm/context.py       AnalyticsResult -> contexte LLM (aucun appel)
+  llm/
+    contract.py        versions, bornes, instructions système immuables
+    context.py         rapport -> contexte LLM 1.0 borné (aucun appel)
+    safety.py          hygiène des textes non fiables, masquage PII / secrets
+    prompt.py          canal système / enveloppe de données séparés
+    provider.py        interface fournisseur, délai et tentatives bornés
+    mock.py            fournisseur déterministe hors ligne (tests)
+    response.py        validation du schéma et ancrage de la réponse
+    service.py         explain_report() — ne lève pas, ne modifie pas le rapport
   cli/main.py          analyze / validate / demo
 ```
 
@@ -57,6 +68,7 @@ cli/  ──►  application/  ──►  analytics/  ──►  domain/
               │                  │
               └──► ingestion/ ───┘
 reporting/ ──► application/ (types) + domain/
+llm/ ──► rapport (dict) ; réutilise application/sensitive et ingestion/base (motifs)
 ```
 
 Une couche ne dépend jamais d'une couche au-dessus d'elle. `cli/` est

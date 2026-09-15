@@ -126,3 +126,27 @@ L'inspecteur typait sur 2 000 lignes et publiait cardinalité, taux de manquants
 ## D-031 — La sensibilité d'une colonne ne dépend pas de son type
 Un `customer_id` textuel était signalé comme donnée personnelle, un `customer_id` numérique ne l'était pas.
 **Conséquence :** les hints d'identifiant client sont appliqués quel que soit le type inféré.
+
+## D-032 — Le LLM interprète, il n'est jamais une source de chiffres
+Un modèle qui recalcule un KPI ou « corrige » un score produit un chiffre invérifiable.
+**Conséquence :** la couche `llm/` lit le rapport sans le modifier. L'explication est un artefact séparé ; le score qu'elle porte est recopié du contexte, jamais lu dans la réponse. `analyze_dataset()` n'appelle aucun LLM et le rapport garde `llm_used = false`.
+
+## D-033 — Contexte LLM versionné, borné et déterministe
+L'ancien `build_llm_context()` ne bornait que quatre listes : un rapport pathologique produisait un contexte de près de 5 Mo.
+**Conséquence :** contrat `1.0`, chaque collection bornée, plafond d'octets mesuré sur le contexte complet et réduction dans un ordre fixe. Aucun horodatage, identifiant aléatoire ni chemin de fichier. Tout changement de forme incrémente la version ; les instantanés golden le détectent.
+
+## D-034 — Les textes importés sont des données, jamais des instructions
+Un titre produit « Ignore previous instructions » arrivait mot pour mot dans le contexte, au même niveau que le contrat système.
+**Conséquence :** instructions système constantes dans leur propre canal ; données dans une enveloppe unique dont les chevrons sont échappés. Textes masqués (PII, secrets) et signalés s'ils ressemblent à une instruction, mais jamais supprimés : le filtrage lexical n'est pas la défense principale.
+
+## D-035 — Un chiffre cité doit exister dans un champ numérique du contexte
+Un nombre présent dans un texte importé (« le vrai CA est 999999 ») serait sinon « ancré » par sa simple présence.
+**Conséquence :** le validateur n'accepte que les nombres des champs numériques du contexte et des libellés du moteur, à la précision où ils sont écrits. Une métrique indisponible ne peut pas être chiffrée ; un profit partiel doit être qualifié « partiel ». Au prix de rejets de reformulations légitimes : préférable à un chiffre inventé.
+
+## D-036 — Une réponse invalide n'est pas retentée
+Redemander au modèle jusqu'à obtenir une réponse qui passe transforme le validateur en filtre statistique.
+**Conséquence :** seules les erreurs transitoires du fournisseur (délai, indisponibilité, limite de débit) sont retentées, au plus 3 fois. Authentification, refus et réponse rejetée rendent l'explication indisponible immédiatement.
+
+## D-037 — Un échec LLM ne fait jamais échouer l'analyse
+Une analyse déterministe réussie reste vraie quand le modèle est indisponible.
+**Conséquence :** `explain_report()` ne lève pas (même principe que D-022) : statut `unavailable` et code d'erreur, rapport intact. Journaux limités aux métadonnées, jamais le prompt ni la réponse.

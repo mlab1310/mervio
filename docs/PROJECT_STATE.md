@@ -1,7 +1,7 @@
 # PROJECT STATE
 
-**Mis à jour :** 14 septembre 2026 — fin de la Mission 001.6
-**Version moteur :** 0.1.0 · **Tests :** 222 / 222 · **Dépendances runtime :** 0
+**Mis à jour :** 14 septembre 2026 — fin de la Mission 002
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 492 / 492 · **Dépendances runtime :** 0
 
 ## Où en est Mervio
 
@@ -31,8 +31,10 @@ Trois commandes : `validate`, `analyze`, `demo`.
 | Rapports : JSON, TXT, data_quality | 🟢 |
 | CLI : analyze / validate / demo | 🟢 |
 | Architecture prête pour une API | 🟢 |
-| Interface contexte LLM | 🟡 (contrat posé, aucun appel) |
-| Couche LLM / AI Analyst | 🔴 (Mission 002) |
+| Contexte LLM versionné et borné | 🟢 (contrat 1.0) |
+| Abstraction fournisseur, délai et tentatives bornés | 🟢 |
+| Validation et ancrage de la réponse LLM | 🟢 |
+| Fournisseur LLM réel (OpenAI, Claude…) | 🔴 (non branché, aucun SDK) |
 | Rapport PDF | 🔴 |
 | FastAPI, PostgreSQL, auth, multi-tenant, frontend, billing | 🔴 (volontaire) |
 | CI/CD | 🔴 |
@@ -89,6 +91,29 @@ trompeur. Treize tests ajoutés.
 
 Détail : `docs/REAL_DATA_COMPATIBILITY_001_6.md`.
 
+## Mission 002 — couche d'interprétation LLM
+
+Baseline : commit `6aa2112`, 222 tests. Le moteur, ses formules, ses seuils et
+le Business Health Score sont inchangés ; tout est dans `src/mervio/llm/`.
+
+- `build_llm_context()` produit le contrat 1.0 : faits, constats, preuves,
+  hypothèses, recommandations, limites et métriques indisponibles séparés,
+  identifiants stables, chaque collection bornée, plafond de 64 Ko mesuré sur
+  le contexte complet, sortie identique quel que soit `PYTHONHASHSEED`.
+- Textes importés traités comme non fiables : canal système constant,
+  enveloppe de données inviolable, masquage PII et secrets, signalement.
+- `LLMProvider` + `MockLLMProvider` ; délai fini, tentatives bornées sur
+  erreurs transitoires uniquement.
+- `validate_response()` : schéma fermé et ancrage (références, chiffres issus
+  des seuls champs numériques, métriques indisponibles, score, causalité,
+  devise, PII, fuite d'instructions).
+- `explain_report()` ne lève pas : un échec LLM rend l'explication
+  indisponible, le rapport reste valide et intact.
+- 270 tests ajoutés, dont 7 instantanés de scénarios produits par le vrai
+  pipeline et une suite adversariale.
+
+Détail : `docs/LLM_CONTRACT.md`. Aucun appel à une API réelle n'a été fait.
+
 ## Limites assumées
 
 - **Le moteur n'a jamais vu les données d'un vrai marchand.** La mission 001.6
@@ -106,5 +131,5 @@ Détail : `docs/REAL_DATA_COMPATIBILITY_001_6.md`.
 
 1. Passer un **vrai** export Shopify dans `validate` puis `analyze`, et écrire
    un test de régression pour chaque écart rencontré.
-2. Mission 002 — couche LLM au-dessus de `build_llm_context()`, avec dataset
-   d'évaluation anti-hallucination.
+2. Brancher un premier fournisseur réel derrière `LLMProvider` et mesurer le
+   taux de réponses rejetées par le validateur sur les scénarios golden.
