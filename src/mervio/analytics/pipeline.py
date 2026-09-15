@@ -28,6 +28,9 @@ from .timeseries import build_series, compare_all, rolling_average
 
 log = get_logger("pipeline")
 
+#: devise d'un export qui n'en declare aucune. Jamais une devise supposee.
+UNKNOWN_CURRENCY = "unknown"
+
 
 @dataclass
 class SourcePaths:
@@ -66,7 +69,7 @@ def load_dataset(paths: SourcePaths) -> Dataset:
         orders, refunds, currency = ingest_shopify_orders(paths.shopify_orders, quality)
         dataset.orders = orders
         dataset.refunds.extend(refunds)
-        dataset.currency = currency
+        dataset.currency = currency or UNKNOWN_CURRENCY
     else:
         quality.add_issue("shopify_orders", "source_missing", "error",
                           "export commandes absent: aucun CA calculable")
@@ -106,8 +109,16 @@ def _check_currency_coherence(dataset: Dataset, quality: DataQualityReport) -> N
         )
         quality.set_status("currency", QualityStatus.UNAVAILABLE,
                            "plusieurs devises detectees: conversion non implementee")
+    elif dataset.orders and not quality.observed_currencies.get("shopify"):
+        # aucune devise lue: la supposer inventerait un fait
+        quality.add_issue("shopify", "currency_absent", "warning",
+                          "aucune devise dans l'export commandes: montants affiches sans devise verifiee")
+        quality.set_status("currency", QualityStatus.UNAVAILABLE, "devise absente de l'export commandes")
     elif currencies:
-        quality.set_status("currency", QualityStatus.RELIABLE, f"devise unique: {currencies[0]}")
+        partial = any(i.source == "shopify" and i.kind == "missing_currency" for i in quality.issues)
+        quality.set_status("currency", QualityStatus.INCOMPLETE if partial else QualityStatus.RELIABLE,
+                           f"devise unique: {currencies[0]}"
+                           + (" (certaines commandes sans devise)" if partial else ""))
 
 
 def _reconcile_refunds(dataset: Dataset, quality: DataQualityReport) -> None:

@@ -66,7 +66,9 @@ def ingest_shopify_orders(
     orders: Dict[str, Order] = {}
     seen_items: Dict[str, set] = {}
     refunds: List[Refund] = []
-    currency = "EUR"
+    #: derniere devise LUE dans l'export. Jamais de valeur par defaut: une devise
+    #: absente reste absente (Mission 003, l'ancien defaut "EUR" etait invente).
+    currency = ""
     identified_customers = 0
     invalid_rows = 0
     accepted_rows = 0
@@ -89,13 +91,18 @@ def ingest_shopify_orders(
                 identified_customers += 1
             else:
                 quality.add_issue(SOURCE, "missing_email", "warning", "commande sans email: client traite comme invite")
-            currency = (row.get("Currency") or currency).strip() or currency
-            quality.observe_currency(SOURCE, currency)
+            order_currency = (row.get("Currency") or "").strip()
+            if order_currency:
+                currency = order_currency
+                quality.observe_currency(SOURCE, order_currency)
+            else:
+                quality.add_issue(SOURCE, "missing_currency", "warning",
+                                  "commande sans devise: montant agrege sans devise verifiee")
             orders[order_id] = Order(
                 order_id=order_id,
                 customer_id=email or f"guest:{order_id}",
                 created_at=created_at,
-                currency=currency,
+                currency=order_currency,
                 subtotal=parse_float(row.get("Subtotal"), source=SOURCE, column="Subtotal", row=index, default=0.0) or 0.0,
                 discount=parse_float(row.get("Discount Amount"), source=SOURCE, column="Discount Amount", row=index, default=0.0) or 0.0,
                 shipping=parse_float(row.get("Shipping"), source=SOURCE, column="Shipping", row=index, default=0.0) or 0.0,
