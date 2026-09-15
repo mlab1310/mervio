@@ -10,6 +10,7 @@ analysis/
 # --- secrets ---
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 credentials*.json
@@ -31,3 +32,6 @@ data/synthetic/*
 !data/synthetic/README.md
 data/benchmark/*
 !data/benchmark/README.md
+
+# --- Mission 004.1: cluster PostgreSQL local jetable (scripts/dev_postgres.sh) ---
+.pgdata/

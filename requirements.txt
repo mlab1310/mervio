@@ -3,3 +3,7 @@
 # et portage direct vers un service FastAPI sans conflit de versions.
 # Dependances de developpement uniquement:
 pytest>=8.0
+
+# Persistance PostgreSQL (optionnelle, Mission 004.1; ADR-004.1-001). Equivalent: pip install -e '.[persistence]'
+psycopg[binary]>=3.2,<4
+alembic>=1.13,<2

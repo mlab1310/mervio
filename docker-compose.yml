@@ -1,0 +1,29 @@
+# PostgreSQL local de developpement (Mission 004.1, ADR-004-002).
+# Aucun autre service: pas de Redis, pas de file, pas de stockage objet a ce stade.
+#
+#   cp .env.example .env          # puis choisir un mot de passe local
+#   docker compose up -d postgres
+#   docker compose down -v        # detruit aussi le volume
+#
+# Le mot de passe vient de .env (ignore par Git). Aucune valeur par defaut n'est
+# fournie ici: compose refuse de demarrer sans elle.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: mervio_admin
+      POSTGRES_PASSWORD: ${MERVIO_POSTGRES_PASSWORD:?definir MERVIO_POSTGRES_PASSWORD dans .env}
+      POSTGRES_DB: mervio_dev
+    ports:
+      # uniquement sur la boucle locale
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - mervio_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mervio_admin -d mervio_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mervio_pgdata:

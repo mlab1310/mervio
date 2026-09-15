@@ -11,12 +11,17 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# Mission 004.1: persistance PostgreSQL. Jamais requise par le moteur ni par la CLI.
+persistence = ["psycopg[binary]>=3.2,<4", "alembic>=1.13,<2"]
 
 [project.scripts]
 mervio = "mervio.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"mervio.persistence" = ["migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
