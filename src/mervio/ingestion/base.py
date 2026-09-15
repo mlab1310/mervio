@@ -34,6 +34,28 @@ _DELIMITERS = (",", ";", "\t", "|")
 
 _EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
+#: signatures de fichiers non CSV. latin-1 decode n'importe quel octet: sans ce
+#: controle, un classeur .xlsx etait "lu" comme un CSV d'une colonne binaire.
+_BINARY_SIGNATURES = (
+    (b"PK\x03\x04", "classeur Excel .xlsx ou archive ZIP"),
+    (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "classeur Excel .xls"),
+    (b"%PDF", "document PDF"),
+)
+
+
+def unsupported_format(path: str | Path) -> Optional[str]:
+    """Motif de refus si le fichier n'est manifestement pas un CSV texte."""
+    with Path(path).open("rb") as handle:
+        head = handle.read(8192)
+    for signature, label in _BINARY_SIGNATURES:
+        if head.startswith(signature):
+            return f"format non supporte ({label}): exporter le fichier en CSV UTF-8"
+    if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "encodage UTF-16 non supporte: reexporter le fichier en CSV UTF-8"
+    if b"\x00" in head:
+        return "fichier binaire non supporte: exporter le fichier en CSV UTF-8"
+    return None
+
 
 def redact(value: object, limit: int = 40) -> str:
     """Neutralise une valeur avant de la placer dans un message d'erreur.
@@ -69,6 +91,9 @@ def read_csv(path: str | Path, source: str, quality=None) -> List[dict]:
     p = Path(path)
     if not p.exists():
         raise InvalidDataError(f"fichier introuvable: {p}", source=source)
+    problem = unsupported_format(p)
+    if problem:
+        raise InvalidDataError(problem, source=source)
     text = None
     used_encoding = None
     for encoding in _ENCODINGS:

@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..errors import MervioError
-from ..ingestion.base import _ENCODINGS, is_null, parse_datetime, parse_float, sniff_delimiter
+from ..ingestion.base import (
+    _ENCODINGS, is_null, parse_datetime, parse_float, sniff_delimiter, unsupported_format,
+)
 from .sensitive import scan_rows
 
 #: noms de colonnes qui trahissent une donnee personnelle
@@ -112,6 +114,9 @@ class FileInspection:
 
 
 def _read(path: Path) -> tuple:
+    problem = unsupported_format(path)
+    if problem:
+        raise MervioError(problem)
     for encoding in _ENCODINGS:
         try:
             return path.read_text(encoding=encoding), encoding
