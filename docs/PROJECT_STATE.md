@@ -1,7 +1,8 @@
 # PROJECT STATE
 
-**Mis à jour :** 14 septembre 2026 — fin de la Mission 002
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 492 / 492 · **Dépendances runtime :** 0
+**Mis à jour :** 15 septembre 2026 — fin de la Mission 003
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 535 / 535 · **Dépendances runtime :** 0
+**Maturité :** tests internes — aucune validation sur export marchand réel
 
 ## Où en est Mervio
 
@@ -114,6 +115,22 @@ le Business Health Score sont inchangés ; tout est dans `src/mervio/llm/`.
 
 Détail : `docs/LLM_CONTRACT.md`. Aucun appel à une API réelle n'a été fait.
 
+## Mission 003 — validation sur données réelles
+
+**Aucun export marchand réel n'était disponible.** Seul le dataset externe
+Kaggle (CSV + XLSX) a pu être testé ; il reste non supporté (D-028).
+
+- Harnais `scripts/validate_real_export.py` : référence indépendante,
+  rapprochement des KPI, sondes sémantiques, contrôle du contexte LLM,
+  sortie sans aucune valeur brute. Prêt pour le premier export réel.
+- Corrigé : fichiers non CSV lus comme du texte (D-039) ; devise « EUR »
+  inventée quand l'export n'en déclare aucune (D-038).
+- Risques ouverts sur le CA d'un vrai marchand : `Subtotal` peut-être déjà
+  net de remise (D-040), commandes annulées ou impayées comptées dans le CA.
+- Formats réels Stripe et Google Ads non vérifiés.
+
+Détail : `docs/REAL_DATA_VALIDATION_003.md`.
+
 ## Limites assumées
 
 - **Le moteur n'a jamais vu les données d'un vrai marchand.** La mission 001.6
@@ -129,7 +146,9 @@ Détail : `docs/LLM_CONTRACT.md`. Aucun appel à une API réelle n'a été fait.
 
 ## Prochaine étape
 
-1. Passer un **vrai** export Shopify dans `validate` puis `analyze`, et écrire
-   un test de régression pour chaque écart rencontré.
+1. Passer un **vrai** export Shopify (et si possible Stripe et Google Ads)
+   dans `scripts/validate_real_export.py`, trancher la convention du
+   `Subtotal` et le traitement des commandes annulées, puis écrire un test de
+   régression pour chaque écart rencontré.
 2. Brancher un premier fournisseur réel derrière `LLMProvider` et mesurer le
    taux de réponses rejetées par le validateur sur les scénarios golden.

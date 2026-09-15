@@ -150,3 +150,15 @@ Redemander au modèle jusqu'à obtenir une réponse qui passe transforme le vali
 ## D-037 — Un échec LLM ne fait jamais échouer l'analyse
 Une analyse déterministe réussie reste vraie quand le modèle est indisponible.
 **Conséquence :** `explain_report()` ne lève pas (même principe que D-022) : statut `unavailable` et code d'erreur, rapport intact. Journaux limités aux métadonnées, jamais le prompt ni la réponse.
+
+## D-038 — Une devise absente reste inconnue
+Découvert en Mission 003 : sans colonne `Currency` renseignée, le connecteur Shopify supposait « EUR », l'enregistrait comme devise observée et la qualité de donnée l'annonçait fiable.
+**Conséquence :** une commande ne porte que la devise qu'elle déclare, sans héritage. Un export sans devise donne `currency = "unknown"`, un champ `currency` indisponible et un avertissement `currency_absent`. Même principe que D-003 et D-020.
+
+## D-039 — Un fichier non CSV est refusé pour ce qu'il est
+latin-1 décode n'importe quel octet : un classeur `.xlsx` réel était « lu » comme un CSV de 49 817 lignes d'une colonne binaire.
+**Conséquence :** signatures ZIP/XLSX, XLS, PDF, UTF-16 et octets nuls refusées avant lecture, avec le motif « exporter en CSV UTF-8 ». Aucun format supplémentaire n'est pris en charge.
+
+## D-040 — Aucune convention de CA n'est changée sans export réel
+L'API Shopify définit le sous-total comme postérieur aux remises ; l'aide de l'export CSV ne le précise pas. Changer D-002 sur cette seule base pourrait corriger une erreur ou en créer une.
+**Conséquence :** D-002 est conservée. Le harnais `validate_real_export.py` tranche empiriquement à partir de la colonne `Total` ; la décision sera prise sur le premier export réel, pas avant. De même, le traitement des commandes annulées et impayées (aujourd'hui comptées dans le CA) attend une décision produit documentée.
