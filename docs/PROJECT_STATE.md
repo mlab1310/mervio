@@ -1,7 +1,7 @@
 # PROJECT STATE
 
 **Mis à jour :** 15 septembre 2026 — Mission 004.1 (persistance PostgreSQL et isolation tenant, branche `mission-004.1`)
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 815 / 815 avec PostgreSQL (697 + 118 ignorés sans base) · **Dépendances runtime :** 0 (persistance : extra optionnel)
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 816 / 816 avec PostgreSQL (697 + 119 ignorés sans base) · **Dépendances runtime :** 0 (persistance : extra optionnel)
 **Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, sémantique des commandes et remboursements décidée ; aucun export CSV natif de marchand
 
 ## Où en est Mervio
@@ -241,7 +241,7 @@ Détail : `docs/MISSION_004_0_HANDOFF.md`, `research/`.
 - **Moteur :** deux extractions sans changement de comportement (`analyze_loaded_dataset`, `annotate_report`) ; aucun
   contrat 003.3 modifié.
 - **Performance :** linéaire jusqu'à 1 M de commandes (écriture 78 s, relecture 17 s).
-- 159 tests ajoutés.
+- 160 tests ajoutés.
 
 Détail : `docs/MISSION_004_1_HANDOFF.md`, `docs/MISSION_004_1_PERSISTENCE.md`, `docs/MISSION_004_1_DECISIONS.md`.
 

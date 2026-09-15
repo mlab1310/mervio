@@ -50,7 +50,7 @@ Autres options : `--grain week\|month`, `--lookback N`, `--today AAAA-MM-JJ`,
 `--print-report`, `--verbose`.
 
 ```bash
-python -m pytest        # 815 tests avec PostgreSQL (697 passes + 118 ignores sans base)
+python -m pytest        # 816 tests avec PostgreSQL (697 passes + 119 ignores sans base)
 ```
 
 ## Persistance PostgreSQL (optionnelle, Mission 004.1)

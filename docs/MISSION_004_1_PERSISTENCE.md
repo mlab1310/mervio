@@ -222,7 +222,7 @@ Tous deux exigent le rôle `analyst`.
 
 ## 10. Tests
 
-159 tests ajoutés : 150 dans `tests/persistence/` et 9 dans `tests/test_persistence_boundaries.py`. Aucun test
+160 tests ajoutés : 151 dans `tests/persistence/` et 9 dans `tests/test_persistence_boundaries.py`. Aucun test
 existant modifié.
 
 | Fichier | Catégories |

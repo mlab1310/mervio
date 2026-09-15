@@ -8,8 +8,8 @@
 | Branche | `mission-004.1`, créée depuis `master` @ `eb52476` (fusion de 004.0) |
 | Point de départ de 004.2 | `master` après fusion de `mission-004.1` ; à défaut, la pointe de `mission-004.1` (hash dans le rapport final de 004.1) |
 | Environnement | Python 3.11.16 · pytest 9.1.1 · PostgreSQL 17.11 · psycopg 3.3.5 · Alembic 1.20.0 · ENGINE_VERSION 0.1.0 · contrat LLM 1.0 |
-| Tests | **815 passés** avec PostgreSQL : 656 existants + 159 nouveaux ; 0 échec, 0 ignoré, 0 erreur |
-| Tests sans base | 697 passés, 118 ignorés (tests PostgreSQL, voir §5) |
+| Tests | **816 passés** avec PostgreSQL : 656 existants + 160 nouveaux ; 0 échec, 0 ignoré, 0 erreur |
+| Tests sans base | 697 passés, 119 ignorés (tests PostgreSQL, voir §5) |
 | Moteur | aucune formule, aucun seuil, aucune clé de rapport modifiés ; deux extractions sans changement de comportement (ADR-004.1-009) ; contrats 003.3 et LLM 1.0 intacts |
 
 ## 2. Livré
@@ -36,7 +36,7 @@
   - `application.service.annotate_report` (extrait d'`analyze_dataset`).
 - **Local** : `docker-compose.yml` (postgres:17), `scripts/dev_postgres.sh` (sans Docker), `.env.example`
   (variables vides), `.gitignore` (`.pgdata/`, `!.env.example`).
-- **Tests** : `tests/persistence/` (150), `tests/test_persistence_boundaries.py` (9).
+- **Tests** : `tests/persistence/` (151), `tests/test_persistence_boundaries.py` (9).
 - **Benchmark** : `benchmarks/persistence_benchmark.py`, `benchmarks/results/persistence_20260915_arm64.json`.
 - **Documentation** :
   - `docs/MISSION_004_1_PERSISTENCE.md` ;
@@ -71,7 +71,7 @@
 
 ## 4. Règles pour 004.2 et au-delà
 
-- Préserver les 815 tests et 0 régression ; tout test modifié pour un changement de contrat est justifié par écrit.
+- Préserver les 816 tests et 0 régression ; tout test modifié pour un changement de contrat est justifié par écrit.
 - Aucun accès SQL hors de `mervio.persistence` (test AST). Aucun KPI en SQL.
 - Toute modification de schéma passe par une **nouvelle** révision Alembic, montée et descente testées. Les révisions
   0001 à 0003 ne se modifient plus une fois `mission-004.1` fusionnée.
@@ -94,7 +94,7 @@
 - Variables :
   - `MERVIO_TEST_ADMIN_DATABASE_URL` : rôle capable de `CREATE DATABASE` et `CREATE ROLE ... BYPASSRLS`, donc
     superutilisateur du **conteneur de CI** uniquement ;
-  - `MERVIO_REQUIRE_DATABASE_TESTS=1` : sans elle, 118 tests seraient ignorés.
+  - `MERVIO_REQUIRE_DATABASE_TESTS=1` : sans elle, 119 tests seraient ignorés.
 - Scan de secrets. Vérification de licences à l'ajout de dépendance (R-11).
 
 ## 6. Risques
@@ -103,7 +103,7 @@
 |---|---|---|
 | R-01 | Fuite entre tenants | **atténué** en persistance (3 niveaux de preuve) ; reste ouvert pour l'API (004.3 : 404 croisé par route) |
 | R-17 | Complexité excessive | atténué : PostgreSQL seul, pas d'ORM, pas de service ajouté |
-| R-18 | Dérive documentaire | corrigée : README et PROJECT_STATE à 815 |
+| R-18 | Dérive documentaire | corrigée : README et PROJECT_STATE à 816 |
 | R-21 | Rétention et suppression | ouvert : purge ordonnée non implémentée ; instantanés complets cumulatifs |
 | R-07 | Analyse ou import lents | import 1 M = 78 s en transaction unique → à exécuter en job (004.2) |
 | R-11 | Dépendance copyleft | psycopg LGPL-3.0 adopté non modifié, côté serveur ; repli pg8000 documenté |
@@ -144,14 +144,14 @@
   - un job d'une organisation ne lit ni n'écrit jamais une autre (test RLS avec contexte du job) ;
   - import et analyse de 1 M de commandes en job, avec durée et mémoire mesurées ;
   - aucun secret ni PII dans les logs et l'audit (test) ;
-  - 815+ tests, 0 régression.
+  - 816+ tests, 0 régression.
 - **Hors périmètre** : API publique (004.3), connecteurs API (004.4), frontend (004.5), LLM de production (004.6).
 
 ## 9. Premières actions de la conversation suivante
 
 1. `git status`, `git log --oneline -10`, branche et fusion de `mission-004.1`.
 2. Démarrer PostgreSQL (`scripts/dev_postgres.sh start` ou `docker compose up -d postgres`).
-3. Lancer la suite, 815 attendus :
+3. Lancer la suite, 816 attendus :
 
    ```bash
    MERVIO_TEST_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgres .venv/bin/python -m pytest
