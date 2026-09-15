@@ -12,11 +12,15 @@ from .errors import (
     LLMContextError, LLMError, ProviderAuthenticationError, ProviderError, ProviderRateLimitError,
     ProviderRefusalError, ProviderTimeoutError, ProviderUnavailableError, ResponseValidationError,
 )
+from .mock import MockLLMProvider
+from .prompt import LLMRequest, build_request
+from .provider import LLMConfig, LLMProvider, ProviderResponse, call_provider
 
 __all__ = [
     "CONTRACT_VERSION", "PROMPT_VERSION", "RESPONSE_SCHEMA_VERSION", "SYSTEM_CONTRACT",
-    "ContextLimits", "LLMContextError", "LLMError", "ProviderAuthenticationError", "ProviderError",
-    "ProviderRateLimitError", "ProviderRefusalError", "ProviderTimeoutError",
-    "ProviderUnavailableError", "ResponseValidationError", "build_llm_context", "context_ids",
+    "ContextLimits", "LLMConfig", "LLMContextError", "LLMError", "LLMProvider", "LLMRequest",
+    "MockLLMProvider", "ProviderAuthenticationError", "ProviderError", "ProviderRateLimitError",
+    "ProviderRefusalError", "ProviderResponse", "ProviderTimeoutError", "ProviderUnavailableError",
+    "ResponseValidationError", "build_llm_context", "build_request", "call_provider", "context_ids",
     "serialize_context",
 ]
