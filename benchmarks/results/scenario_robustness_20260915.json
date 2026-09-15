@@ -1,0 +1,88 @@
+{
+  "recorded_utc": "2026-09-15T16:24:26Z",
+  "orders": 20000,
+  "days": 126,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "profiles": [
+    "electronics_us",
+    "fashion_eu"
+  ],
+  "duration_s": 161.7,
+  "summary": {
+    "AOV_decline": {
+      "passed": 10,
+      "runs": 10
+    },
+    "conversion_drop": {
+      "passed": 10,
+      "runs": 10
+    },
+    "customer_churn": {
+      "passed": 10,
+      "runs": 10
+    },
+    "discount_explosion": {
+      "passed": 10,
+      "runs": 10
+    },
+    "healthy_store": {
+      "passed": 10,
+      "runs": 10
+    },
+    "margin_collapse": {
+      "passed": 10,
+      "runs": 10
+    },
+    "marketing_campaign_failure": {
+      "passed": 10,
+      "runs": 10
+    },
+    "mixed_root_causes": {
+      "passed": 10,
+      "runs": 10
+    },
+    "order_volume_drop": {
+      "passed": 10,
+      "runs": 10
+    },
+    "product_failure": {
+      "passed": 10,
+      "runs": 10
+    },
+    "refund_spike": {
+      "passed": 10,
+      "runs": 10
+    },
+    "retention_decline": {
+      "passed": 10,
+      "runs": 10
+    },
+    "revenue_drop": {
+      "passed": 10,
+      "runs": 10
+    },
+    "seasonal_business": {
+      "passed": 10,
+      "runs": 10
+    },
+    "shipping_problem": {
+      "passed": 10,
+      "runs": 10
+    },
+    "stockout": {
+      "passed": 10,
+      "runs": 10
+    },
+    "traffic_drop": {
+      "passed": 10,
+      "runs": 10
+    }
+  },
+  "failures": []
+}

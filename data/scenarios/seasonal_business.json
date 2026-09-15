@@ -1,0 +1,28 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "no_anomaly",
+      "expected": "revenue",
+      "note": "aucun modele saisonnier: la decrue normale est comparee a une moyenne glissante haute et signalee",
+      "status": "KNOWN_GAP"
+    },
+    {
+      "check": "seasonality_awareness",
+      "expected": "seasonal",
+      "note": "le moteur n'a pas de saisonnalite (limite documentee de PROJECT_STATE)",
+      "status": "KNOWN_GAP"
+    }
+  ],
+  "ground_truth": {
+    "engine_coverage": "gap_exposure",
+    "orders_direction": "down",
+    "possible_secondary_causes": [],
+    "primary_root_cause": "seasonality",
+    "recommendation_category": "seasonal_planning",
+    "revenue_direction": "down"
+  },
+  "injected": "saisonnalite forte (amplitude 0,8, pic mi-juillet): decrue saisonniere normale en septembre, aucun incident",
+  "scenario": "seasonal_business",
+  "window": "always"
+}

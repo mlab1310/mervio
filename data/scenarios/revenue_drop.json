@@ -1,0 +1,48 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "revenue_wow",
+      "expected": "down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "orders_wow",
+      "expected": "down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "anomaly",
+      "expected": "revenue:down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "primary_factor",
+      "expected": "paid_traffic",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "recommendation_category",
+      "expected": "acquisition",
+      "note": "",
+      "status": "MATCH"
+    }
+  ],
+  "ground_truth": {
+    "mechanism": "paid_budget_cut",
+    "orders_direction": "down",
+    "possible_secondary_causes": [
+      "paid_traffic_decline"
+    ],
+    "primary_root_cause": "order_volume_decline",
+    "recommendation_category": "acquisition",
+    "revenue_direction": "down"
+  },
+  "injected": "budget Google Ads coupe de 40 % sur la derniere semaine",
+  "scenario": "revenue_drop",
+  "window": "last_week"
+}

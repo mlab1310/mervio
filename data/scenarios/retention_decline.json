@@ -1,0 +1,27 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "no_anomaly",
+      "expected": "revenue",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "retention_trend",
+      "expected": "down",
+      "note": "taux de reachat intra-periode uniquement: aucune tendance de retention n'est calculee",
+      "status": "KNOWN_GAP"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "flat",
+    "possible_secondary_causes": [],
+    "primary_root_cause": "retention_decline",
+    "recommendation_category": "retention_crm",
+    "revenue_direction": "flat"
+  },
+  "injected": "part des clients recurrents divisee par 10 progressivement sur tout l'horizon",
+  "scenario": "retention_decline",
+  "window": "ramp"
+}

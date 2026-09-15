@@ -1,0 +1,44 @@
+{
+  "baseline": "boutique stable: saisonnalite hebdomadaire et annuelle faible, tendance +6 %/an, trafic paye et organique constants, remises et remboursements a leur taux habituel",
+  "engine_expectations": [
+    {
+      "check": "revenue_wow",
+      "expected": "down",
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "top_product_contributor",
+      "expected": [
+        0,
+        1
+      ],
+      "note": "",
+      "status": "MATCH"
+    },
+    {
+      "check": "primary_factor",
+      "expected": "stockout",
+      "note": "aucune donnee de stock ingeree: la rupture est lue comme une baisse de panier moyen ou de conversion selon la part des paniers multi-articles",
+      "status": "KNOWN_GAP"
+    },
+    {
+      "check": "recommendation_category",
+      "expected": "inventory_replenishment",
+      "note": "aucune recommandation de reapprovisionnement n'existe dans le moteur",
+      "status": "KNOWN_GAP"
+    }
+  ],
+  "ground_truth": {
+    "orders_direction": "down",
+    "possible_secondary_causes": [
+      "conversion_decline"
+    ],
+    "primary_root_cause": "stockout",
+    "recommendation_category": "inventory_replenishment",
+    "revenue_direction": "down"
+  },
+  "injected": "produits n°1 et n°2 du CA en rupture (substitution partielle), derniere semaine",
+  "scenario": "stockout",
+  "window": "last_week"
+}
