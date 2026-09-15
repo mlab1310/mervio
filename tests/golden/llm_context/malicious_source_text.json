@@ -359,7 +359,9 @@
       "id": "kpi.refund_rate",
       "label": "Taux de remboursement",
       "metric": "refund_rate",
-      "notes": [],
+      "notes": [
+        "le montant rembourse Shopify peut inclure taxes et port, le CA non: taux potentiellement surestime"
+      ],
       "period": "2026-W37",
       "sources": [
         "shopify_orders"

@@ -67,6 +67,8 @@ def ingest_shopify_orders(
 
     orders: Dict[str, Order] = {}
     orders_with_total: set = set()
+    cancelled_orders: set = set()
+    draft_orders: set = set()
     seen_items: Dict[str, set] = {}
     refunds: List[Refund] = []
     #: derniere devise LUE dans l'export. Jamais de valeur par defaut: une devise
@@ -126,6 +128,10 @@ def ingest_shopify_orders(
             )
             seen_items[order_id] = set()
             accepted_rows += 1
+            if not is_null(row.get("Cancelled at")):
+                cancelled_orders.add(order_id)
+            if (row.get("Source") or "").strip().lower() == "shopify_draft_order":
+                draft_orders.add(order_id)
 
             refunded = parse_float(row.get("Refunded Amount"), source=SOURCE, column="Refunded Amount", row=index)
             if refunded:
@@ -165,6 +171,7 @@ def ingest_shopify_orders(
     quality.set_rows(SOURCE + "_orders", total=len(rows), accepted=accepted_rows)
     order_list = sorted(orders.values(), key=lambda o: o.created_at)
     _check_subtotal_contract(order_list, orders_with_total, quality)
+    _report_order_semantics(order_list, cancelled_orders, draft_orders, quality)
     quality.set_field("order_revenue", covered=len(order_list), total=len(order_list) + invalid_rows,
                       note="CA net de remise, hors port et hors taxes")
     quality.set_field("customer_identity", covered=identified_customers, total=len(order_list),
@@ -205,3 +212,42 @@ def _check_subtotal_contract(orders: List[Order], orders_with_total: set, qualit
             f"le contrat Shopify (Subtotal apres remise, D-041) est applique, le CA peut etre surestime "
             f"d'au plus {overstatement:,.2f}",
         )
+
+
+#: statuts financiers Shopify dont le montant n'est pas (encore) encaisse
+UNSETTLED_STATUSES = ("pending", "authorized", "partially_paid", "voided", "expired")
+
+
+def _report_order_semantics(orders: List[Order], cancelled: set, drafts: set, quality: DataQualityReport) -> None:
+    """Rend visibles les commandes dont le traitement n'est pas etabli (D-043).
+
+    Aucune n'est exclue ni requalifiee: elles restent comptees dans les commandes
+    et le CA. Le signal dit combien, pour que le lecteur juge l'impact.
+    """
+    def total(subset):
+        return sum(o.subtotal for o in subset)
+
+    negative = [o for o in orders if o.subtotal < 0]
+    if negative:
+        quality.add_issue(SOURCE, "negative_subtotal", "warning",
+                          f"{len(negative)} commande(s) avec Subtotal negatif ({total(negative):,.2f}): "
+                          "conservees telles quelles, le CA d'une periode peut etre negatif")
+    flagged = [o for o in orders if o.order_id in cancelled]
+    if flagged:
+        quality.add_issue(SOURCE, "cancelled_orders_counted", "warning",
+                          f"{len(flagged)} commande(s) annulee(s) (Cancelled at renseigne) comptees dans les commandes "
+                          f"et le CA ({total(flagged):,.2f}): traitement des annulations non etabli")
+    unsettled = [o for o in orders if o.financial_status in UNSETTLED_STATUSES]
+    if unsettled:
+        quality.add_issue(SOURCE, "unsettled_orders_counted", "warning",
+                          f"{len(unsettled)} commande(s) non encaissee(s) ({', '.join(sorted({o.financial_status for o in unsettled}))}) "
+                          f"comptees dans les commandes et le CA ({total(unsettled):,.2f})")
+    zero = [o for o in orders if o.subtotal == 0]
+    if zero:
+        quality.add_issue(SOURCE, "zero_value_orders_counted", "info",
+                          f"{len(zero)} commande(s) a Subtotal nul comptees dans les commandes et le panier moyen")
+    draft = [o for o in orders if o.order_id in drafts]
+    if draft:
+        quality.add_issue(SOURCE, "draft_orders_counted", "info",
+                          f"{len(draft)} commande(s) creee(s) depuis un brouillon (Source shopify_draft_order) "
+                          f"comptees dans les commandes et le CA ({total(draft):,.2f})")

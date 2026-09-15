@@ -111,9 +111,13 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
     spend = total_ad_spend(ds)
     clicks = total_clicks(ds)
 
+    # un CA negatif ne vient que de montants source negatifs: il est conserve et signale, jamais ramene a zero
     kpis["revenue"] = _m("revenue", "Chiffre d'affaires net", revenue, "currency",
                          "CA produit net de remises, hors frais de port et hors taxes.",
-                         "sum(order.subtotal) [subtotal deja net de remise, D-041]", ["shopify_orders"], p)
+                         "sum(order.subtotal) [subtotal deja net de remise, D-041]", ["shopify_orders"], p,
+                         QualityStatus.INCOMPLETE if revenue < 0 else QualityStatus.RELIABLE,
+                         ["CA negatif sur la periode: montants source negatifs a verifier, valeur non corrigee"]
+                         if revenue < 0 else [])
     kpis["orders"] = _m("orders", "Commandes", float(orders_count), "count",
                         "Nombre de commandes creees sur la periode.",
                         "count(orders)", ["shopify_orders"], p)
@@ -132,7 +136,9 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
                              (refunds / revenue) if revenue else None, "ratio",
                              "Part du CA remboursee.", "refunds / revenue",
                              ["shopify_orders"], p,
-                             QualityStatus.RELIABLE if revenue else QualityStatus.UNAVAILABLE)
+                             QualityStatus.RELIABLE if revenue else QualityStatus.UNAVAILABLE,
+                             ["le montant rembourse Shopify peut inclure taxes et port, le CA non: "
+                              "taux potentiellement surestime"])
     kpis["ad_spend"] = _m("ad_spend", "Depense publicitaire", spend, "currency",
                           "Depense Google Ads uniquement.", "sum(ad.spend)", ["google_ads"], p,
                           QualityStatus.INCOMPLETE,

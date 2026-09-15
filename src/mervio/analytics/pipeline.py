@@ -163,6 +163,13 @@ def run_analysis(
         name: build_series(dataset, period, cfg.lookback_periods, fn)
         for name, fn in SERIES_METRICS.items()
     }
+    negative = [point.period.label for point in series["revenue"] if point.value is not None and point.value < 0]
+    if negative:
+        dataset.quality.add_issue(
+            "analytics", "negative_period_revenue", "warning",
+            f"CA negatif sur {len(negative)} periode(s) de la serie ({', '.join(negative)}): "
+            "valeur conservee, montants source a verifier",
+        )
     anomalies: List[Anomaly] = []
     for name, points in series.items():
         anomalies.extend(detect_anomalies(name, points, cfg.anomaly))
