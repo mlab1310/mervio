@@ -150,7 +150,25 @@ def test_cancelled_and_unpaid_orders_are_reported_as_counted_revenue(harness, tm
     assert semantics["cancelled_column_present"] and semantics["cancelled_orders"] > 0
     assert semantics["financial_status_counts"].get("voided", 0) > 0
     assert semantics["non_revenue_or_cancelled_revenue_share"] > 0
-    assert "non_revenue_or_cancelled_orders_counted_as_revenue" in result["blockers"]
+    assert semantics["unreversed_cancelled_or_unsettled_orders"] > 0
+    assert any(b.startswith("unreversed_cancelled_or_unsettled_orders_in_revenue") for b in result["blockers"])
+
+
+def test_refunded_cancellations_are_counted_without_blocking(harness, tmp_path):
+    # D-044: une annulation remboursee est deja portee par les remboursements, comme sur OH5
+    def refunded_cancellation(index, row):
+        row["Cancelled at"] = ""
+        if row["Subtotal"] and index % 50 == 0:
+            row["Cancelled at"] = "2026-09-01 10:00:00 +0200"
+            row["Financial Status"] = "refunded"
+            row["Refunded Amount"] = row["Total"]
+        return row
+    path = _rewrite(tmp_path, "shopify_orders.csv", refunded_cancellation, fieldnames=lambda h: h + ["Cancelled at"])
+    result = harness.run(_sources(shopify_orders=path), today=TODAY)
+    assert result["semantics"]["cancelled_orders"] > 0
+    assert result["semantics"]["unreversed_cancelled_or_unsettled_orders"] == 0
+    assert not any(b.startswith("unreversed_cancelled") for b in result["blockers"])
+    assert {c["metric"]: c["status"] for c in result["reconciliation"]}["refund_rate"] == "PASS"
 
 
 def test_multiple_currencies_make_the_dataset_invalid(harness, tmp_path):

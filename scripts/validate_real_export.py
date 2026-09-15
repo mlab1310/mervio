@@ -295,7 +295,9 @@ def period_reference(orders: Dict[str, RefOrder], period: Dict[str, str]) -> Dic
         "units": float(sum(o.units for o in selected)),
         "refunds": sum(o.refunded for o in selected),
         "aov": revenue / len(selected) if selected else None,
-        "refund_rate": (sum(o.refunded for o in selected) / revenue) if revenue else None,
+        # D-045: meme base que "Refunded Amount" (montant facture, port et taxes compris)
+        "refund_rate": ((sum(o.refunded for o in selected) / billed)
+                        if (billed := sum(o.total for o in selected if o.total is not None)) else None),
         "customers": float(len(customers)),
         "new_customers": float(sum(1 for c in customers if in_period(first[c], period))),
         "line_revenue": sum(o.line_revenue for o in selected),
@@ -336,6 +338,9 @@ def shopify_semantics(orders: Dict[str, RefOrder], fieldnames: List[str], grain:
     by_status = Counter(o.status for o in orders.values())
     status_revenue = _merge({o.status: o.net} for o in orders.values())
     non_revenue = [o for o in orders.values() if o.status in NON_REVENUE_STATUSES or o.cancelled]
+    # D-044: ces commandes restent dans le CA avant ajustements (perimetre des rapports Shopify). Le seul
+    # ecart avec le CA net Shopify vient de celles dont le montant n'est ni encaisse ni rembourse.
+    unreversed = [o for o in non_revenue if o.net > 0 and not o.refunded]
     days = sorted(o.created.date() for o in orders.values())
     customers = defaultdict(list)
     for order in orders.values():
@@ -360,6 +365,8 @@ def shopify_semantics(orders: Dict[str, RefOrder], fieldnames: List[str], grain:
         "cancelled_orders": sum(1 for o in orders.values() if o.cancelled),
         "non_revenue_or_cancelled_orders": len(non_revenue),
         "non_revenue_or_cancelled_revenue_share": _share(sum(o.net for o in non_revenue), total_net),
+        "unreversed_cancelled_or_unsettled_orders": len(unreversed),
+        "unreversed_cancelled_or_unsettled_revenue_share": _share(sum(o.net for o in unreversed), total_net),
         "currencies": dict(sorted(Counter(o.currency for o in orders.values()).items())),
         "refund_date_semantics": "Shopify orders export has no refund date: refunds are dated at order creation",
         "orders_with_refund_above_net_revenue": sum(1 for o in orders.values() if o.refunded > o.net > 0),
@@ -541,8 +548,9 @@ def blockers(result: Dict[str, Any]) -> List[str]:
         found.append("subtotal_before_discount: file contradicts the Shopify contract, revenue overstated by discounts (D-041)")
     elif convention.startswith("undetermined"):
         found.append(f"subtotal_convention_unverified ({convention})")
-    if result.get("semantics", {}).get("non_revenue_or_cancelled_orders"):
-        found.append("non_revenue_or_cancelled_orders_counted_as_revenue")
+    if result.get("semantics", {}).get("unreversed_cancelled_or_unsettled_orders"):
+        found.append("unreversed_cancelled_or_unsettled_orders_in_revenue (D-044: revenue before adjustments, "
+                     "not comparable to Shopify net sales)")
     if any(c["status"] == "FAIL" for c in result.get("reconciliation", [])):
         found.append("reconciliation_mismatch")
     if any(v == "FAIL" for v in result.get("report_checks", {}).values()):

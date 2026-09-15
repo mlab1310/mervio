@@ -171,7 +171,8 @@ def ingest_shopify_orders(
     quality.set_rows(SOURCE + "_orders", total=len(rows), accepted=accepted_rows)
     order_list = sorted(orders.values(), key=lambda o: o.created_at)
     _check_subtotal_contract(order_list, orders_with_total, quality)
-    _report_order_semantics(order_list, cancelled_orders, draft_orders, quality)
+    _check_refund_basis(order_list, orders_with_total, refunds, quality)
+    _report_order_semantics(order_list, cancelled_orders, draft_orders, refunds, quality)
     quality.set_field("order_revenue", covered=len(order_list), total=len(order_list) + invalid_rows,
                       note="CA net de remise, hors port et hors taxes")
     quality.set_field("customer_identity", covered=identified_customers, total=len(order_list),
@@ -214,15 +215,38 @@ def _check_subtotal_contract(orders: List[Order], orders_with_total: set, qualit
         )
 
 
+def _check_refund_basis(orders: List[Order], orders_with_total: set, refunds: List[Refund],
+                       quality: DataQualityReport) -> None:
+    """Controle la base du taux de remboursement (D-045).
+
+    "Refunded Amount" se compare au Total (montant facture, port et taxes
+    compris), plafond du remboursable selon Shopify. Un Total absent rend la
+    base incomplete; un remboursement superieur au Total est incoherent.
+    """
+    missing = len(orders) - len(orders_with_total)
+    if missing:
+        quality.add_issue(SOURCE, "missing_order_total", "warning",
+                          f"{missing} commande(s) sans Total: base du taux de remboursement incomplete")
+    totals = {o.order_id: o.total for o in orders if o.order_id in orders_with_total}
+    above = [r for r in refunds if r.order_id in totals and r.amount > totals[r.order_id] + _TOTAL_TOLERANCE]
+    if above:
+        quality.add_issue(SOURCE, "refund_exceeds_order_total", "warning",
+                          f"{len(above)} remboursement(s) superieur(s) au Total de la commande: "
+                          "montants conserves tels quels, a verifier dans l'export")
+
+
 #: statuts financiers Shopify dont le montant n'est pas (encore) encaisse
 UNSETTLED_STATUSES = ("pending", "authorized", "partially_paid", "voided", "expired")
 
 
-def _report_order_semantics(orders: List[Order], cancelled: set, drafts: set, quality: DataQualityReport) -> None:
-    """Rend visibles les commandes dont le traitement n'est pas etabli (D-043).
+def _report_order_semantics(orders: List[Order], cancelled: set, drafts: set, refunds: List[Refund],
+                            quality: DataQualityReport) -> None:
+    """Rend visibles les commandes dont l'effet sur les chiffres merite d'etre lu (D-043, D-044).
 
-    Aucune n'est exclue ni requalifiee: elles restent comptees dans les commandes
-    et le CA. Le signal dit combien, pour que le lecteur juge l'impact.
+    Perimetre decide (D-044, aligne sur les rapports Shopify): toute commande de
+    l'export compte dans les commandes, le CA avant ajustements et le panier
+    moyen. Aucune n'est exclue ni requalifiee. Le signal dit combien et combien
+    d'argent, pour que le lecteur juge l'impact.
     """
     def total(subset):
         return sum(o.subtotal for o in subset)
@@ -234,9 +258,12 @@ def _report_order_semantics(orders: List[Order], cancelled: set, drafts: set, qu
                           "conservees telles quelles, le CA d'une periode peut etre negatif")
     flagged = [o for o in orders if o.order_id in cancelled]
     if flagged:
+        refunded_ids = {r.order_id for r in refunds}
+        unrefunded = [o for o in flagged if o.subtotal > 0 and o.order_id not in refunded_ids]
         quality.add_issue(SOURCE, "cancelled_orders_counted", "warning",
                           f"{len(flagged)} commande(s) annulee(s) (Cancelled at renseigne) comptees dans les commandes "
-                          f"et le CA ({total(flagged):,.2f}): traitement des annulations non etabli")
+                          f"et le CA avant ajustements ({total(flagged):,.2f}), dont {len(unrefunded)} a montant positif "
+                          f"sans remboursement ({total(unrefunded):,.2f}): l'annulation n'est pas deduite du CA")
     unsettled = [o for o in orders if o.financial_status in UNSETTLED_STATUSES]
     if unsettled:
         quality.add_issue(SOURCE, "unsettled_orders_counted", "warning",

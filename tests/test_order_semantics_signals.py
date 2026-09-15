@@ -94,4 +94,104 @@ def test_zero_value_and_draft_orders_stay_counted_and_are_signalled(tmp_path):
 
 def test_refund_rate_declares_its_basis(tmp_path):
     report = run_analysis(SourcePaths(shopify_orders=_write(tmp_path, _weekly_history())), today=date(2026, 9, 14))
-    assert "taxes et port" in report["kpis"]["refund_rate"]["notes"][0]
+    refund_rate = report["kpis"]["refund_rate"]
+    assert refund_rate["formula"] == "refunds / sum(order.total)"
+    assert "date de creation de la commande" in refund_rate["notes"][0]
+    assert "date de creation de la commande" in report["kpis"]["refunds"]["notes"][0]
+
+
+# --- Mission 003.3: perimetre des commandes (D-044) et base des remboursements (D-045) ---------
+
+FULL_HEADER = ("Name,Email,Financial Status,Created at,Currency,Subtotal,Discount Amount,Shipping,Taxes,Total,"
+               "Refunded Amount,Lineitem quantity,Lineitem name,Lineitem price,Lineitem sku,Cancelled at,Source\n")
+
+
+def _full_row(name, subtotal, *, shipping=0.0, tax=0.0, total=None, refunded="", status="paid", cancelled="",
+              source="web", price=None, discount=0.0, day="2026-09-08"):
+    total = f"{subtotal + shipping + tax:.2f}" if total is None else total
+    price = subtotal + discount if price is None else price
+    return (f"#{name},c{name}@x.com,{status},{day} 10:00:00,USD,{subtotal:.2f},{discount:.2f},{shipping:.2f},"
+            f"{tax:.2f},{total},{refunded},1,Produit,{price:.2f},A,{cancelled},{source}\n")
+
+
+def _load(tmp_path, body):
+    path = tmp_path / "orders.csv"
+    path.write_text(FULL_HEADER + body, encoding="utf-8")
+    return load_dataset(SourcePaths(shopify_orders=str(path)))
+
+
+def _kpis(ds):
+    from mervio.analytics.kpi import compute_kpis
+    from mervio.analytics.periods import make_period
+    return compute_kpis(ds, make_period(date(2026, 9, 7), "week"))
+
+
+def test_refund_rate_uses_the_billed_total_as_denominator(tmp_path):
+    # forme observee sur OH5: remboursement du port seul sur une commande a Subtotal nul, et
+    # remboursement integral (taxes comprises) d'une commande a 15.00
+    ds = _load(tmp_path, _full_row("1", 0.0, shipping=4.94, refunded="4.94", status="refunded", discount=15.0, price=15.0)
+               + _full_row("2", 15.0, tax=1.43, refunded="16.43", status="refunded")
+               + _full_row("3", 100.0, shipping=10.0, tax=10.0))
+    kpis = _kpis(ds)
+    assert kpis["revenue"].value == pytest.approx(115.0)
+    assert kpis["refunds"].value == pytest.approx(21.37)
+    assert kpis["refund_rate"].value == pytest.approx(21.37 / (4.94 + 16.43 + 120.0))
+    assert kpis["refund_rate"].data_quality == "reliable"
+    assert "missing_order_total" not in _issues(ds) and "refund_exceeds_order_total" not in _issues(ds)
+
+
+def test_missing_total_makes_the_refund_rate_incomplete(tmp_path):
+    ds = _load(tmp_path, _full_row("1", 50.0, refunded="10.00") + _full_row("2", 50.0, total=""))
+    assert _issues(ds)["missing_order_total"].message.startswith("1 commande(s) sans Total")
+    kpis = _kpis(ds)
+    assert kpis["refund_rate"].data_quality == "incomplete"
+    assert kpis["revenue"].value == pytest.approx(100.0)                     # le CA ne depend pas du Total
+
+
+def test_refund_rate_is_unavailable_without_any_billed_amount(tmp_path):
+    ds = _load(tmp_path, _full_row("1", 0.0, discount=20.0, price=20.0))
+    kpis = _kpis(ds)
+    assert kpis["refund_rate"].value is None and kpis["refund_rate"].data_quality == "unavailable"
+
+
+def test_refund_above_order_total_is_signalled_and_kept(tmp_path):
+    ds = _load(tmp_path, _full_row("1", 40.0, tax=4.0, refunded="60.00", status="refunded"))
+    assert _issues(ds)["refund_exceeds_order_total"].severity == "warning"
+    assert _kpis(ds)["refunds"].value == pytest.approx(60.0)
+
+
+def test_refund_is_dated_at_order_creation_and_keeps_the_pre_return_subtotal(tmp_path):
+    ds = _load(tmp_path, _full_row("1", 15.0, tax=1.09, refunded="16.09", status="refunded", day="2026-08-03"))
+    order, refund = ds.orders[0], ds.refunds[0]
+    assert refund.created_at == order.created_at                             # cohorte de commande (D-045)
+    assert order.net_revenue == pytest.approx(15.0)                          # Subtotal avant retours, jamais reduit
+
+
+def test_decided_order_perimeter_counts_every_exported_order_in_orders_and_aov(tmp_path):
+    body = (_full_row("1", 100.0)                                                          # vente ordinaire
+            + _full_row("2", 0.0, discount=15.0, price=15.0, cancelled="UNKNOWN")          # annulee, remise 100 %, "paid"
+            + _full_row("3", 25.0, source="shopify_draft_order")                           # brouillon converti
+            + _full_row("4", 40.0, status="pending")                                       # non encaissee
+            + _full_row("5", 0.0, shipping=4.10)                                           # port seul
+            + _full_row("6", 30.0, status="voided", cancelled="2026-09-09 10:00:00"))      # annulee avant encaissement
+    kpis = _kpis(_load(tmp_path, body))
+    assert kpis["orders"].value == 6
+    assert kpis["revenue"].value == pytest.approx(195.0)
+    assert kpis["aov"].value == pytest.approx(195.0 / 6)
+
+
+def test_partially_refunded_order_keeps_its_subtotal_and_is_not_unsettled(tmp_path):
+    ds = _load(tmp_path, _full_row("1", 100.0, shipping=10.0, tax=10.0, refunded="10.00", status="partially_refunded"))
+    kpis = _kpis(ds)
+    assert (kpis["orders"].value, kpis["revenue"].value, kpis["refunds"].value) == (1, pytest.approx(100.0), pytest.approx(10.0))
+    assert kpis["refund_rate"].value == pytest.approx(10.0 / 120.0)
+    assert "unsettled_orders_counted" not in _issues(ds)
+
+
+def test_cancelled_signal_isolates_positive_unrefunded_cancellations(tmp_path):
+    body = (_full_row("1", 0.0, discount=15.0, price=15.0, cancelled="UNKNOWN")                        # nul
+            + _full_row("2", 15.0, tax=1.43, refunded="16.43", status="refunded", cancelled="UNKNOWN")  # rembourse
+            + _full_row("3", 40.0, cancelled="2026-09-09 10:00:00"))                                    # ni l'un ni l'autre
+    message = _issues(_load(tmp_path, body))["cancelled_orders_counted"].message
+    assert message.startswith("3 commande(s)") and "(55.00)" in message
+    assert "dont 1 a montant positif sans remboursement (40.00)" in message

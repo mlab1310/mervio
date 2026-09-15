@@ -60,6 +60,11 @@ def total_refunds(ds: Dataset) -> float:
     return sum(r.amount for r in ds.refunds if r.source == "shopify")
 
 
+def total_order_value(ds: Dataset) -> float:
+    """Somme des Total de commande (port et taxes compris): base du taux de remboursement (D-045)."""
+    return sum(o.total for o in ds.orders)
+
+
 def total_units(ds: Dataset) -> int:
     return sum(o.units for o in ds.orders)
 
@@ -113,7 +118,7 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
 
     # un CA negatif ne vient que de montants source negatifs: il est conserve et signale, jamais ramene a zero
     kpis["revenue"] = _m("revenue", "Chiffre d'affaires net", revenue, "currency",
-                         "CA produit net de remises, hors frais de port et hors taxes.",
+                         "CA produit net de remises, avant remboursements et annulations, hors frais de port et hors taxes.",
                          "sum(order.subtotal) [subtotal deja net de remise, D-041]", ["shopify_orders"], p,
                          QualityStatus.INCOMPLETE if revenue < 0 else QualityStatus.RELIABLE,
                          ["CA negatif sur la periode: montants source negatifs a verifier, valeur non corrigee"]
@@ -129,16 +134,25 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
                      "revenue / orders", ["shopify_orders"], p,
                      QualityStatus.RELIABLE if orders_count else QualityStatus.UNAVAILABLE,
                      [] if orders_count else ["aucune commande sur la periode"])
+    # D-045: remboursements et Total sont sur la meme base (montant facture, port et taxes compris)
+    # et la meme date (creation de la commande: l'export ne date pas les remboursements)
+    refund_notes = ["remboursements rattaches a la date de creation de la commande, pas a la date du remboursement"]
     kpis["refunds"] = _m("refunds", "Remboursements", refunds, "currency",
-                         "Montant rembourse, source Shopify (source de verite commande).",
-                         "sum(refund.amount where source=shopify)", ["shopify_orders"], p)
+                         "Montant rembourse sur les commandes creees dans la periode (Refunded Amount Shopify, "
+                         "port et taxes eventuels compris).",
+                         "sum(refund.amount where source=shopify)", ["shopify_orders"], p,
+                         notes=list(refund_notes))
+    order_value = total_order_value(ds)
+    total_incomplete = any(i.kind == "missing_order_total" for i in q.issues)
     kpis["refund_rate"] = _m("refund_rate", "Taux de remboursement",
-                             (refunds / revenue) if revenue else None, "ratio",
-                             "Part du CA remboursee.", "refunds / revenue",
-                             ["shopify_orders"], p,
-                             QualityStatus.RELIABLE if revenue else QualityStatus.UNAVAILABLE,
-                             ["le montant rembourse Shopify peut inclure taxes et port, le CA non: "
-                              "taux potentiellement surestime"])
+                             (refunds / order_value) if order_value else None, "ratio",
+                             "Part du montant facture (port et taxes compris) des commandes de la periode remboursee.",
+                             "refunds / sum(order.total)", ["shopify_orders"], p,
+                             (QualityStatus.INCOMPLETE if total_incomplete else QualityStatus.RELIABLE)
+                             if order_value else QualityStatus.UNAVAILABLE,
+                             refund_notes
+                             + (["Total absent sur une partie des commandes: base incomplete"] if total_incomplete else [])
+                             + ([] if order_value else ["aucun montant facture sur la periode"]))
     kpis["ad_spend"] = _m("ad_spend", "Depense publicitaire", spend, "currency",
                           "Depense Google Ads uniquement.", "sum(ad.spend)", ["google_ads"], p,
                           QualityStatus.INCOMPLETE,

@@ -361,7 +361,9 @@
       "id": "kpi.refunds",
       "label": "Remboursements",
       "metric": "refunds",
-      "notes": [],
+      "notes": [
+        "remboursements rattaches a la date de creation de la commande, pas a la date du remboursement"
+      ],
       "period": "2026-W37",
       "sources": [
         "shopify_orders"
@@ -371,12 +373,12 @@
     },
     {
       "data_quality": "reliable",
-      "formula": "refunds / revenue",
+      "formula": "refunds / sum(order.total)",
       "id": "kpi.refund_rate",
       "label": "Taux de remboursement",
       "metric": "refund_rate",
       "notes": [
-        "le montant rembourse Shopify peut inclure taxes et port, le CA non: taux potentiellement surestime"
+        "remboursements rattaches a la date de creation de la commande, pas a la date du remboursement"
       ],
       "period": "2026-W37",
       "sources": [
