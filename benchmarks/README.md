@@ -39,7 +39,20 @@ non nul si une attente n'est pas satisfaite.
 - **Sortie :** `benchmarks/results/scenario_robustness_<date>.json`.
 - **Référence (15/09/2026) :** 170/170 en 162 s.
 
-## 3. Résultats versionnés
+## 3. Persistance PostgreSQL — `persistence_benchmark.py` (Mission 004.1)
+
+```bash
+MERVIO_BENCH_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgres \
+    .venv/bin/python benchmarks/persistence_benchmark.py --sizes 10000,100000,1000000
+```
+
+Base et rôles jetables (hôte local uniquement), un processus par taille. Mesure : lecture CSV, écriture de
+l'instantané, relecture du Dataset, analyse, écriture et lecture du rapport. Vérifie à chaque taille que le Dataset
+relu est égal au Dataset CSV et que le rapport relu est identique à l'octet ; relève les plans de relecture.
+- **Sortie :** `benchmarks/results/persistence_<date>_<arch>.json`.
+- **Référence (15/09/2026, PostgreSQL 17.11) :** 1 M de commandes = écriture 78 s, relecture 17 s, analyse 7,8 s.
+
+## 4. Résultats versionnés
 
 `results/` contient des JSON de quelques kilo-octets (mesures et compteurs, aucune ligne de données). Ils servent
 de référence : une régression de plus de 25 % de `run_analysis` à 100 000 commandes doit être expliquée.
