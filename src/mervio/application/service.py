@@ -100,6 +100,14 @@ def _new_id() -> str:
     return f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
 
 
+def annotate_report(report: dict, *, synthetic: bool, label: str) -> dict:
+    """Metadonnees de livraison ajoutees au rapport du moteur (CLI et analyses persistees)."""
+    if synthetic:
+        report["_meta"]["dataset_is_synthetic"] = True
+    report["_meta"]["analysis_label"] = label
+    return report
+
+
 def analyze_dataset(request: AnalysisRequest) -> AnalysisResult:
     """Valide les fichiers puis lance l'analyse. Ne leve pas: rapporte."""
     analysis_id = _new_id()
@@ -130,9 +138,7 @@ def analyze_dataset(request: AnalysisRequest) -> AnalysisResult:
     except MervioError as exc:
         return rejected(f"echec de l'analyse: {exc}")
 
-    if request.synthetic:
-        report["_meta"]["dataset_is_synthetic"] = True
-    report["_meta"]["analysis_label"] = request.label
+    annotate_report(report, synthetic=request.synthetic, label=request.label)
 
     log.info("analyse %s terminee (score=%s)", analysis_id,
              report["business_health_score"]["score"])
