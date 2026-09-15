@@ -209,7 +209,7 @@ def reference_orders(rows: List[Dict[str, str]]) -> Tuple[Dict[str, RefOrder], C
             stats[f"unparseable_{column.lower().replace(' ', '_')}"] += 1
             return None
 
-    order = slash_order(row.get("Created at") for row in rows)
+    date_order = slash_order(row.get("Created at") for row in rows)
     for row in rows:
         name = row.get("Name", "")
         if not name:
@@ -225,7 +225,7 @@ def reference_orders(rows: List[Dict[str, str]]) -> Tuple[Dict[str, RefOrder], C
             previous = name
         order = orders.get(name)
         if order is None:
-            created = timestamp(row.get("Created at"), order)
+            created = timestamp(row.get("Created at"), date_order)
             if created is None:
                 stats["rows_with_invalid_or_missing_date"] += 1
                 continue

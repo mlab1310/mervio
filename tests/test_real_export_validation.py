@@ -111,6 +111,22 @@ def test_subtotal_before_discount_is_detected_as_a_blocker(harness, tmp_path):
     assert result["report_summary"]["data_quality_issue_kinds"].get("subtotal_convention_contradiction") == 1
 
 
+def test_spreadsheet_dates_reconcile_like_iso_dates(harness, full_result, tmp_path):
+    """Mission 003.2: un export re-enregistre par un tableur (M/D/YYYY H:MM) doit se rapprocher comme l'ISO."""
+    from datetime import datetime
+
+    def us_dates(_index, row):
+        if row["Created at"]:
+            moment = datetime.strptime(row["Created at"][:16], "%Y-%m-%d %H:%M")
+            row["Created at"] = f"{moment.month}/{moment.day}/{moment.year} {moment.hour}:{moment.minute:02d}"
+        return row
+    result = harness.run(_sources(shopify_orders=_rewrite(tmp_path, "shopify_orders.csv", us_dates)), today=TODAY)
+    assert result["analysis"]["status"] == "completed"
+    assert result["files"]["shopify_orders"]["validation"]["issue_kinds"].get("date_order_inferred") == 1
+    assert {c["metric"]: c["status"] for c in result["reconciliation"]}["orders"] == "PASS"
+    assert all(c["status"] == "PASS" for c in result["reconciliation"] if c["metric"] in ("revenue", "orders", "units", "refunds"))
+
+
 def test_undiscounted_export_leaves_the_convention_unverified(harness, tmp_path):
     def no_discount(_index, row):
         if row["Subtotal"]:
