@@ -1,0 +1,25 @@
+# --- DONNEES CLIENT: ne doivent JAMAIS etre versionnees ---
+data/uploads/
+analysis/
+*.client.csv
+
+# Les fixtures synthetiques, elles, sont versionnees volontairement
+!data/sample/
+!data/sample/*.csv
+
+# --- secrets ---
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/

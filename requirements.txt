@@ -1,0 +1,5 @@
+# Le coeur analytique n'a AUCUNE dependance runtime: stdlib uniquement.
+# Choix delibere (voir docs/DECISIONS.md D-004): portabilite, determinisme,
+# et portage direct vers un service FastAPI sans conflit de versions.
+# Dependances de developpement uniquement:
+pytest>=8.0
