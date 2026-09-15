@@ -13,17 +13,33 @@ Chaque `Metric` porte `definition`, `formula`, `sources`, `period`,
 
 ### Chiffre d'affaires et signaux
 
-- CA net = Σ `Order.subtotal`, sous-total **après** remises (D-041). Aucune
-  soustraction de remise dans l'analytique ; un test structurel l'interdit.
+- CA net = Σ `Order.subtotal`, sous-total **après** remises (D-041) et **avant
+  ajustements** : ni les remboursements ni les annulations ne le réduisent
+  (D-044). Équivaut au numérateur du panier moyen Shopify, pas à ses
+  *net sales*. Aucune soustraction de remise dans l'analytique ; un test
+  structurel l'interdit.
 - Un CA négatif ne provient que de montants source négatifs : il est conservé,
   jamais ramené à zéro. KPI `revenue` marqué `incomplete` avec une note,
   avertissements `negative_subtotal` et `negative_period_revenue` (D-043).
 - Commandes annulées (`Cancelled at` renseigné, indépendamment du statut
   financier), non encaissées (`pending`, `authorized`, `partially_paid`,
   `voided`, `expired`), à `Subtotal` nul et issues d'un brouillon : **comptées**
-  comme toute commande, et signalées avec leur nombre et leur montant
-  (`cancelled_orders_counted`, `unsettled_orders_counted`,
-  `zero_value_orders_counted`, `draft_orders_counted`). Règle non établie (D-043).
+  dans commandes, CA et panier moyen, comme dans les rapports Shopify (D-044),
+  et signalées avec leur nombre et leur montant (`cancelled_orders_counted`,
+  `unsettled_orders_counted`, `zero_value_orders_counted`,
+  `draft_orders_counted`). Le signal d'annulation isole les commandes annulées
+  à montant positif et sans remboursement, seul écart avec les *net sales*.
+
+### Remboursements (D-045)
+
+| KPI | Formule | Date | Base |
+|---|---|---|---|
+| `refunds` | Σ `Refunded Amount` (Shopify) | création de la commande (cohorte) | montant facturé, port et taxes éventuels compris |
+| `refund_rate` | `refunds / Σ order.total` | idem | idem ; `incomplete` si `missing_order_total`, `unavailable` si Σ Total = 0 |
+
+L'export ne date pas les remboursements : un KPI mensuel se lit
+« remboursements des commandes du mois », pas « remboursements traités dans le
+mois ». Aucun remboursement n'est déduit du CA.
 
 ### Zéro vs inconnu
 

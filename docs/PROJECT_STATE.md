@@ -1,8 +1,8 @@
 # PROJECT STATE
 
-**Mis à jour :** 15 septembre 2026 — fin de la Mission 003.2
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 601 / 601 · **Dépendances runtime :** 0
-**Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, aucun export CSV natif de marchand
+**Mis à jour :** 15 septembre 2026 — fin de la Mission 003.3
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 610 / 610 · **Dépendances runtime :** 0
+**Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, sémantique des commandes et remboursements décidée ; aucun export CSV natif de marchand
 
 ## Où en est Mervio
 
@@ -151,12 +151,36 @@ d'origine.
 
 Détail : `~/mervio-validation/reports/` (hors dépôt).
 
+## Mission 003.3 — export natif et sémantique des commandes
+
+- **Gate 0 :** aucun export CSV natif Shopify public de provenance vérifiable
+  (GitHub, Sourcegraph, Hugging Face, Zenodo, Figshare, Kaggle, CourtListener,
+  TTAB, communauté Shopify). `PARTIAL-DISCOUNT EVIDENCE NOT AVAILABLE` ;
+  risque accepté sous garde-fou arithmétique (D-046). Rien n'a été synthétisé.
+- **Commandes (D-044) :** périmètre des rapports Shopify. Annulées, non
+  encaissées, brouillons convertis et montants nuls comptent dans commandes,
+  CA et panier moyen ; le CA est « avant ajustements ». Sur OH5, les annulées
+  « payées » valent 0,00 et les annulées porteuses d'argent sont remboursées.
+- **Remboursements (D-045) :** montant `Refunded Amount` (port et taxes
+  compris), daté à la commande (cohorte), taux = remboursements / Σ `Total`.
+  Nouveaux signaux `missing_order_total`, `refund_exceeds_order_total`.
+- OH5 revalidé : 12/12 rapprochements PASS, plus aucun bloquant sémantique au
+  harnais (seule la profitabilité reste indisponible), score 52, 1 anomalie.
+- 9 tests ajoutés ; 6 instantanés golden régénérés (formule, notes, 2 valeurs
+  de `refund_rate`), forme du contexte inchangée.
+
+Détail : `~/mervio-validation/reports/MISSION-003.3-*.md` (hors dépôt).
+
 ## Limites assumées
 
 - **Un seul registre réel, reconstruit depuis un PDF.** OH5 (106 commandes, un
   marchand) ne représente pas les marchands Shopify ; aucun export CSV natif,
   aucune remise partielle, aucun email client n'a encore été analysé.
   Procédure dans `docs/REAL_DATA_TEST.md`.
+- **CA avant ajustements.** Une commande annulée sans remboursement reste dans
+  le CA (signalée) ; le CA Mervio n'est pas les *net sales* Shopify.
+- **Remboursements datés à la commande**, jamais au jour du remboursement.
+- **Fuseau non configuré** : périodes découpées en UTC.
 - Dépense publicitaire = Google Ads uniquement.
 - Trafic approximé par les clics payants.
 - Coût de transport réel indisponible depuis Shopify.
@@ -165,9 +189,9 @@ Détail : `~/mervio-validation/reports/` (hors dépôt).
 
 ## Prochaine étape
 
-1. Passer un export CSV **natif** Shopify (avec remises partielles, et si
-   possible Stripe et Google Ads) dans `scripts/validate_real_export.py`,
-   décider du traitement des commandes annulées, brouillons et à montant nul
-   (D-043), puis écrire un test de régression pour chaque écart rencontré.
+1. Obtenir d'un marchand pilote un export CSV **natif** Shopify (avec remises
+   partielles, et si possible Stripe et Google Ads) et le passer dans
+   `scripts/validate_real_export.py` avant tout chiffre présenté (condition de
+   D-046) ; écrire un test de régression pour chaque écart rencontré.
 2. Brancher un premier fournisseur réel derrière `LLMProvider` et mesurer le
    taux de réponses rejetées par le validateur sur les scénarios golden.

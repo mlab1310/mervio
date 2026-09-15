@@ -1,9 +1,10 @@
 # Tester Mervio avec de vraies données
 
-> **Le moteur n'a encore jamais été exécuté sur un jeu de données réel.**
-> Tout ce qui a été validé à ce jour l'a été sur des fixtures synthétiques
-> (`data/sample/`). Ce document décrit la procédure ; il ne constitue pas une
-> preuve que Mervio fonctionne sur des données réelles.
+> **Le moteur n'a encore jamais été exécuté sur un export CSV natif de marchand.**
+> Seul un registre de ventes réel reconstruit depuis un dépôt public (OH5,
+> Missions 003.1 à 003.3) a été validé ; aucun export natif public n'a pu être
+> trouvé (D-046). Ce document décrit la procédure ; il ne constitue pas une
+> preuve que Mervio fonctionne sur les exports de tous les marchands.
 
 ## 1. Quels exports demander au commerçant
 
@@ -112,7 +113,13 @@ C'est le premier fichier à ouvrir. Ordre de lecture :
 
 ## 7. Limites connues sur données réelles
 
-- **Jamais testé sur un export réel** : c'est la limite principale.
+- **Jamais testé sur un export CSV natif** : c'est la limite principale. Le
+  premier export d'un pilote passe par `scripts/validate_real_export.py` ; tant
+  que la convention du `Subtotal` y est `undetermined`, le CA n'est pas présenté
+  comme vérifié (D-046).
+- Le CA est **avant ajustements** : annulations et remboursements ne le
+  réduisent pas ; il diffère des *net sales* Shopify (D-044).
+- Les remboursements sont datés à la **création de la commande** (D-045).
 - Dépense publicitaire = Google Ads uniquement ; Meta Ads absent.
 - Le trafic est approximé par les clics payants : organique et direct invisibles.
 - Le coût de transport réel n'existe pas dans un export Shopify : la
