@@ -74,7 +74,9 @@ NON_REVENUE_STATUSES = {"pending", "authorized", "voided", "expired", "partially
 
 _NULLS = {"", "-", "--", "n/a", "na", "null", "none", "nan"}
 _DATE_FORMATS = ("%Y-%m-%d %H:%M:%S %z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
-                 "%Y-%m-%d %H:%M", "%Y-%m-%d", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%m/%d/%Y")
+                 "%Y-%m-%d %H:%M", "%Y-%m-%d")
+#: dates a barres: ordre jour/mois etabli par fichier, jamais devine (reimplemente ici, independant du moteur)
+_SLASH = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$")
 _EMAIL_RE = re.compile(r"[^@\s,;\"']+@[^@\s,;\"']+\.[A-Za-z]{2,}")
 
 
@@ -125,7 +127,21 @@ def amount(text: Optional[str]) -> Optional[float]:
     return -number if negative else number
 
 
-def timestamp(text: Optional[str]) -> Optional[datetime]:
+def slash_order(values: Iterable[Optional[str]]) -> Optional[str]:
+    """'dmy', 'mdy', 'conflict' ou None, d'apres les seules valeurs dont une composante depasse 12."""
+    seen = set()
+    for value in values:
+        m = _SLASH.match((value or "").strip())
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if a > 12 >= b:
+                seen.add("dmy")
+            elif b > 12 >= a:
+                seen.add("mdy")
+    return "conflict" if len(seen) > 1 else (seen.pop() if seen else None)
+
+
+def timestamp(text: Optional[str], order: Optional[str] = None) -> Optional[datetime]:
     if text is None or text.strip().lower() in _NULLS:
         return None
     value = text.strip()
@@ -139,6 +155,14 @@ def timestamp(text: Optional[str]) -> Optional[datetime]:
                 break
             except ValueError:
                 continue
+    m = _SLASH.match(value) if parsed is None else None
+    if m and order in ("dmy", "mdy"):
+        a, b = int(m.group(1)), int(m.group(2))
+        day, month = (a, b) if order == "dmy" else (b, a)
+        try:
+            parsed = datetime(int(m.group(3)), month, day, int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0))
+        except ValueError:
+            parsed = None
     if parsed is not None and parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
@@ -185,6 +209,7 @@ def reference_orders(rows: List[Dict[str, str]]) -> Tuple[Dict[str, RefOrder], C
             stats[f"unparseable_{column.lower().replace(' ', '_')}"] += 1
             return None
 
+    order = slash_order(row.get("Created at") for row in rows)
     for row in rows:
         name = row.get("Name", "")
         if not name:
@@ -200,7 +225,7 @@ def reference_orders(rows: List[Dict[str, str]]) -> Tuple[Dict[str, RefOrder], C
             previous = name
         order = orders.get(name)
         if order is None:
-            created = timestamp(row.get("Created at"))
+            created = timestamp(row.get("Created at"), order)
             if created is None:
                 stats["rows_with_invalid_or_missing_date"] += 1
                 continue
@@ -380,12 +405,13 @@ def stripe_reference(path: Path, period: Optional[Dict[str, str]]) -> Dict[str, 
     date_column = next((c for c in ("Created (UTC)", "Created", "created") if c in fieldnames), None)
     unsupported_date_columns = [c for c in fieldnames if "created" in c.lower() and c != date_column]
     seen, fees, refunds, parsed = set(), [], [], 0
+    order = slash_order(row.get(date_column) for row in rows) if date_column else None
     for row in rows:
         pid = row.get("id", "")
         if not pid or pid in seen:
             continue
         seen.add(pid)
-        created = timestamp(row.get(date_column)) if date_column else None
+        created = timestamp(row.get(date_column), order) if date_column else None
         if created is None:
             continue
         parsed += 1
@@ -411,8 +437,9 @@ def google_ads_reference(path: Path, period: Optional[Dict[str, str]]) -> Dict[s
     raw_lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()[:6]
     header_line = next((i for i, line in enumerate(raw_lines) if "Day" in line and "Campaign" in line), None)
     seen, spend, clicks, total_rows = set(), 0.0, 0, 0
+    order = slash_order(row.get("Day") for row in rows)
     for row in rows:
-        day = timestamp(row.get("Day"))
+        day = timestamp(row.get("Day"), order)
         name = row.get("Campaign", "")
         if day is None or not name:
             if (row.get("Campaign") or row.get("Day") or "").lower().startswith("total"):

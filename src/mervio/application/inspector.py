@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 
 from ..errors import MervioError
 from ..ingestion.base import (
-    _ENCODINGS, is_null, parse_datetime, parse_float, sniff_delimiter, unsupported_format,
+    _ENCODINGS, detect_date_order, is_null, parse_datetime, parse_float, sniff_delimiter, unsupported_format,
 )
 from .sensitive import scan_rows
 
@@ -141,9 +141,12 @@ def _infer_type(values: List[str]) -> str:
         except MervioError:
             return False
 
+    # ordre jour/mois deduit des seules valeurs discriminantes de la colonne (D-042)
+    order = detect_date_order(sample).order
+
     def is_date(value: str) -> bool:
         try:
-            return parse_datetime(value, source="inspect", column="c", required=False) is not None
+            return parse_datetime(value, source="inspect", column="c", required=False, date_order=order) is not None
         except MervioError:
             return False
 
@@ -271,13 +274,13 @@ def inspect_file(path: str | Path) -> FileInspection:
         # second passage sur la TOTALITE du fichier: une periode calculee sur un
         # echantillon tronque annoncerait une date de fin fausse
         column = inspection.date_columns[0]
-        full = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+        values = [raw.get(column) for raw in csv.DictReader(io.StringIO(text), delimiter=delimiter)]
+        order = detect_date_order(v.strip() if isinstance(v, str) else v for v in values).order
         days = []
-        for raw in full:
-            value = raw.get(column)
+        for value in values:
             try:
                 parsed = parse_datetime(value.strip() if isinstance(value, str) else value,
-                                        source="inspect", column="date", required=False)
+                                        source="inspect", column="date", required=False, date_order=order)
             except MervioError:
                 parsed = None
             if parsed:

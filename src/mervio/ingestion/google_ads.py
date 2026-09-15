@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 from ..logging_config import get_logger
 from ..domain.models import Campaign, DailyAdPerformance
 from ..domain.quality import DataQualityReport
-from .base import first_present, parse_date, parse_float, parse_int, read_csv, require_columns
+from .base import first_present, parse_date, parse_float, parse_int, read_csv, require_columns, resolve_date_order
 
 SOURCE = "google_ads"
 log = get_logger("ingestion.google_ads")
@@ -24,9 +24,10 @@ def ingest_google_ads(
     performance: List[DailyAdPerformance] = []
     seen: set = set()
     with_conv_value = 0
+    date_order = resolve_date_order((row.get("Day") for row in rows), source=SOURCE, column="Day", quality=quality)
 
     for index, row in enumerate(rows, start=2):
-        day = parse_date(row.get("Day"), source=SOURCE, column="Day", row=index, required=False)
+        day = parse_date(row.get("Day"), source=SOURCE, column="Day", row=index, required=False, date_order=date_order)
         if day is None:
             quality.add_issue(SOURCE, "invalid_date", "error", "ligne Google Ads sans date valide, ignoree")
             continue

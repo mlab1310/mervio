@@ -12,7 +12,9 @@ from typing import Dict, List, Optional, Tuple
 from ..logging_config import get_logger
 from ..domain.models import Order, OrderItem, Product, Refund
 from ..domain.quality import DataQualityReport, QualityStatus
-from .base import first_present, is_null, parse_datetime, parse_float, parse_int, read_csv, require_columns
+from .base import (
+    first_present, is_null, parse_datetime, parse_float, parse_int, read_csv, require_columns, resolve_date_order,
+)
 
 SOURCE = "shopify"
 log = get_logger("ingestion.shopify")
@@ -73,6 +75,9 @@ def ingest_shopify_orders(
     identified_customers = 0
     invalid_rows = 0
     accepted_rows = 0
+    # ordre jour/mois des dates a barres: une seule convention par fichier (D-042)
+    date_order = resolve_date_order((row.get("Created at") for row in rows), source=SOURCE,
+                                    column="Created at", quality=quality)
 
     for index, row in enumerate(rows, start=2):
         order_id = (row.get("Name") or "").strip()
@@ -82,7 +87,8 @@ def ingest_shopify_orders(
             continue
 
         if order_id not in orders:
-            created_at = parse_datetime(row.get("Created at"), source=SOURCE, column="Created at", row=index, required=False)
+            created_at = parse_datetime(row.get("Created at"), source=SOURCE, column="Created at", row=index,
+                                        required=False, date_order=date_order)
             if created_at is None:
                 invalid_rows += 1
                 quality.add_issue(SOURCE, "invalid_date", "error", f"commande {order_id} sans date valide, ignoree")

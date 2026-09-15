@@ -12,7 +12,7 @@ from typing import List, Tuple
 from ..logging_config import get_logger
 from ..domain.models import Payment, Refund
 from ..domain.quality import DataQualityReport
-from .base import first_present, parse_datetime, parse_float, read_csv, require_columns
+from .base import first_present, parse_datetime, parse_float, read_csv, require_columns, resolve_date_order
 
 SOURCE = "stripe"
 log = get_logger("ingestion.stripe")
@@ -27,6 +27,9 @@ def ingest_stripe(path: str | Path, quality: DataQualityReport) -> Tuple[List[Pa
     refunds: List[Refund] = []
     seen_ids: set = set()
     with_fee = 0
+    date_columns = ("Created (UTC)", "Created", "created")
+    date_order = resolve_date_order((first_present(row, date_columns) for row in rows), source=SOURCE,
+                                    column="Created (UTC)", quality=quality)
 
     for index, row in enumerate(rows, start=2):
         payment_id = (row.get("id") or "").strip()
@@ -39,8 +42,8 @@ def ingest_stripe(path: str | Path, quality: DataQualityReport) -> Tuple[List[Pa
         seen_ids.add(payment_id)
 
         created_at = parse_datetime(
-            first_present(row, ("Created (UTC)", "Created", "created")),
-            source=SOURCE, column="Created (UTC)", row=index, required=False,
+            first_present(row, date_columns),
+            source=SOURCE, column="Created (UTC)", row=index, required=False, date_order=date_order,
         )
         if created_at is None:
             quality.add_issue(SOURCE, "invalid_date", "error", f"transaction {payment_id} sans date valide, ignoree")
