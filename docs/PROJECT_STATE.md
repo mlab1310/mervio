@@ -1,7 +1,7 @@
 # PROJECT STATE
 
-**Mis à jour :** 15 septembre 2026 — Mission 004.0 (gate recherche et architecture, branche `mission-004.0`)
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 656 / 656 · **Dépendances runtime :** 0
+**Mis à jour :** 15 septembre 2026 — Mission 004.1 (persistance PostgreSQL et isolation tenant, branche `mission-004.1`)
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 815 / 815 avec PostgreSQL (697 + 118 ignorés sans base) · **Dépendances runtime :** 0 (persistance : extra optionnel)
 **Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, sémantique des commandes et remboursements décidée ; aucun export CSV natif de marchand
 
 ## Où en est Mervio
@@ -37,7 +37,10 @@ Trois commandes : `validate`, `analyze`, `demo`.
 | Validation et ancrage de la réponse LLM | 🟢 |
 | Fournisseur LLM réel (OpenAI, Claude…) | 🔴 (non branché, aucun SDK) |
 | Rapport PDF | 🔴 |
-| FastAPI, PostgreSQL, auth, multi-tenant, frontend, billing | 🔴 (volontaire) |
+| PostgreSQL : instantanés, rapports, provenance, migrations | 🟢 (Mission 004.1) |
+| Multi-tenant : organisations, rôles, RLS forcée | 🟢 (couche persistance ; API en 004.3) |
+| Jobs d'arrière-plan, audit | 🔴 (Mission 004.2) |
+| FastAPI, auth OIDC, frontend, billing | 🔴 (volontaire) |
 | CI/CD | 🔴 |
 
 ## Ce que la Mission 001.5 a ajouté
@@ -219,9 +222,32 @@ Aucun fichier existant du moteur modifié ; contrats 003.3 intacts.
 
 Détail : `docs/MISSION_004_0_HANDOFF.md`, `research/`.
 
+## Mission 004.1 — Persistance PostgreSQL et isolation tenant
+
+- **Paquet `mervio.persistence`** (extra `persistence` : psycopg 3, Alembic) :
+  - organisations, appartenances et rôles, boutiques, connexions ;
+  - instantanés de données immuables ;
+  - entités canoniques en `numeric(19,4)` ;
+  - exécutions d'analyse et rapports.
+- 3 migrations Alembic, montée et descente testées.
+- **Rapport persisté identique octet pour octet au `report.json` de la CLI** : même moteur sur le Dataset relu, lui-même
+  égal au Dataset CSV.
+- **Isolation :**
+  - `TenantSession` : appartenance et rôle relus à chaque transaction ;
+  - RLS forcée sur 15 tables ;
+  - clés étrangères composites et clés uniques préfixées par l'organisation ;
+  - prouvée via les dépôts, via la barrière applicative seule et via la RLS seule.
+- Provenance rapport → exécution → instantané → fichiers (SHA-256) → enregistrement source.
+- **Moteur :** deux extractions sans changement de comportement (`analyze_loaded_dataset`, `annotate_report`) ; aucun
+  contrat 003.3 modifié.
+- **Performance :** linéaire jusqu'à 1 M de commandes (écriture 78 s, relecture 17 s).
+- 159 tests ajoutés.
+
+Détail : `docs/MISSION_004_1_HANDOFF.md`, `docs/MISSION_004_1_PERSISTENCE.md`, `docs/MISSION_004_1_DECISIONS.md`.
+
 ## Prochaine étape
 
-0. Mission 004.1 (persistance et isolation tenant), puis 004.2 à 004.6 selon `docs/MISSION_004_0_HANDOFF.md`.
+0. Mission 004.2 (jobs d'arrière-plan et audit) selon `docs/MISSION_004_1_HANDOFF.md`, puis 004.3 à 004.6.
 
 1. Obtenir d'un marchand pilote un export CSV **natif** Shopify (avec remises
    partielles, et si possible Stripe et Google Ads) et le passer dans
