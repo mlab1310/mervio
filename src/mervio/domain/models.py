@@ -44,6 +44,15 @@ class OrderItem:
 
 @dataclass
 class Order:
+    """Commande normalisee.
+
+    Contrat de revenu (D-041): `subtotal` est le sous-total des articles APRES
+    remises de commande, avant port et taxes. `discount` est le montant de
+    remise DEJA deduit de `subtotal`: il est informatif et ne doit jamais etre
+    soustrait une seconde fois. Un connecteur dont la source fournit un
+    sous-total avant remise doit le convertir a l'ingestion, pas ici.
+    """
+
     order_id: str
     customer_id: str
     created_at: datetime
@@ -60,8 +69,8 @@ class Order:
 
     @property
     def net_revenue(self) -> float:
-        """CA produit net de remise, hors frais de port et hors taxes."""
-        return self.subtotal - self.discount
+        """CA produit net de remise, hors frais de port et hors taxes (= subtotal normalise)."""
+        return self.subtotal
 
     @property
     def units(self) -> int:

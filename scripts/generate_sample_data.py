@@ -146,7 +146,8 @@ def main() -> None:
                         "Financial Status": status if idx == 0 else "",
                         "Created at": created if idx == 0 else "",
                         "Currency": "EUR" if idx == 0 else "",
-                        "Subtotal": f"{subtotal:.2f}" if idx == 0 else "",
+                        # export Shopify: le Subtotal est deja net des remises (D-041)
+                        "Subtotal": f"{net:.2f}" if idx == 0 else "",
                         "Discount Amount": f"{discount:.2f}" if idx == 0 else "",
                         "Shipping": f"{shipping:.2f}" if idx == 0 else "",
                         "Taxes": f"{tax:.2f}" if idx == 0 else "",

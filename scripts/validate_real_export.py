@@ -167,7 +167,8 @@ class RefOrder:
 
     @property
     def net(self) -> float:
-        return self.subtotal - self.discount
+        # contrat Shopify (D-041): le Subtotal est deja net des remises de commande
+        return self.subtotal
 
 
 def reference_orders(rows: List[Dict[str, str]]) -> Tuple[Dict[str, RefOrder], Counter, Set[str]]:
@@ -290,7 +291,8 @@ def shopify_semantics(orders: Dict[str, RefOrder], fieldnames: List[str], grain:
     close = lambda a, b: abs(a - b) <= TOTAL_MATCH  # noqa: E731
     with_total = [o for o in orders.values() if o.total is not None]
     discounted = [o for o in with_total if o.discount > 0]
-    pre = sum(1 for o in discounted if close(o.total, o.net + o.shipping + o.taxes) or close(o.total, o.net + o.shipping))
+    pre = sum(1 for o in discounted if close(o.total, o.subtotal - o.discount + o.shipping + o.taxes)
+              or close(o.total, o.subtotal - o.discount + o.shipping))
     post = sum(1 for o in discounted if close(o.total, o.subtotal + o.shipping + o.taxes)
                or close(o.total, o.subtotal + o.shipping))
     if len(discounted) < MIN_DISCOUNTED_ORDERS:
@@ -318,7 +320,7 @@ def shopify_semantics(orders: Dict[str, RefOrder], fieldnames: List[str], grain:
     return {
         "subtotal_convention": {
             "conclusion": convention,
-            "mervio_assumes": "pre_discount (revenue = Subtotal - Discount Amount, D-002)",
+            "mervio_assumes": "post_discount (revenue = Subtotal, already net of discounts, D-041)",
             "orders_with_total": len(with_total),
             "discounted_orders": len(discounted),
             "discounted_matching_pre_discount": pre,
@@ -508,8 +510,8 @@ def classify(result: Dict[str, Any]) -> Tuple[str, List[str]]:
 def blockers(result: Dict[str, Any]) -> List[str]:
     found = []
     convention = result.get("semantics", {}).get("subtotal_convention", {}).get("conclusion", "")
-    if convention == "post_discount":
-        found.append("subtotal_already_net_of_discount: Mervio would subtract discounts twice (D-002)")
+    if convention == "pre_discount":
+        found.append("subtotal_before_discount: file contradicts the Shopify contract, revenue overstated by discounts (D-041)")
     elif convention.startswith("undetermined"):
         found.append(f"subtotal_convention_unverified ({convention})")
     if result.get("semantics", {}).get("non_revenue_or_cancelled_orders"):

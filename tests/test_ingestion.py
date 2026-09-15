@@ -72,7 +72,7 @@ def test_parse_datetime_invalid_required_raises():
 ORDERS_CSV = """Name,Email,Financial Status,Created at,Currency,Subtotal,Discount Amount,Shipping,Taxes,Total,Refunded Amount,Lineitem quantity,Lineitem name,Lineitem price,Lineitem sku
 #1,a@x.com,paid,2026-09-08 10:00:00 +0000,EUR,100.00,0.00,0.00,20.00,120.00,,1,Produit A,100.00,A
 #1,,,,,,,,,,,2,Produit B,25.00,B
-#2,b@x.com,paid,2026-09-09 10:00:00 +0000,EUR,50.00,5.00,5.90,9.00,59.90,10.00,1,Produit B,50.00,B
+#2,b@x.com,paid,2026-09-09 10:00:00 +0000,EUR,45.00,5.00,5.90,9.00,59.90,10.00,1,Produit B,50.00,B
 """
 
 
@@ -89,7 +89,7 @@ def test_shopify_net_revenue_excludes_shipping_and_tax(tmp_path):
     q = DataQualityReport()
     orders, _, _ = ingest_shopify_orders(write(tmp_path, "o.csv", ORDERS_CSV), q)
     order2 = [o for o in orders if o.order_id == "#2"][0]
-    assert order2.net_revenue == pytest.approx(45.0)  # 50 - 5, pas 59.90
+    assert order2.net_revenue == pytest.approx(45.0)  # Subtotal Shopify deja net de la remise de 5, pas 59.90 (D-041)
 
 
 def test_shopify_deduplicates_identical_line(tmp_path):

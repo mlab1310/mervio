@@ -255,7 +255,7 @@
   "facts": [
     {
       "data_quality": "reliable",
-      "formula": "sum(order.subtotal - order.discount)",
+      "formula": "sum(order.subtotal) [subtotal deja net de remise, D-041]",
       "id": "kpi.revenue",
       "label": "Chiffre d'affaires net",
       "metric": "revenue",

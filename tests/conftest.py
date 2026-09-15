@@ -22,13 +22,14 @@ SAMPLE_DIR = ROOT / "data" / "sample"
 def make_order(order_id, day, customer, lines, discount=0.0, shipping=0.0):
     """lines = [(sku, qty, price)]"""
     items = [OrderItem(order_id, sku, sku, qty, price) for sku, qty, price in lines]
-    subtotal = sum(i.line_revenue for i in items)
+    # D-041: le subtotal normalise est deja net de la remise de commande
+    subtotal = sum(i.line_revenue for i in items) - discount
     return Order(
         order_id=order_id, customer_id=customer,
         created_at=datetime.combine(day, datetime.min.time()).replace(hour=12),
         currency="EUR", subtotal=subtotal, discount=discount, shipping=shipping,
-        tax=round((subtotal - discount) * 0.2, 2),
-        total=subtotal - discount + shipping, financial_status="paid",
+        tax=round(subtotal * 0.2, 2),
+        total=subtotal + shipping, financial_status="paid",
         items=items, customer_email=customer,
     )
 

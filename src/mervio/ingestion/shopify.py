@@ -64,6 +64,7 @@ def ingest_shopify_orders(
     quality.mark_source("shopify_orders")
 
     orders: Dict[str, Order] = {}
+    orders_with_total: set = set()
     seen_items: Dict[str, set] = {}
     refunds: List[Refund] = []
     #: derniere devise LUE dans l'export. Jamais de valeur par defaut: une devise
@@ -98,16 +99,22 @@ def ingest_shopify_orders(
             else:
                 quality.add_issue(SOURCE, "missing_currency", "warning",
                                   "commande sans devise: montant agrege sans devise verifiee")
+            total = parse_float(row.get("Total"), source=SOURCE, column="Total", row=index)
+            if total is not None:
+                orders_with_total.add(order_id)
             orders[order_id] = Order(
                 order_id=order_id,
                 customer_id=email or f"guest:{order_id}",
                 created_at=created_at,
                 currency=order_currency,
+                # Contrat Shopify (D-041): "Subtotal" est deja net des remises de commande.
+                # C'est la forme canonique du domaine: aucune conversion, et surtout
+                # aucune soustraction de "Discount Amount".
                 subtotal=parse_float(row.get("Subtotal"), source=SOURCE, column="Subtotal", row=index, default=0.0) or 0.0,
                 discount=parse_float(row.get("Discount Amount"), source=SOURCE, column="Discount Amount", row=index, default=0.0) or 0.0,
                 shipping=parse_float(row.get("Shipping"), source=SOURCE, column="Shipping", row=index, default=0.0) or 0.0,
                 tax=parse_float(row.get("Taxes"), source=SOURCE, column="Taxes", row=index, default=0.0) or 0.0,
-                total=parse_float(row.get("Total"), source=SOURCE, column="Total", row=index, default=0.0) or 0.0,
+                total=total or 0.0,
                 financial_status=(row.get("Financial Status") or "unknown").strip().lower(),
                 customer_email=email,
             )
@@ -151,6 +158,7 @@ def ingest_shopify_orders(
 
     quality.set_rows(SOURCE + "_orders", total=len(rows), accepted=accepted_rows)
     order_list = sorted(orders.values(), key=lambda o: o.created_at)
+    _check_subtotal_contract(order_list, orders_with_total, quality)
     quality.set_field("order_revenue", covered=len(order_list), total=len(order_list) + invalid_rows,
                       note="CA net de remise, hors port et hors taxes")
     quality.set_field("customer_identity", covered=identified_customers, total=len(order_list),
@@ -159,3 +167,35 @@ def ingest_shopify_orders(
         log.warning("shopify orders: %s lignes rejetees", invalid_rows)
     log.info("shopify orders: %s commandes, %s remboursements", len(order_list), len(refunds))
     return order_list, refunds, currency
+
+
+#: arrondi independant au centime de chaque composante du Total
+_TOTAL_TOLERANCE = 0.02
+
+
+def _check_subtotal_contract(orders: List[Order], orders_with_total: set, quality: DataQualityReport) -> None:
+    """Verifie le contrat "Subtotal apres remise" sur les commandes remisees.
+
+    Le Total d'une commande Shopify vaut Subtotal + Shipping + Taxes (taxes
+    eventuellement incluses dans les prix). Si le Total ne se reconstruit
+    qu'en retirant la remise du Subtotal, le fichier contredit le contrat:
+    le signaler, sans changer de convention en silence.
+    """
+    close = lambda a, b: abs(a - b) <= _TOTAL_TOLERANCE  # noqa: E731
+    contradicting, overstatement = 0, 0.0
+    for order in orders:
+        if order.discount <= 0 or order.order_id not in orders_with_total:
+            continue
+        after = close(order.total, order.subtotal + order.shipping + order.tax) or close(order.total, order.subtotal + order.shipping)
+        net = order.subtotal - order.discount
+        before = close(order.total, net + order.shipping + order.tax) or close(order.total, net + order.shipping)
+        if before and not after:
+            contradicting += 1
+            overstatement += order.discount
+    if contradicting:
+        quality.add_issue(
+            SOURCE, "subtotal_convention_contradiction", "error",
+            f"{contradicting} commande(s) remisee(s) dont le Total suppose un Subtotal AVANT remise: "
+            f"le contrat Shopify (Subtotal apres remise, D-041) est applique, le CA peut etre surestime "
+            f"d'au plus {overstatement:,.2f}",
+        )

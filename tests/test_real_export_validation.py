@@ -76,10 +76,11 @@ def test_fixtures_are_classified_partial_because_profit_is_unavailable(full_resu
     assert any("profitability_unavailable" in r for r in full_result["classification_reasons"])
 
 
-def test_subtotal_convention_of_fixtures_is_pre_discount(full_result):
+def test_subtotal_convention_of_fixtures_follows_the_shopify_contract(full_result):
+    """D-041: les fixtures encodent un Subtotal deja net de remise, comme un export Shopify."""
     convention = full_result["semantics"]["subtotal_convention"]
-    assert convention["conclusion"] == "pre_discount"
-    assert convention["discounted_matching_post_discount"] == 0
+    assert convention["conclusion"] == "post_discount"
+    assert convention["discounted_matching_pre_discount"] == 0
 
 
 def test_llm_stage_is_local_bounded_and_free_of_identifiers(full_result):
@@ -98,14 +99,16 @@ def test_output_contains_no_raw_value(full_result):
 
 
 # -- particularites des exports reels -------------------------------------------------
-def test_subtotal_already_net_of_discount_is_detected_as_a_blocker(harness, tmp_path):
-    def post_discount(_index, row):
+def test_subtotal_before_discount_is_detected_as_a_blocker(harness, tmp_path):
+    """Un fichier dont le Total suppose un Subtotal avant remise contredit le contrat Shopify."""
+    def pre_discount(_index, row):
         if row["Subtotal"]:
-            row["Subtotal"] = f"{float(row['Subtotal']) - float(row['Discount Amount']):.2f}"
+            row["Subtotal"] = f"{float(row['Subtotal']) + float(row['Discount Amount']):.2f}"
         return row
-    result = harness.run(_sources(shopify_orders=_rewrite(tmp_path, "shopify_orders.csv", post_discount)), today=TODAY)
-    assert result["semantics"]["subtotal_convention"]["conclusion"] == "post_discount"
-    assert any(b.startswith("subtotal_already_net_of_discount") for b in result["blockers"])
+    result = harness.run(_sources(shopify_orders=_rewrite(tmp_path, "shopify_orders.csv", pre_discount)), today=TODAY)
+    assert result["semantics"]["subtotal_convention"]["conclusion"] == "pre_discount"
+    assert any(b.startswith("subtotal_before_discount") for b in result["blockers"])
+    assert result["report_summary"]["data_quality_issue_kinds"].get("subtotal_convention_contradiction") == 1
 
 
 def test_undiscounted_export_leaves_the_convention_unverified(harness, tmp_path):

@@ -113,7 +113,7 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
 
     kpis["revenue"] = _m("revenue", "Chiffre d'affaires net", revenue, "currency",
                          "CA produit net de remises, hors frais de port et hors taxes.",
-                         "sum(order.subtotal - order.discount)", ["shopify_orders"], p)
+                         "sum(order.subtotal) [subtotal deja net de remise, D-041]", ["shopify_orders"], p)
     kpis["orders"] = _m("orders", "Commandes", float(orders_count), "count",
                         "Nombre de commandes creees sur la periode.",
                         "count(orders)", ["shopify_orders"], p)
