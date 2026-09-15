@@ -1,7 +1,7 @@
 # PROJECT STATE
 
 **Mis à jour :** 15 septembre 2026 — fin de la Mission 003.3
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 610 / 610 · **Dépendances runtime :** 0
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 623 / 623 · **Dépendances runtime :** 0
 **Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, sémantique des commandes et remboursements décidée ; aucun export CSV natif de marchand
 
 ## Où en est Mervio
@@ -156,11 +156,12 @@ Détail : `~/mervio-validation/reports/` (hors dépôt).
 - **Gate 0 :** aucun export CSV natif Shopify public de provenance vérifiable
   (GitHub, Sourcegraph, Hugging Face, Zenodo, Figshare, Kaggle, CourtListener,
   TTAB, communauté Shopify). `PARTIAL-DISCOUNT EVIDENCE NOT AVAILABLE` ;
-  risque accepté sous garde-fou arithmétique (D-046). Rien n'a été synthétisé.
-- **Commandes (D-044) :** périmètre des rapports Shopify. Annulées, non
-  encaissées, brouillons convertis et montants nuls comptent dans commandes,
-  CA et panier moyen ; le CA est « avant ajustements ». Sur OH5, les annulées
-  « payées » valent 0,00 et les annulées porteuses d'argent sont remboursées.
+  risque résiduel accepté ; les contrôles arithmétiques sont partiels et le
+  disent (D-046). Rien n'a été synthétisé.
+- **Commandes (D-044) :** toute commande de l'export compte (annulées, non
+  encaissées, brouillons convertis, montants nuls), sur le modèle des rapports
+  Shopify sans prétendre les reproduire. Sur OH5, les annulées « payées »
+  valent 0,00 et les annulées porteuses d'argent sont remboursées.
 - **Remboursements (D-045) :** montant `Refunded Amount` (port et taxes
   compris), daté à la commande (cohorte), taux = remboursements / Σ `Total`.
   Nouveaux signaux `missing_order_total`, `refund_exceeds_order_total`.
@@ -168,6 +169,12 @@ Détail : `~/mervio-validation/reports/` (hors dépôt).
   harnais (seule la profitabilité reste indisponible), score 52, 1 anomalie.
 - 9 tests ajoutés ; 6 instantanés golden régénérés (formule, notes, 2 valeurs
   de `refund_rate`), forme du contexte inchangée.
+- **Audit de ratification, trois corrections :** profit partiel sur la part
+  produit des remboursements, jamais port et taxes compris (D-047) ; libellé
+  « CA avant ajustements » jusque dans le contexte LLM, sans prétendre
+  reproduire les *net sales* Shopify (D-048) ; contrôle du Subtotal déclaré
+  partiel, commandes non vérifiables signalées, CA `incomplete` en cas de
+  contradiction (D-046). 13 tests ajoutés.
 
 Détail : `~/mervio-validation/reports/MISSION-003.3-*.md` (hors dépôt).
 
@@ -177,8 +184,11 @@ Détail : `~/mervio-validation/reports/MISSION-003.3-*.md` (hors dépôt).
   marchand) ne représente pas les marchands Shopify ; aucun export CSV natif,
   aucune remise partielle, aucun email client n'a encore été analysé.
   Procédure dans `docs/REAL_DATA_TEST.md`.
-- **CA avant ajustements.** Une commande annulée sans remboursement reste dans
-  le CA (signalée) ; le CA Mervio n'est pas les *net sales* Shopify.
+- **CA avant ajustements.** Retours, annulations et modifications ne le
+  réduisent pas ; Mervio ne cherche pas à reproduire les *net sales* Shopify,
+  qui peuvent différer.
+- **Contrôle du Subtotal partiel** : certaines erreurs de convention restent
+  indétectables (D-046).
 - **Remboursements datés à la commande**, jamais au jour du remboursement.
 - **Fuseau non configuré** : périodes découpées en UTC.
 - Dépense publicitaire = Google Ads uniquement.

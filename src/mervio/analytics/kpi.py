@@ -51,6 +51,14 @@ def _m(key, label, value, unit, definition, formula, sources, period, quality=Qu
                   quality.value if isinstance(quality, QualityStatus) else quality, notes or [])
 
 
+#: libelle du CA Mervio (D-048): jamais "CA net", que l'on confondrait avec les ventes nettes Shopify
+REVENUE_LABEL = "CA avant ajustements"
+#: definition portee par le KPI jusque dans le contexte LLM, qui ne recoit pas le champ `definition`
+REVENUE_CONTRACT_NOTE = ("contrat Mervio: somme des Subtotal (nets de remises, hors port et taxes), non reduite par "
+                         "les remboursements, annulations ou modifications; ne cherche pas a reproduire les ventes "
+                         "nettes (net sales) Shopify, qui peuvent differer")
+
+
 # --- agregats primitifs -------------------------------------------------
 def total_revenue(ds: Dataset) -> float:
     return sum(o.net_revenue for o in ds.orders)
@@ -117,12 +125,21 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
     clicks = total_clicks(ds)
 
     # un CA negatif ne vient que de montants source negatifs: il est conserve et signale, jamais ramene a zero
-    kpis["revenue"] = _m("revenue", "Chiffre d'affaires net", revenue, "currency",
-                         "CA produit net de remises, avant remboursements et annulations, hors frais de port et hors taxes.",
+    # D-046: le controle du contrat du Subtotal est partiel; son resultat accompagne toujours le CA
+    issue_kinds = {i.kind for i in q.issues}
+    contradicted = "subtotal_convention_contradiction" in issue_kinds
+    revenue_notes = (["CA negatif sur la periode: montants source negatifs a verifier, valeur non corrigee"]
+                     if revenue < 0 else [])
+    if contradicted:
+        revenue_notes.append("des Total de l'export supposent un Subtotal avant remise: CA possiblement surestime")
+    if "subtotal_contract_unverified" in issue_kinds:
+        revenue_notes.append("contrat du Subtotal non verifiable arithmetiquement sur une partie des commandes du fichier")
+    kpis["revenue"] = _m("revenue", REVENUE_LABEL, revenue, "currency",
+                         "CA produit net de remises, avant ajustements (remboursements, annulations, modifications), "
+                         "hors frais de port et hors taxes.",
                          "sum(order.subtotal) [subtotal deja net de remise, D-041]", ["shopify_orders"], p,
-                         QualityStatus.INCOMPLETE if revenue < 0 else QualityStatus.RELIABLE,
-                         ["CA negatif sur la periode: montants source negatifs a verifier, valeur non corrigee"]
-                         if revenue < 0 else [])
+                         QualityStatus.INCOMPLETE if (revenue < 0 or contradicted) else QualityStatus.RELIABLE,
+                         revenue_notes + [REVENUE_CONTRACT_NOTE])
     kpis["orders"] = _m("orders", "Commandes", float(orders_count), "count",
                         "Nombre de commandes creees sur la periode.",
                         "count(orders)", ["shopify_orders"], p)
@@ -130,7 +147,7 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
                        "Somme des quantites de tous les articles.",
                        "sum(item.quantity)", ["shopify_orders"], p)
     kpis["aov"] = _m("aov", "Panier moyen", (revenue / orders_count) if orders_count else None, "currency",
-                     "CA net divise par le nombre de commandes.",
+                     "CA avant ajustements divise par le nombre de commandes.",
                      "revenue / orders", ["shopify_orders"], p,
                      QualityStatus.RELIABLE if orders_count else QualityStatus.UNAVAILABLE,
                      [] if orders_count else ["aucune commande sur la periode"])
@@ -143,7 +160,7 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
                          "sum(refund.amount where source=shopify)", ["shopify_orders"], p,
                          notes=list(refund_notes))
     order_value = total_order_value(ds)
-    total_incomplete = any(i.kind == "missing_order_total" for i in q.issues)
+    total_incomplete = "missing_order_total" in issue_kinds
     kpis["refund_rate"] = _m("refund_rate", "Taux de remboursement",
                              (refunds / order_value) if order_value else None, "ratio",
                              "Part du montant facture (port et taxes compris) des commandes de la periode remboursee.",
@@ -186,7 +203,7 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
                      + ([] if n_new else ["aucun nouveau client sur la periode"])
                      + ([] if has_ad_data else ["aucune donnee publicitaire: CAC inconnu, pas nul"]))
     kpis["roas"] = _m("roas", "ROAS", (revenue / spend) if spend else None, "ratio",
-                      "CA net rapporte a la depense publicitaire.", "revenue / ad_spend",
+                      "CA avant ajustements rapporte a la depense publicitaire.", "revenue / ad_spend",
                       ["shopify_orders", "google_ads"], p,
                       QualityStatus.INCOMPLETE if spend else QualityStatus.UNAVAILABLE,
                       ["ROAS global, non attribue: mesure l'efficacite du mix, pas d'une campagne"])

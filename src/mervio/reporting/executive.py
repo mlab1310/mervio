@@ -153,8 +153,9 @@ def render_executive_report(report: dict) -> str:
     lines += _title("REVENUE ANALYSIS")
     revenue = report["kpis"].get("revenue")
     if revenue:
-        lines.append(f"  CA net de la periode           {_money(revenue['value'], currency):>22}")
+        lines.append(f"  CA avant ajustements           {_money(revenue['value'], currency):>22}")
         lines.append(f"      definition: {revenue['definition']}")
+        lines.append("      ne reproduit pas les ventes nettes (net sales) Shopify, qui peuvent differer")
     for kind, label in (("wow", "Semaine vs semaine precedente"),
                         ("mom", "Mois vs mois precedent"),
                         ("yoy", "Annee vs annee precedente")):
@@ -186,7 +187,7 @@ def render_executive_report(report: dict) -> str:
 
     profit = report["profitability"]
     lines += _title("PROFITABILITY")
-    lines.append(f"  Chiffre d'affaires net         {_money(profit['revenue'], currency):>22}")
+    lines.append(f"  CA avant ajustements           {_money(profit['revenue'], currency):>22}")
     if profit["data_available"]:
         lines.append(f"  Profit de contribution         {_money(profit['contribution_profit'], currency):>22}")
         lines.append(f"  Marge de contribution          {_pct(profit['contribution_margin']):>22}")

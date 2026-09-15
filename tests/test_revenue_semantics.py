@@ -76,8 +76,9 @@ def test_case_e_refund_is_never_subtracted_from_revenue_nor_doubled(tmp_path):
     assert kpis["revenue"].value == pytest.approx(80.0)        # ni 80 - 96, ni 80 - 20
     assert kpis["refunds"].value == pytest.approx(96.0)        # montant Shopify tel quel, compte une fois
     profitability = compute_profitability(ds.window(PERIOD.start, PERIOD.end), PERIOD.label)
-    assert profitability.components["refunds"].value == pytest.approx(96.0)
-    assert profitability.partial_contribution_profit == pytest.approx(80.0 - 96.0)  # une seule deduction
+    # D-047: remboursement integral -> part produit = Subtotal (80), jamais les 96 port et taxes compris
+    assert profitability.components["refunds"].value == pytest.approx(80.0)
+    assert "refunds" in profitability.included_components
 
 
 def test_file_contradicting_the_contract_is_flagged_not_silently_converted(tmp_path):
@@ -93,6 +94,58 @@ def test_tax_inclusive_totals_are_not_mistaken_for_a_contradiction(tmp_path):
     body = "#1,a@x.com,paid,2026-09-08 10:00:00,EUR,80.00,20.00,5.00,13.33,85.00,,1,A,100.00,A\n"
     ds, _ = _analyse(tmp_path, body)
     assert "subtotal_convention_contradiction" not in _issue_kinds(ds)
+
+
+# --- D-046: controle arithmetique PARTIEL du contrat -------------------------------------------
+# Tests de comportement logiciel sur donnees synthetiques. Ils ne prouvent rien sur la semantique
+# d'un export Shopify reel (PARTIAL-DISCOUNT EVIDENCE NOT AVAILABLE): ils fixent ce que le moteur
+# detecte, ce qu'il ne peut pas detecter, et ce qu'il en dit.
+
+def _guardrail(tmp_path, subtotal, discount, total, shipping="10.00", tax="9.00"):
+    body = f"#1,a@x.com,paid,2026-09-08 10:00:00,USD,{subtotal},{discount},{shipping},{tax},{total},,1,A,100.00,A\n"
+    ds, kpis = _analyse(tmp_path, body)
+    return {i.kind: i for i in ds.quality.issues}, kpis["revenue"]
+
+
+def test_guardrail_nominal_post_discount_order_is_consistent(tmp_path):
+    # D: brut 100, remise 20, Subtotal 80, port 10, taxes 9, Total 99
+    issues, revenue = _guardrail(tmp_path, "80.00", "20.00", "99.00")
+    assert revenue.value == pytest.approx(80.0) and revenue.data_quality == "reliable"
+    assert not {"subtotal_convention_contradiction", "subtotal_contract_unverified"} & set(issues)
+
+
+def test_guardrail_pre_discount_subtotal_is_detected_and_degrades_revenue(tmp_path):
+    # E: meme commande, Subtotal 100 avant remise: le Total 99 ne se reconstruit qu'en retirant la remise
+    issues, revenue = _guardrail(tmp_path, "100.00", "20.00", "99.00")
+    assert issues["subtotal_convention_contradiction"].severity == "error"
+    assert revenue.value == pytest.approx(100.0)                               # contrat applique, jamais converti
+    assert revenue.data_quality == "incomplete" and any("surestime" in n for n in revenue.notes)
+
+
+def test_guardrail_cannot_verify_without_discount_amount(tmp_path):
+    # A: Subtotal 100 avant remise mais Discount Amount absent: aucune contradiction demontrable
+    issues, revenue = _guardrail(tmp_path, "100.00", "", "99.00")
+    assert "subtotal_convention_contradiction" not in issues
+    assert "1 dont le Total ne se reconstruit pas" in issues["subtotal_contract_unverified"].message
+    assert any("non verifiable" in n for n in revenue.notes)
+
+
+def test_guardrail_cannot_verify_without_total(tmp_path):
+    # B: Total absent: le Subtotal 100 (avant remise) ne peut etre ni confirme ni contredit
+    issues, revenue = _guardrail(tmp_path, "100.00", "20.00", "")
+    assert "subtotal_convention_contradiction" not in issues
+    assert issues["subtotal_contract_unverified"].message.startswith(
+        "contrat du Subtotal (apres remise, D-041) non verifiable sur 1 commande(s): 1 sans Total")
+    assert any("non verifiable" in n for n in revenue.notes)
+
+
+def test_guardrail_cannot_decide_when_discount_equals_tax(tmp_path):
+    # C: Subtotal 100 avant remise, remise 9 = taxes 9, Total 110 = 100 + 10 (lecture taxes incluses)
+    #    = (100 - 9) + 10 + 9 (lecture avant remise): les deux lectures reconstruisent le Total
+    issues, revenue = _guardrail(tmp_path, "100.00", "9.00", "110.00")
+    assert "subtotal_convention_contradiction" not in issues
+    assert "1 remisee(s) dont le Total admet les deux lectures" in issues["subtotal_contract_unverified"].message
+    assert revenue.data_quality == "reliable" and any("non verifiable" in n for n in revenue.notes)
 
 
 def test_no_code_path_subtracts_the_discount_from_the_subtotal_again():

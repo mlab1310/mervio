@@ -117,8 +117,12 @@ C'est le premier fichier à ouvrir. Ordre de lecture :
   premier export d'un pilote passe par `scripts/validate_real_export.py` ; tant
   que la convention du `Subtotal` y est `undetermined`, le CA n'est pas présenté
   comme vérifié (D-046).
-- Le CA est **avant ajustements** : annulations et remboursements ne le
-  réduisent pas ; il diffère des *net sales* Shopify (D-044).
+- Le CA est **avant ajustements** : retours, annulations et modifications ne le
+  réduisent pas. Mervio ne cherche pas à reproduire les *net sales* Shopify,
+  qui peuvent différer (D-044, D-048).
+- Le contrôle arithmétique du `Subtotal` est partiel : lire
+  `subtotal_convention_contradiction` et `subtotal_contract_unverified` avant
+  de présenter le CA (D-046).
 - Les remboursements sont datés à la **création de la commande** (D-045).
 - Dépense publicitaire = Google Ads uniquement ; Meta Ads absent.
 - Le trafic est approximé par les clics payants : organique et direct invisibles.

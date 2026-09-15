@@ -10,6 +10,7 @@ from datetime import date
 
 import pytest
 
+from mervio.analytics.kpi import REVENUE_CONTRACT_NOTE
 from mervio.analytics.pipeline import SourcePaths, load_dataset, run_analysis
 
 HEADER = ("Name,Email,Financial Status,Created at,Currency,Subtotal,Discount Amount,Shipping,Taxes,Total,"
@@ -56,7 +57,18 @@ def test_positive_history_raises_no_negative_signal(tmp_path):
     report = run_analysis(SourcePaths(shopify_orders=_write(tmp_path, _weekly_history())), today=date(2026, 9, 14))
     kinds = {i["kind"] for i in report["data_quality"]["issues"]}
     assert not {"negative_period_revenue", "negative_subtotal"} & kinds
-    assert report["kpis"]["revenue"]["notes"] == []
+    assert report["kpis"]["revenue"]["notes"] == [REVENUE_CONTRACT_NOTE]
+
+
+def test_revenue_is_labelled_before_adjustments_up_to_the_llm_context(tmp_path):
+    # D-048: le LLM ne recoit pas le champ `definition`; libelle et note doivent suffire a lever l'ambiguite
+    from mervio.llm import build_llm_context
+    report = run_analysis(SourcePaths(shopify_orders=_write(tmp_path, _weekly_history())), today=date(2026, 9, 14))
+    assert report["kpis"]["revenue"]["label"] == "CA avant ajustements"
+    assert "CA net" not in report["executive_summary"]
+    fact = next(f for f in build_llm_context(report)["facts"] if f["metric"] == "revenue")
+    assert fact["label"] == "CA avant ajustements"
+    assert any("ne cherche pas a reproduire les ventes nettes (net sales) Shopify" in note for note in fact["notes"])
 
 
 def test_refunds_never_turn_revenue_negative(tmp_path):

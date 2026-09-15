@@ -34,7 +34,7 @@ def _executive_summary(health, insights, kpis, period, currency) -> str:
     revenue = kpis.get("revenue")
     parts = [f"Periode {period.label} ({period.start_date} au {period.end_date})."]
     if revenue and revenue.available:
-        parts.append(f"CA net: {revenue.value:,.2f} {currency}.")
+        parts.append(f"{revenue.label}: {revenue.value:,.2f} {currency}.")
     if health.score is not None:
         parts.append(f"Business Health Score: {health.score}/100. {health.interpretation}")
     critical = [i for i in insights if i.category == "critical_issue"]

@@ -13,22 +13,28 @@ Chaque `Metric` porte `definition`, `formula`, `sources`, `period`,
 
 ### Chiffre d'affaires et signaux
 
-- CA net = Σ `Order.subtotal`, sous-total **après** remises (D-041) et **avant
-  ajustements** : ni les remboursements ni les annulations ne le réduisent
-  (D-044). Équivaut au numérateur du panier moyen Shopify, pas à ses
-  *net sales*. Aucune soustraction de remise dans l'analytique ; un test
-  structurel l'interdit.
+- CA avant ajustements (libellé D-048) = Σ `Order.subtotal`, sous-total
+  **après** remises (D-041) : ni les remboursements, ni les annulations, ni les
+  modifications ne le réduisent (D-044). Formule proche du numérateur du panier
+  moyen Shopify (analogie documentaire, pas identité vérifiée) ; Mervio ne
+  cherche pas à reproduire les *net sales* Shopify, qui peuvent différer. Le KPI
+  porte cette définition en note jusqu'au contexte LLM. Aucune soustraction de
+  remise dans l'analytique ; un test structurel l'interdit.
+- Contrôle **partiel** du contrat du Subtotal (D-046) : contradiction ⇒ KPI
+  `revenue` `incomplete` avec note ; commandes non vérifiables (Total absent,
+  non reconstructible, compatible avec les deux lectures) ⇒ note, qualité
+  inchangée.
 - Un CA négatif ne provient que de montants source négatifs : il est conservé,
   jamais ramené à zéro. KPI `revenue` marqué `incomplete` avec une note,
   avertissements `negative_subtotal` et `negative_period_revenue` (D-043).
 - Commandes annulées (`Cancelled at` renseigné, indépendamment du statut
   financier), non encaissées (`pending`, `authorized`, `partially_paid`,
   `voided`, `expired`), à `Subtotal` nul et issues d'un brouillon : **comptées**
-  dans commandes, CA et panier moyen, comme dans les rapports Shopify (D-044),
-  et signalées avec leur nombre et leur montant (`cancelled_orders_counted`,
-  `unsettled_orders_counted`, `zero_value_orders_counted`,
-  `draft_orders_counted`). Le signal d'annulation isole les commandes annulées
-  à montant positif et sans remboursement, seul écart avec les *net sales*.
+  dans commandes, CA et panier moyen (D-044), et signalées avec leur nombre et
+  leur montant (`cancelled_orders_counted`, `unsettled_orders_counted`,
+  `zero_value_orders_counted`, `draft_orders_counted`). Le signal d'annulation
+  isole les commandes annulées à montant positif et sans aucun remboursement :
+  une cause possible, parmi d'autres, d'écart avec les *net sales* Shopify.
 
 ### Remboursements (D-045)
 
@@ -52,13 +58,21 @@ mois ». Aucun remboursement n'est déduit du CA.
 ## 2. Profitabilité
 
 ```
-CA − COGS − frais de paiement − publicité − remboursements − transport
-  = profit de contribution
+CA avant ajustements − COGS − frais de paiement − publicité
+  − part produit des remboursements − transport = profit de contribution
 ```
 
 Une composante manquante ⇒ `data_available = false` et
 `contribution_profit = null`. Un `partial_contribution_profit` est fourni avec
-la liste explicite des coûts inclus et exclus.
+la liste explicite des coûts inclus et exclus, et seulement si au moins un coût
+est connu.
+
+Les remboursements entrent sur la **base du CA** (D-047), jamais pour leur
+montant port et taxes compris : part produit calculée quand l'arithmétique la
+détermine (aucun remboursement, remboursement intégral, commande sans port ni
+taxes, Subtotal nul), sinon composante indisponible avec ses bornes en note.
+`refunds` est alors une composante critique : la dimension profitabilité du
+score est exclue, comme sans COGS.
 
 Le coût de transport réel est **toujours** manquant depuis un export Shopify :
 l'export contient le port *facturé au client*, pas le coût transporteur.
@@ -120,6 +134,8 @@ Les dimensions non calculables sont **exclues** et les poids renormalisés.
 - Profitabilité : exclue si le **COGS** manque. Noter une « marge » de 80 % qui
   ignore le coût d'achat récompenserait l'absence de donnée. Sur les fixtures,
   ce garde-fou fait passer le score de **78 à 50** — c'est la bonne valeur.
+  Même exclusion si la part produit des remboursements n'est pas déterminable
+  (D-047).
 - Santé produit : exclue si le coût est connu sur moins de 80 % du CA article.
 
 Aucun LLM n'intervient dans ce calcul.

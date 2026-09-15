@@ -174,7 +174,7 @@ def ingest_shopify_orders(
     _check_refund_basis(order_list, orders_with_total, refunds, quality)
     _report_order_semantics(order_list, cancelled_orders, draft_orders, refunds, quality)
     quality.set_field("order_revenue", covered=len(order_list), total=len(order_list) + invalid_rows,
-                      note="CA net de remise, hors port et hors taxes")
+                      note="CA avant ajustements: Subtotal net de remise, hors port et hors taxes")
     quality.set_field("customer_identity", covered=identified_customers, total=len(order_list),
                       note="email present: necessaire au calcul de retention et de CAC")
     if invalid_rows:
@@ -188,30 +188,52 @@ _TOTAL_TOLERANCE = 0.02
 
 
 def _check_subtotal_contract(orders: List[Order], orders_with_total: set, quality: DataQualityReport) -> None:
-    """Verifie le contrat "Subtotal apres remise" sur les commandes remisees.
+    """Controle arithmetique PARTIEL du contrat "Subtotal apres remise" (D-041, D-046).
 
     Le Total d'une commande Shopify vaut Subtotal + Shipping + Taxes (taxes
     eventuellement incluses dans les prix). Si le Total ne se reconstruit
     qu'en retirant la remise du Subtotal, le fichier contredit le contrat:
-    le signaler, sans changer de convention en silence.
+    erreur, sans changer de convention en silence.
+
+    Ce controle ne prouve pas la semantique Shopify. Il ne peut rien conclure
+    sans Total, quand le Total ne se reconstruit d'aucune facon (remise absente
+    de l'export, montants hors contrat) ou quand les deux lectures reconstruisent
+    le meme Total (remise egale aux taxes): ces commandes sont declarees non
+    verifiables, jamais comptees comme conformes.
     """
     close = lambda a, b: abs(a - b) <= _TOTAL_TOLERANCE  # noqa: E731
     contradicting, overstatement = 0, 0.0
+    ambiguous = unreconstructible = 0
     for order in orders:
-        if order.discount <= 0 or order.order_id not in orders_with_total:
+        if order.order_id not in orders_with_total:
             continue
         after = close(order.total, order.subtotal + order.shipping + order.tax) or close(order.total, order.subtotal + order.shipping)
+        if order.discount <= 0:
+            unreconstructible += not after
+            continue
         net = order.subtotal - order.discount
         before = close(order.total, net + order.shipping + order.tax) or close(order.total, net + order.shipping)
         if before and not after:
             contradicting += 1
             overstatement += order.discount
+        elif before and after:
+            ambiguous += 1
+        elif not after:
+            unreconstructible += 1
     if contradicting:
         quality.add_issue(
             SOURCE, "subtotal_convention_contradiction", "error",
             f"{contradicting} commande(s) remisee(s) dont le Total suppose un Subtotal AVANT remise: "
             f"le contrat Shopify (Subtotal apres remise, D-041) est applique, le CA peut etre surestime "
             f"d'au plus {overstatement:,.2f}",
+        )
+    missing = len(orders) - len(orders_with_total)
+    if missing or ambiguous or unreconstructible:
+        quality.add_issue(
+            SOURCE, "subtotal_contract_unverified", "warning",
+            f"contrat du Subtotal (apres remise, D-041) non verifiable sur {missing + ambiguous + unreconstructible} "
+            f"commande(s): {missing} sans Total, {unreconstructible} dont le Total ne se reconstruit pas depuis "
+            f"Subtotal, port et taxes, {ambiguous} remisee(s) dont le Total admet les deux lectures",
         )
 
 

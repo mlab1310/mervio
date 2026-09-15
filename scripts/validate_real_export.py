@@ -338,8 +338,9 @@ def shopify_semantics(orders: Dict[str, RefOrder], fieldnames: List[str], grain:
     by_status = Counter(o.status for o in orders.values())
     status_revenue = _merge({o.status: o.net} for o in orders.values())
     non_revenue = [o for o in orders.values() if o.status in NON_REVENUE_STATUSES or o.cancelled]
-    # D-044: ces commandes restent dans le CA avant ajustements (perimetre des rapports Shopify). Le seul
-    # ecart avec le CA net Shopify vient de celles dont le montant n'est ni encaisse ni rembourse.
+    # D-044: ces commandes restent dans le CA avant ajustements. Celles dont le montant n'est ni encaisse
+    # ni rembourse y restent sans contrepartie: une cause possible, parmi d'autres, d'ecart avec les net
+    # sales Shopify, que Mervio ne cherche pas a reproduire.
     unreversed = [o for o in non_revenue if o.net > 0 and not o.refunded]
     days = sorted(o.created.date() for o in orders.values())
     customers = defaultdict(list)

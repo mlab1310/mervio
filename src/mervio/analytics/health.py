@@ -28,7 +28,9 @@ REPEAT_THRESHOLDS: Thresholds = ((0.0, 10.0), (0.10, 45.0), (0.20, 75.0), (0.30,
 PRODUCT_MARGIN_THRESHOLDS: Thresholds = ((0.10, 0.0), (0.25, 45.0), (0.40, 75.0), (0.55, 100.0))
 
 #: composantes de cout sans lesquelles une "marge" n'a pas de sens en e-commerce
-CRITICAL_COST_COMPONENTS = ("cogs",)
+#: une marge qui ignore le cout d'achat ou des remboursements connus mais non ramenables a la base
+#: du CA (D-047) recompenserait l'absence de donnee: la dimension est exclue, pas approximee
+CRITICAL_COST_COMPONENTS = ("cogs", "refunds")
 #: couverture minimale du CA article pour que la marge produit represente le catalogue
 MIN_PRODUCT_COVERAGE = 0.80
 

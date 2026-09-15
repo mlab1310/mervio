@@ -18,7 +18,7 @@ Modèle interne normalisé (`src/mervio/models.py`), indépendant des sources.
 
 ## Définitions qui engagent les chiffres
 
-**CA net** = `Order.subtotal` (D-041).
+**CA avant ajustements** (D-048, anciennement « CA net ») = `Order.subtotal` (D-041).
 Dans le modèle normalisé, `subtotal` est le sous-total des articles **après**
 remises de commande, avant port et taxes ; `discount` est la remise **déjà
 déduite**, gardée à titre informatif et jamais soustraite une seconde fois.
@@ -30,22 +30,28 @@ Chaque connecteur livre cette forme canonique :
 
 | Couche | Contenu |
 |---|---|
-| Sémantique source Shopify | `Subtotal` de l'export commandes = somme des articles après remises de commande, avant port et taxes ; `Total` = `Subtotal + Shipping + Taxes` (taxes éventuellement incluses dans les prix) |
-| Normalisation Mervio | `subtotal` ← `Subtotal` sans conversion ; `discount` ← `Discount Amount` ; contrôle arithmétique du contrat sur le `Total`, erreur `subtotal_convention_contradiction` si un fichier le contredit |
-| Définition analytique | CA net = Σ `subtotal` ; panier moyen = CA net / commandes |
+| Sémantique source Shopify (contrat retenu) | `Subtotal` de l'export commandes = somme des articles après remises de commande, avant port et taxes ; `Total` = `Subtotal + Shipping + Taxes` (taxes éventuellement incluses dans les prix) |
+| Normalisation Mervio | `subtotal` ← `Subtotal` sans conversion ; `discount` ← `Discount Amount` ; contrôle arithmétique **partiel** du contrat sur le `Total` : `subtotal_convention_contradiction` (erreur, CA `incomplete`) si un fichier le contredit, `subtotal_contract_unverified` (avertissement, note sur le CA) si des commandes ne permettent pas de conclure (D-046) |
+| Définition analytique | CA avant ajustements = Σ `subtotal` ; panier moyen = CA avant ajustements / commandes |
 | Niveau de preuve | remise à 100 % : prouvée sur un registre réel déposé publiquement (OH5, 30/30 commandes) ; remise partielle : contrat documentaire (API Admin Shopify), **non observée** — aucun export natif public trouvé (D-046) |
 
 **Avant ajustements.** `Subtotal` n'est pas réduit par un remboursement ni par
 une annulation (OH5 : les commandes remboursées gardent leur Subtotal ; API :
-`subtotalPriceSet` « before returns »). Le CA Mervio correspond donc au
-numérateur du panier moyen Shopify (*gross sales − discounts*), pas aux
-*net sales* Shopify, qui déduisent annulations et retours (D-044).
+`subtotalPriceSet` « before returns »). Le CA Mervio suit le contrat Mervio
+ci-dessus. Sa formule est proche du numérateur du panier moyen Shopify
+(*gross sales − discounts*) — analogie documentaire, pas identité vérifiée.
+Mervio **ne cherche pas à reproduire** les *net sales* Shopify : elles peuvent
+différer, notamment par les retours et remboursements, les annulations, les
+modifications de commande et d'autres règles ou exclusions propres aux
+rapports Shopify (D-044, D-048).
 
 **Périmètre des commandes** (D-044) : toute commande de l'export compte dans
 les commandes, le CA et le panier moyen — annulée, non encaissée, issue d'un
-brouillon ou à montant nul. C'est le périmètre publié par Shopify pour ses
-rapports. `Financial Status = paid` n'est pas une preuve d'encaissement : une
-commande à 0,00 peut être « payée » sans transaction.
+brouillon ou à montant nul. Ce choix s'inspire du périmètre publié pour les
+rapports Shopify ; les commandes de test et les ventes de cartes cadeaux, que
+ces rapports excluent, n'ont pas été vérifiées dans l'export. `Financial Status
+= paid` n'est pas une preuve d'encaissement : une commande à 0,00 peut être
+« payée » sans transaction.
 
 La valeur des lignes (`OrderItem.line_revenue` = quantité × prix) reste brute :
 elle ne porte pas la remise de commande.
@@ -83,6 +89,7 @@ n'est jamais déduit du CA : il est rapporté à part.
 | Date | création de la commande : l'export ne contient aucune date de remboursement. Lecture en cohorte |
 | Taux | `Σ Refunded Amount / Σ Total` des commandes de la période, même devise ; `incomplete` si des `Total` manquent (`missing_order_total`), `unavailable` sans montant facturé |
 | Incohérence | remboursement > `Total` : conservé, signalé `refund_exceeds_order_total` |
+| Profit partiel | part produit du remboursement (base CA), calculée seulement quand l'arithmétique la détermine ; sinon composante indisponible, bornes en note (D-047) |
 
 ## Ajouter une source
 

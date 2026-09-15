@@ -30,13 +30,11 @@
       },
       {
         "available": false,
-        "evidence": [
-          "marge partielle observee: 95.5% (non notee: elle exclut cogs)"
-        ],
+        "evidence": [],
         "id": "health.profitability",
         "key": "profitability",
         "label": "Profitabilite",
-        "reason_unavailable": "composante de cout majeure manquante: cogs - noter cette dimension surestimerait la sante reelle",
+        "reason_unavailable": "composante de cout majeure manquante: cogs, refunds - noter cette dimension surestimerait la sante reelle",
         "score": null,
         "weight": 0.25
       },
@@ -317,9 +315,11 @@
       "data_quality": "reliable",
       "formula": "sum(order.subtotal) [subtotal deja net de remise, D-041]",
       "id": "kpi.revenue",
-      "label": "Chiffre d'affaires net",
+      "label": "CA avant ajustements",
       "metric": "revenue",
-      "notes": [],
+      "notes": [
+        "contrat Mervio: somme des Subtotal (nets de remises, hors port et taxes), non reduite par les remboursements, annulations ou modifications; ne cherche pas a reproduire les ventes nettes (net sales) Shopify, qui peuvent differer"
+      ],
       "period": "2026-W37",
       "sources": [
         "shopify_orders"
@@ -523,8 +523,8 @@
         "Cout des marchandises vendues: cout connu sur 0% du CA article seulement: COGS total non calculable",
         "Frais de paiement: aucun frais renseigne",
         "Publicite: Google Ads uniquement: les autres regies ne sont pas connectees",
-        "Cout de transport reel: l'export Shopify contient le port FACTURE au client, pas le cout transporteur",
-        "Profit de contribution complet non calculable a partir des donnees disponibles. Le profit partiel ci-dessus exclut: Cout des marchandises vendues, Frais de paiement, Publicite, Cout de transport reel."
+        "Remboursements (part produit): part produit non determinable pour 7 remboursement(s): l'export ne ventile pas port et taxes rembourses (part produit de la periode comprise entre 784.02 et 1,076.44)",
+        "Cout de transport reel: l'export Shopify contient le port FACTURE au client, pas le cout transporteur"
       ],
       "id": "finding.3",
       "impact_source": null,
@@ -569,51 +569,51 @@
     },
     {
       "id": "limitation.4",
-      "statement": "Cout de transport reel: l'export Shopify contient le port FACTURE au client, pas le cout transporteur"
+      "statement": "Remboursements (part produit): part produit non determinable pour 7 remboursement(s): l'export ne ventile pas port et taxes rembourses (part produit de la periode comprise entre 784.02 et 1,076.44)"
     },
     {
       "id": "limitation.5",
-      "statement": "Profit de contribution complet non calculable a partir des donnees disponibles. Le profit partiel ci-dessus exclut: Cout des marchandises vendues, Frais de paiement, Publicite, Cout de transport reel."
+      "statement": "Cout de transport reel: l'export Shopify contient le port FACTURE au client, pas le cout transporteur"
     },
     {
       "id": "limitation.6",
-      "statement": "Les clics payants ne mesurent que Google Ads: le trafic organique et direct n'est pas observe."
+      "statement": "Profit de contribution complet non calculable a partir des donnees disponibles. Aucun profit partiel: aucune composante de cout disponible (Cout des marchandises vendues, Frais de paiement, Publicite, Remboursements (part produit), Cout de transport reel)."
     },
     {
       "id": "limitation.7",
-      "statement": "Les contributions decrivent une decomposition arithmetique, pas un lien de causalite demontre."
+      "statement": "Les clics payants ne mesurent que Google Ads: le trafic organique et direct n'est pas observe."
     },
     {
       "id": "limitation.8",
-      "statement": "Toute hypothese doit etre verifiee dans l'outil source avant decision."
+      "statement": "Les contributions decrivent une decomposition arithmetique, pas un lien de causalite demontre."
     },
     {
       "id": "limitation.9",
-      "statement": "Dimensions exclues du Business Health Score (non calculables): profitability, marketing_efficiency, product_health"
+      "statement": "Toute hypothese doit etre verifiee dans l'outil source avant decision."
     },
     {
       "id": "limitation.10",
-      "statement": "[shopify_products] export produits absent: aucun cout produit, marge non calculable"
+      "statement": "Dimensions exclues du Business Health Score (non calculables): profitability, marketing_efficiency, product_health"
     },
     {
       "id": "limitation.11",
-      "statement": "[shopify] ligne d'article dupliquee detectee et dedupliquee"
+      "statement": "[shopify_products] export produits absent: aucun cout produit, marge non calculable"
     },
     {
       "id": "limitation.12",
-      "statement": "[shopify] commande sans email: client traite comme invite"
+      "statement": "[shopify] ligne d'article dupliquee detectee et dedupliquee"
     },
     {
       "id": "limitation.13",
-      "statement": "[stripe] Stripe absent: frais de paiement inconnus, profitabilite incomplete"
+      "statement": "[shopify] commande sans email: client traite comme invite"
     },
     {
       "id": "limitation.14",
-      "statement": "[google_ads] Google Ads absent: CAC et ROAS non calculables"
+      "statement": "[stripe] Stripe absent: frais de paiement inconnus, profitabilite incomplete"
     },
     {
       "id": "limitation.15",
-      "statement": "Ce rapport ne couvre que les sources connectees; toute source absente peut modifier les conclusions."
+      "statement": "[google_ads] Google Ads absent: CAC et ROAS non calculables"
     }
   ],
   "profitability": {
@@ -621,17 +621,16 @@
     "contribution_profit": null,
     "data_available": false,
     "id": "profitability",
-    "included_components": [
-      "refunds"
-    ],
+    "included_components": [],
     "missing_components": [
       "cogs",
       "payment_fees",
       "advertising",
+      "refunds",
       "shipping_cost"
     ],
-    "partial_contribution_margin": 0.9552,
-    "partial_contribution_profit": 22974.66,
+    "partial_contribution_margin": null,
+    "partial_contribution_profit": null,
     "partial_is_not_profit": true,
     "revenue": 24051.1
   },
@@ -657,7 +656,7 @@
       "source_finding": "finding.2"
     },
     {
-      "action": "Renseigner les couts manquants (cogs, payment_fees, advertising, shipping_cost) pour obtenir une profitabilite reelle plutot qu'un CA.",
+      "action": "Renseigner les couts manquants (cogs, payment_fees, advertising, refunds, shipping_cost) pour obtenir une profitabilite reelle plutot qu'un CA.",
       "confidence": 0.9,
       "estimated_impact": null,
       "estimated_impact_basis": null,
@@ -718,7 +717,7 @@
     },
     "limitations": {
       "included": 15,
-      "total": 15
+      "total": 16
     },
     "recommendations": {
       "included": 3,
@@ -782,13 +781,13 @@
       "id": "unavailable.contribution_profit",
       "label": "Profit de contribution",
       "metric": "contribution_profit",
-      "reason": "profit de contribution complet non calculable: composantes manquantes (cogs, payment_fees, advertising, shipping_cost)"
+      "reason": "profit de contribution complet non calculable: composantes manquantes (cogs, payment_fees, advertising, refunds, shipping_cost)"
     },
     {
       "id": "unavailable.contribution_margin",
       "label": "Marge de contribution",
       "metric": "contribution_margin",
-      "reason": "profit de contribution complet non calculable: composantes manquantes (cogs, payment_fees, advertising, shipping_cost)"
+      "reason": "profit de contribution complet non calculable: composantes manquantes (cogs, payment_fees, advertising, refunds, shipping_cost)"
     }
   ],
   "untrusted_content": {

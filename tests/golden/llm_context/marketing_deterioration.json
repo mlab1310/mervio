@@ -257,9 +257,11 @@
       "data_quality": "reliable",
       "formula": "sum(order.subtotal) [subtotal deja net de remise, D-041]",
       "id": "kpi.revenue",
-      "label": "Chiffre d'affaires net",
+      "label": "CA avant ajustements",
       "metric": "revenue",
-      "notes": [],
+      "notes": [
+        "contrat Mervio: somme des Subtotal (nets de remises, hors port et taxes), non reduite par les remboursements, annulations ou modifications; ne cherche pas a reproduire les ventes nettes (net sales) Shopify, qui peuvent differer"
+      ],
       "period": "2026-W37",
       "sources": [
         "shopify_orders"

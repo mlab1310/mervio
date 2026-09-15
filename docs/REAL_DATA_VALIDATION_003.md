@@ -2,6 +2,13 @@
 
 **Date :** 15 septembre 2026 · **Point de départ :** `760edb0` (tag `mission-003-start`), 492 tests
 
+> **Document historique (Mission 003).** Les conventions décrites ici sont
+> celles d'avant les Missions 003.2 et 003.3 : le CA n'est plus
+> `Subtotal − Discount Amount` (D-041), les fixtures synthétiques ont été
+> régénérées avec un Subtotal après remise, et le libellé est « CA avant
+> ajustements » (D-048). Aucune ligne de ce document ne valide une remise
+> partielle sur données réelles (D-046).
+
 > **Aucun export marchand réel n'était disponible.** Recherche sur la machine
 > (Bureau, Documents, Téléchargements, iCloud, volumes montés) : seul le
 > dataset Kaggle déjà étudié en 001.6 (CSV + XLSX) est un fichier externe réel.
