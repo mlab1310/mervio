@@ -16,8 +16,7 @@ from llm_scenarios import SCENARIOS, missing_profitability, revenue_decline
 
 from mervio.application.service import AnalysisResult
 from mervio.llm import (
-    LLMContextError, ProviderAuthenticationError, ProviderUnavailableError, ResponseValidationError,
-    build_llm_context,
+    ProviderAuthenticationError, ProviderUnavailableError, ResponseValidationError, build_llm_context,
 )
 from mervio.llm.mock import MockLLMProvider
 from mervio.llm.provider import LLMConfig
@@ -80,7 +79,7 @@ def test_valid_grounded_response_is_accepted(context):
 
 
 def test_equivalent_number_formats_are_accepted(context):
-    for text in ("24051.10 EUR", "24 051,10 EUR", "24051.1 EUR", "24 051,10 €"):
+    for text in ("24051.10 EUR", "24 051,10 EUR", "24051.1 EUR", "24\u00a0051,10 €"):
         response = base_response(facts=[{"statement": f"CA net: {text}", "refs": ["kpi.revenue"]}])
         validate_response(raw(response), context)
 

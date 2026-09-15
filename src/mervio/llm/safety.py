@@ -21,7 +21,9 @@ from ..application.sensitive import _CARD_CANDIDATE, _PATTERNS, _luhn
 from ..ingestion.base import _EMAIL_RE
 
 #: caracteres de controle, marqueurs bidirectionnels et caracteres invisibles
-_INVISIBLE_RE = re.compile("[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
+_CONTROL_RE = re.compile("[\x00-\x1f\x7f]")
+#: invisibles supprimes (et non remplaces par un espace): "Ig\u200bnore" doit redevenir "Ignore"
+_INVISIBLE_RE = re.compile("[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
 _PHONE_RE = re.compile(r"(?<![\w+])(?:\+\d{1,3}[ .-]?\d(?:[ .-]?\d{2,4}){2,5}|0\d(?:[ .-]?\d{2}){4})(?!\w)")
 #: identifiant de commande Shopify (#1001) ou client invite (guest:#1001)
 _ORDER_ID_RE = re.compile(r"(?:guest:)?(?<![\w&])#\d{3,}\b")
@@ -34,7 +36,8 @@ _INSTRUCTION_MARKERS = re.compile(
     r"|jailbreak|developer\s+mode|administrat(or|eur)"
     r"|</?\s*(system|assistant|user)\s*>|\b(system|assistant)\s*:"
     r"|change[rz]?\b.{0,30}\bscore|calcul(ate|e)[rz]?\b.{0,30}\b(profit|revenue|ca\b|marge)"
-    r"|MERVIO_UNTRUSTED_DATA",
+    r"|\b(true|real|actual|correct|vrai|veritable|reel)\s+(revenue|profit|score|ca|chiffre)"
+    r"|```|MERVIO_UNTRUSTED_DATA",
     re.IGNORECASE,
 )
 
@@ -52,7 +55,7 @@ def sanitize_text(value: object, limit: int) -> str:
     raw = "" if value is None else str(value)
     hard_cap = limit * 8 + 256
     cut = len(raw) > hard_cap
-    text = " ".join(_INVISIBLE_RE.sub(" ", raw[:hard_cap]).split())
+    text = " ".join(_CONTROL_RE.sub(" ", _INVISIBLE_RE.sub("", raw[:hard_cap])).split())
     window = limit * 2 + 64
     if len(text) > window:
         text, cut = text[:window], True
