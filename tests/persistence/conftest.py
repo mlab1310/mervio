@@ -33,9 +33,9 @@ from psycopg.conninfo import conninfo_to_dict  # noqa: E402
 
 ADMIN_URL_ENV = "MERVIO_TEST_ADMIN_DATABASE_URL"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
-TABLES = ("reports", "analysis_runs", "ad_daily_performance", "campaigns", "refunds", "payments", "order_lines",
-          "orders", "products", "snapshot_sources", "data_snapshots", "connections", "stores", "memberships",
-          "users", "organizations")
+TABLES = ("audit_events", "jobs", "reports", "analysis_runs", "ad_daily_performance", "campaigns", "refunds",
+          "payments", "order_lines", "orders", "products", "snapshot_sources", "data_snapshots", "connections",
+          "stores", "memberships", "users", "organizations")
 
 
 @dataclass
