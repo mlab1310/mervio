@@ -50,8 +50,22 @@ Autres options : `--grain week\|month`, `--lookback N`, `--today AAAA-MM-JJ`,
 `--print-report`, `--verbose`.
 
 ```bash
-python -m pytest        # 192 tests
+python -m pytest        # 816 tests avec PostgreSQL (697 passes + 119 ignores sans base)
 ```
+
+## Persistance PostgreSQL (optionnelle, Mission 004.1)
+
+Le moteur et la CLI n'en ont pas besoin. Le chemin SaaS persiste des instantanés de
+données immuables et des rapports identiques octet pour octet au `report.json` de la CLI,
+avec isolation des organisations (clés composites + Row Level Security).
+
+```bash
+pip install -e '.[dev,persistence]'
+scripts/dev_postgres.sh start            # ou: docker compose up -d postgres
+MERVIO_TEST_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgres python -m pytest
+```
+
+Détails : `docs/MISSION_004_1_PERSISTENCE.md`.
 
 ## Données et confidentialité
 
@@ -110,4 +124,6 @@ volontaires (date invalide, doublons, remboursement négatif, coûts manquants).
 | `docs/DATA_MODEL.md` | modèle normalisé et définitions |
 | `docs/ANALYTICS_ENGINE.md` | méthodes, seuils, formules |
 | `docs/DECISIONS.md` | arbitrages et leurs raisons |
+| `docs/MISSION_004_1_PERSISTENCE.md` | persistance PostgreSQL, tenants, instantanés, rapports |
+| `docs/MISSION_004_1_HANDOFF.md` | état et suite (Mission 004.2) |
 | `docs/ROADMAP.md` / `docs/TODO.md` | suite |

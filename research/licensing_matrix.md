@@ -30,6 +30,11 @@ source affirme explicitement.
 | pyod | BSD-2-Clause | — | autorisé | notice | notice | libre | faible | Étude |
 | dramatiq | LGPL-3.0 | — | conditions LGPL | oui | oui | copyleft faible | moyenne | Rejeté (courtier supplémentaire) |
 | singer-io/tap-shopify | **AGPL-3.0** | — | copyleft réseau | oui | oui | **copyleft fort, y compris en service** | faible | **Rejeté** pour intégration |
+| **psycopg 3.3 + psycopg-binary 3.3** (adopté 004.1) | **LGPL-3.0-only** (métadonnées PyPI) ; la roue binaire embarque libpq (PostgreSQL License) et OpenSSL (Apache-2.0) | — | autorisé sous conditions LGPL : bibliothèque non modifiée, importée dynamiquement, installée comme distribution séparée ; usage serveur (SaaS), aucune redistribution du produit | notice | si Mervio redistribuait un binaire : fournir la licence et permettre le remplacement de la bibliothèque | copyleft faible : toute modification de psycopg elle-même serait LGPL | moyenne | **Adopté** comme driver PostgreSQL (ADR-004.1-001) : **jamais modifié ni vendu, jamais copié dans le dépôt**. Réévaluer si Mervio distribue un jour un logiciel installable (pg8000, BSD-3, en repli documenté) |
+| **alembic 1.20** (adopté 004.1) | MIT | — | autorisé | notice | notice | libre | faible | **Adopté** (migrations, ADR-004-002 et ADR-004.1-001) |
+| **SQLAlchemy 2.0** (dépendance d'alembic) | MIT | — | autorisé | notice | notice | libre | faible | Transitif ; utilisé **uniquement** par les migrations (test AST) |
+| Mako 1.4, MarkupSafe 3.0, typing_extensions 4.16 (transitifs d'alembic / SQLAlchemy / psycopg) | MIT ; BSD-3-Clause ; PSF-2.0 | — | autorisé | notice | notice | libre | faible | Transitifs, non importés par Mervio |
+| PostgreSQL 17 (serveur, image `postgres:17`) | PostgreSQL License | — | autorisé | notice | notice | libre | faible | **Adopté** (ADR-004-002) ; service, pas une dépendance Python |
 | soda-core, lightdash, cube, metabase, posthog | **NOASSERTION** (API GitHub) | — | non établi ici | — | — | — | **élevée** | **RESEARCH ONLY — LICENSE UNCLEAR** tant que non vérifié |
 
 ## 2. Données

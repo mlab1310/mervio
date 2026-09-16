@@ -146,8 +146,21 @@ def run_analysis(
     config: Optional[AnalyticsConfig] = None,
     today: Optional[date] = None,
 ) -> dict:
+    return analyze_loaded_dataset(load_dataset(paths), config, today)
+
+
+def analyze_loaded_dataset(
+    dataset: Dataset,
+    config: Optional[AnalyticsConfig] = None,
+    today: Optional[date] = None,
+) -> dict:
+    """Analyse un Dataset deja normalise, quelle que soit son origine (CSV, instantane persiste).
+
+    Meme calcul que `run_analysis`, qui n'est que chargement + cet appel. Le
+    Dataset est modifie comme lors d'une analyse CSV (signaux qualite ajoutes):
+    ne pas le reutiliser pour une seconde analyse.
+    """
     cfg = config or AnalyticsConfig()
-    dataset = load_dataset(paths)
     if dataset.is_empty():
         raise InsufficientDataError("aucune donnee exploitable dans les sources fournies")
 

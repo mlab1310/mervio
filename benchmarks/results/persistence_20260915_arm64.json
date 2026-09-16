@@ -1,0 +1,95 @@
+{
+  "generated_at": "2026-09-15T20:08:19+00:00",
+  "machine": {
+    "platform": "macOS-26.4-arm64-arm-64bit",
+    "python": "3.11.16",
+    "cpu_count": 18,
+    "postgresql": "17.11 (Homebrew)"
+  },
+  "runs": {
+    "10000": {
+      "orders": 9968,
+      "canonical_rows": 35508,
+      "timings_s": {
+        "csv_load_dataset": 0.23,
+        "db_write_snapshot": 0.67,
+        "db_load_dataset": 0.089,
+        "verify_dataset_equality": 0.007,
+        "analyze_loaded_dataset": 0.076,
+        "db_persist_report": 0.005,
+        "db_read_report": 0.001
+      },
+      "dataset_equal": true,
+      "report_bytes_equal": true,
+      "report_bytes": 50319,
+      "plans": {
+        "orders": "Result / Index Scan",
+        "order_lines": "Result / Index Scan"
+      },
+      "table_sizes_mb": {
+        "order_lines": 2.5,
+        "orders": 4.2,
+        "payments": 3.2,
+        "refunds": 0.3,
+        "reports": 0.2
+      },
+      "peak_rss_mb": 98.7
+    },
+    "100000": {
+      "orders": 99921,
+      "canonical_rows": 341980,
+      "timings_s": {
+        "csv_load_dataset": 2.414,
+        "db_write_snapshot": 6.622,
+        "db_load_dataset": 1.13,
+        "verify_dataset_equality": 0.082,
+        "analyze_loaded_dataset": 0.749,
+        "db_persist_report": 0.005,
+        "db_read_report": 0.001
+      },
+      "dataset_equal": true,
+      "report_bytes_equal": true,
+      "report_bytes": 48898,
+      "plans": {
+        "orders": "Result / Index Scan",
+        "order_lines": "Result / Index Scan"
+      },
+      "table_sizes_mb": {
+        "order_lines": 27.3,
+        "orders": 49.1,
+        "payments": 35.1,
+        "refunds": 2.6,
+        "reports": 0.2
+      },
+      "peak_rss_mb": 610.7
+    },
+    "1000000": {
+      "orders": 999146,
+      "canonical_rows": 3406013,
+      "timings_s": {
+        "csv_load_dataset": 28.022,
+        "db_write_snapshot": 78.367,
+        "db_load_dataset": 17.255,
+        "verify_dataset_equality": 1.023,
+        "analyze_loaded_dataset": 7.768,
+        "db_persist_report": 0.008,
+        "db_read_report": 0.001
+      },
+      "dataset_equal": true,
+      "report_bytes_equal": true,
+      "report_bytes": 49217,
+      "plans": {
+        "orders": "Result / Index Scan",
+        "order_lines": "Result / Index Scan"
+      },
+      "table_sizes_mb": {
+        "order_lines": 335.6,
+        "orders": 546.5,
+        "payments": 456.5,
+        "refunds": 33.0,
+        "reports": 0.2
+      },
+      "peak_rss_mb": 4642.6
+    }
+  }
+}
