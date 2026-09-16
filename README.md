@@ -50,7 +50,7 @@ Autres options : `--grain week\|month`, `--lookback N`, `--today AAAA-MM-JJ`,
 `--print-report`, `--verbose`.
 
 ```bash
-python -m pytest        # 816 tests avec PostgreSQL (697 passes + 119 ignores sans base)
+python -m pytest        # 1097 tests avec PostgreSQL (796 passes + 301 ignores sans base)
 ```
 
 ## Persistance PostgreSQL (optionnelle, Mission 004.1)
@@ -66,6 +66,26 @@ MERVIO_TEST_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgre
 ```
 
 Détails : `docs/MISSION_004_1_PERSISTENCE.md`.
+
+## Tâches de fond et audit (Mission 004.2)
+
+PostgreSQL est la file : ni Redis, ni courtier, ni ordonnanceur externe. Un worker prend
+un travail par `SELECT … FOR UPDATE SKIP LOCKED`, l'exécute hors transaction, puis inscrit
+son sort et sa trace d'audit dans la même transaction.
+
+- **Trois types de travaux :** import, analyse, purge. Chacun réutilise le chemin 004.1 :
+  aucun calcul n'est refait, aucun KPI ne passe par un LLM.
+- **Au moins une fois :** un worker mort laisse un travail dont le bail expire et qu'un
+  autre reprend. L'idempotence de 004.1 rend le rejeu inoffensif — un instantané scellé au
+  plus par empreinte, un rapport au plus par exécution.
+- **Audit en ajout seul :** aucune mise à jour possible (droit **et** trigger), aucune
+  suppression avant 30 jours (politique RESTRICTIVE, vraie même en SQL brut).
+- **Logs JSON corrélés :** une exécution complète se recolle par son `correlation_id`.
+  Ni secret, ni PII, ni chemin absolu n'y entrent.
+- **Mesuré :** à un million de travaux en attente, la prise coûte 0,47 ms (p50) et la
+  mémoire du worker reste à 48 Mo.
+
+Détails : `docs/MISSION_004_2_HANDOFF.md`.
 
 ## Données et confidentialité
 
@@ -125,5 +145,7 @@ volontaires (date invalide, doublons, remboursement négatif, coûts manquants).
 | `docs/ANALYTICS_ENGINE.md` | méthodes, seuils, formules |
 | `docs/DECISIONS.md` | arbitrages et leurs raisons |
 | `docs/MISSION_004_1_PERSISTENCE.md` | persistance PostgreSQL, tenants, instantanés, rapports |
-| `docs/MISSION_004_1_HANDOFF.md` | état et suite (Mission 004.2) |
+| `docs/MISSION_004_1_HANDOFF.md` | persistance : état et règles |
+| `docs/MISSION_004_2_HANDOFF.md` | tâches de fond et audit ; état et suite (Mission 004.3) |
+| `docs/MISSION_004_2_DECISIONS.md` | arbitrages de la file et de l'audit (ADR-004.2-001 à 006) |
 | `docs/ROADMAP.md` / `docs/TODO.md` | suite |

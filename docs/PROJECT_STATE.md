@@ -1,7 +1,7 @@
 # PROJECT STATE
 
-**Mis à jour :** 15 septembre 2026 — Mission 004.1 (persistance PostgreSQL et isolation tenant, branche `mission-004.1`)
-**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 816 / 816 avec PostgreSQL (697 + 119 ignorés sans base) · **Dépendances runtime :** 0 (persistance : extra optionnel)
+**Mis à jour :** 16 septembre 2026 — Mission 004.2 (tâches de fond et audit, branche `mission-004.2`)
+**Version moteur :** 0.1.0 · **Contrat LLM :** 1.0 · **Tests :** 1097 / 1097 avec PostgreSQL (796 + 301 ignorés sans base) · **Dépendances runtime :** 0 (persistance : extra optionnel)
 **Maturité :** tests internes — un registre de ventes réel reconstruit (OH5) validé, sémantique des commandes et remboursements décidée ; aucun export CSV natif de marchand
 
 ## Où en est Mervio
@@ -39,7 +39,9 @@ Trois commandes : `validate`, `analyze`, `demo`.
 | Rapport PDF | 🔴 |
 | PostgreSQL : instantanés, rapports, provenance, migrations | 🟢 (Mission 004.1) |
 | Multi-tenant : organisations, rôles, RLS forcée | 🟢 (couche persistance ; API en 004.3) |
-| Jobs d'arrière-plan, audit | 🔴 (Mission 004.2) |
+| Jobs d'arrière-plan (file PostgreSQL, worker, reprises, purge) | 🟢 (Mission 004.2) |
+| Audit en ajout seul, logs JSON corrélés | 🟢 (Mission 004.2) |
+| Planification récurrente (`schedules`), enchaînement de travaux | 🔴 (Mission 004.3) |
 | FastAPI, auth OIDC, frontend, billing | 🔴 (volontaire) |
 | CI/CD | 🔴 |
 
@@ -245,9 +247,35 @@ Détail : `docs/MISSION_004_0_HANDOFF.md`, `research/`.
 
 Détail : `docs/MISSION_004_1_HANDOFF.md`, `docs/MISSION_004_1_PERSISTENCE.md`, `docs/MISSION_004_1_DECISIONS.md`.
 
+## Mission 004.2 — Tâches de fond et audit
+
+- **File durable dans PostgreSQL** (`jobs`) : aucune infrastructure ajoutée. Prise par
+  `SELECT … FOR UPDATE SKIP LOCKED` et transition vers `running` dans la **même instruction**.
+- **Machine à états imposée par la base** (trigger) : cinq états, transitions fermées, état terminal définitif,
+  colonnes d'identité immuables.
+- **Bail et reprise** : un worker mort laisse un travail dont le bail expire ; la **même ligne** repasse en file avec
+  ses tentatives. Seul le détenteur du verrou publie un résultat.
+- **Reprises bornées et déterministes** : 3 tentatives, 30 s / 60 s / 120 s… plafonné. Une erreur de validation n'est
+  jamais rejouée.
+- **Trois travaux** : import, analyse, purge, tous bâtis sur le chemin 004.1 inchangé. Rapport produit par un travail
+  **identique octet pour octet** à celui de la CLI.
+- **Audit en ajout seul** (`audit_events`) : écrit dans la même transaction que la transition qu'il décrit ; ni
+  `UPDATE`, ni suppression avant 30 jours, y compris pour le propriétaire des tables.
+- **Logs JSON corrélés**, sans dépendance ; ni secret, ni PII, ni chemin absolu.
+- **Purge ordonnée** : travaux puis audit. La chaîne rapport → exécution → instantané → source est hors d'atteinte du
+  rôle applicatif.
+- **Isolation** prouvée pour la file et l'audit, via les dépôts **et** en SQL brut. Le worker sert une liste explicite
+  de tenants : aucun rôle `BYPASSRLS`, aucun privilège nouveau.
+- **Performance** : à 1 M de travaux en attente, prise 0,47 ms (p50), plan inchangé depuis 10 k, mémoire du worker
+  constante à 48 Mo ; débit maximal ~1 460 travaux/s à 4 workers.
+- 281 tests ajoutés, dont 100 travaux × 10 workers réellement concurrents.
+
+Détail : `docs/MISSION_004_2_HANDOFF.md`, `docs/MISSION_004_2_DECISIONS.md`.
+
 ## Prochaine étape
 
-0. Mission 004.2 (jobs d'arrière-plan et audit) selon `docs/MISSION_004_1_HANDOFF.md`, puis 004.3 à 004.6.
+0. Mission 004.3 (API v1 : FastAPI, OIDC, pool de connexions, 404 croisé par route) selon
+   `docs/MISSION_004_2_HANDOFF.md`, puis 004.4 à 004.6.
 
 1. Obtenir d'un marchand pilote un export CSV **natif** Shopify (avec remises
    partielles, et si possible Stripe et Google Ads) et le passer dans
