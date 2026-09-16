@@ -12,9 +12,22 @@ Deux transactions courtes encadrent une execution longue:
 Rien n'est verrouille pendant le travail metier: une analyse d'un million de
 commandes ne retient ni verrou ni WAL (R-24).
 
-Execution AU MOINS une fois. Un worker mort laisse un travail `running` dont le
-bail finit par expirer; un autre worker le reprend. L'absence de double ecriture
-vient de l'idempotence de 004.1, jamais d'une promesse d'unicite d'execution.
+Execution AU MOINS une fois, jamais "exactement une fois". Un worker mort laisse un
+travail `running` dont le bail finit par expirer; un autre worker le reprend.
+L'absence de double ecriture vient de l'idempotence de 004.1, jamais d'une promesse
+d'unicite d'execution.
+
+Bail et jeton d'exclusion (004.3, revision 0006):
+
+    renew_lease            le detenteur prolonge un bail ENCORE VALIDE
+    mark_* / requeue       le detenteur publie le sort de SA tentative
+    recover_stale_jobs     sans jeton, seulement un bail expire a l'instant declare
+
+Le jeton est `(attempts, locked_by)`: `attempts` change a chaque prise, donc un ancien
+detenteur - meme avec le meme worker_id - ne peut plus rien ecrire. Il est verifie
+deux fois: par le filtre de chaque UPDATE (le perdant d'une course voit 0 ligne) et
+par le trigger `jobs_guard_transition`, qui refuse toute ecriture d'un travail en
+cours sans jeton valide, y compris en SQL brut.
 """
 from __future__ import annotations
 
@@ -62,6 +75,8 @@ ALLOWED_TRANSITIONS: Dict[JobStatus, frozenset] = {
 #: Defauts operationnels (ADR-004.2-003), surchargeables par appel.
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_LEASE_SECONDS = 300
+#: Plafond d'un bail, a la prise comme au renouvellement (egalement impose par la base).
+MAX_LEASE_SECONDS = 86400
 BACKOFF_BASE_SECONDS = 30
 BACKOFF_CAP_SECONDS = 3600
 
@@ -257,8 +272,7 @@ def claim_next_job(session: TenantSession, *, worker_id: str, job_types: Optiona
     """
     if not worker_id or len(worker_id) > 100:
         raise ValueError("worker_id non vide, 100 caracteres au plus")
-    if not isinstance(lease_seconds, int) or not 1 <= lease_seconds <= 86400:
-        raise ValueError("lease_seconds entre 1 et 86400")
+    _check_lease_seconds(lease_seconds)
     kinds = [JobType(k).value for k in (job_types if job_types is not None else list(JobType))]
     target = _uuid(job_id, "job") if job_id is not None else None
 
@@ -278,22 +292,64 @@ def claim_next_job(session: TenantSession, *, worker_id: str, job_types: Optiona
 
 # -- fin d'execution -----------------------------------------------------------------------
 
+def renew_lease(session: TenantSession, job: JobRecord, *, worker_id: Optional[str] = None,
+                lease_seconds: int = DEFAULT_LEASE_SECONDS,
+                hook: Optional[TransitionHook] = None) -> JobRecord:
+    """Prolonge le bail d'un travail en cours. Seul son detenteur y parvient.
+
+    Le bail devient `max(bail actuel, maintenant + lease_seconds)`: jamais raccourci.
+    L'horloge est TOUJOURS celle de la base: un bail deja expire n'est jamais
+    renouvele, meme si personne ne l'a encore repris. `JobLeaseLost` signifie donc
+    "arreter le travail": la tentative ne publiera plus rien.
+
+    Refus (`JobLeaseLost`): travail termine, remis en file, repris par une autre
+    tentative (meme worker_id), autre detenteur, bail expire. Travail d'un autre
+    tenant ou inexistant: `NotFound`, indiscernables.
+    """
+    _check_lease_seconds(lease_seconds)
+    holder = worker_id if worker_id is not None else job.locked_by
+    with session.transaction(Permission.RUN_JOBS) as conn:
+        _declare_lease_holder(conn, job, holder)
+        row = conn.execute(
+            "UPDATE jobs SET lease_expires_at = GREATEST(lease_expires_at, now() + make_interval(secs => %s)), "
+            "    updated_at = clock_timestamp() "
+            "WHERE organization_id = %s AND id = %s AND status = 'running' "
+            "  AND locked_by = %s AND attempts = %s AND lease_expires_at > clock_timestamp() "
+            f"RETURNING {_JOB_COLUMNS}",
+            (lease_seconds, session.organization_id, job.id, holder, job.attempts),
+        ).fetchone()
+        if row is None:
+            fetch_job(conn, session, job.id)  # NotFound si hors du tenant
+            raise JobLeaseLost(job.id)
+        renewed = JobRecord(*row)
+        if hook is not None:
+            hook(conn, renewed)
+    return renewed
+
+
 def mark_succeeded(session: TenantSession, job: JobRecord, *, result: Optional[Mapping[str, Any]] = None,
                    worker_id: Optional[str] = None, now: Optional[datetime] = None,
                    hook: Optional[TransitionHook] = None) -> JobRecord:
-    """Termine un travail en succes. Seul le detenteur du bail y parvient."""
+    """Termine un travail en succes. Seul le detenteur de CETTE tentative y parvient.
+
+    Le detenteur est `worker_id`, sinon celui du `JobRecord` fourni; la tentative est
+    `job.attempts`. Un bail expire mais non repris reste publiable: personne d'autre
+    ne detient le travail, et le verrou de ligne arbitre avec une reprise concurrente.
+    """
     document = validate_payload(result or {})
+    holder = worker_id if worker_id is not None else job.locked_by
     with session.transaction(Permission.RUN_JOBS) as conn:
+        _declare_lease_holder(conn, job, holder)
         row = conn.execute(
             "UPDATE jobs SET status = 'succeeded', finished_at = COALESCE(%s::timestamptz, now()), result = %s, "
             "    locked_at = NULL, locked_by = NULL, lease_expires_at = NULL, last_error_code = NULL, "
             "    last_error = NULL, updated_at = clock_timestamp() "
             "WHERE organization_id = %s AND id = %s AND status = 'running' "
-            f"  AND (%s::text IS NULL OR locked_by = %s::text) RETURNING {_JOB_COLUMNS}",
-            (now, Jsonb(document), session.organization_id, job.id, worker_id, worker_id),
+            f"  AND locked_by = %s AND attempts = %s RETURNING {_JOB_COLUMNS}",
+            (now, Jsonb(document), session.organization_id, job.id, holder, job.attempts),
         ).fetchone()
         if row is None:
-            _explain_lost_transition(conn, session, job)
+            _explain_lost_transition(conn, session, job, holder)
         finished = JobRecord(*row)
         if hook is not None:
             hook(conn, finished)
@@ -314,17 +370,19 @@ def mark_failed(session: TenantSession, job: JobRecord, *, error_code: str, erro
     if retry:
         return requeue(session, job, error_code=code, error=message, worker_id=worker_id, now=now,
                        delay_seconds=backoff_seconds(job.attempts), hook=hook)
+    holder = worker_id if worker_id is not None else job.locked_by
     with session.transaction(Permission.RUN_JOBS) as conn:
+        _declare_lease_holder(conn, job, holder)
         row = conn.execute(
             "UPDATE jobs SET status = 'failed', finished_at = COALESCE(%s::timestamptz, now()), "
             "    locked_at = NULL, locked_by = NULL, lease_expires_at = NULL, last_error_code = %s, "
             "    last_error = %s, updated_at = clock_timestamp() "
             "WHERE organization_id = %s AND id = %s AND status = 'running' "
-            f"  AND (%s::text IS NULL OR locked_by = %s::text) RETURNING {_JOB_COLUMNS}",
-            (now, code, message, session.organization_id, job.id, worker_id, worker_id),
+            f"  AND locked_by = %s AND attempts = %s RETURNING {_JOB_COLUMNS}",
+            (now, code, message, session.organization_id, job.id, holder, job.attempts),
         ).fetchone()
         if row is None:
-            _explain_lost_transition(conn, session, job)
+            _explain_lost_transition(conn, session, job, holder)
         failed = JobRecord(*row)
         if hook is not None:
             hook(conn, failed)
@@ -334,22 +392,27 @@ def mark_failed(session: TenantSession, job: JobRecord, *, error_code: str, erro
 def requeue(session: TenantSession, job: JobRecord, *, delay_seconds: int = 0, error_code: Optional[str] = None,
             error: str = "", worker_id: Optional[str] = None, now: Optional[datetime] = None,
             hook: Optional[TransitionHook] = None) -> JobRecord:
-    """Remet un travail en cours dans la file, apres un delai. L'historique des tentatives est conserve."""
+    """Remet un travail en cours dans la file, apres un delai. L'historique des tentatives est conserve.
+
+    Meme regle de detention que `mark_succeeded`.
+    """
     if not isinstance(delay_seconds, int) or not 0 <= delay_seconds <= 86400 * 7:
         raise ValueError("delay_seconds entre 0 et 604800")
+    holder = worker_id if worker_id is not None else job.locked_by
     with session.transaction(Permission.RUN_JOBS) as conn:
+        _declare_lease_holder(conn, job, holder)
         row = conn.execute(
             "UPDATE jobs SET status = 'queued', locked_at = NULL, locked_by = NULL, lease_expires_at = NULL, "
             "    available_at = COALESCE(%s::timestamptz, now()) + make_interval(secs => %s), "
             "    last_error_code = COALESCE(%s::text, last_error_code), last_error = COALESCE(%s::text, last_error), "
             "    updated_at = clock_timestamp() "
             "WHERE organization_id = %s AND id = %s AND status = 'running' "
-            f"  AND (%s::text IS NULL OR locked_by = %s::text) RETURNING {_JOB_COLUMNS}",
+            f"  AND locked_by = %s AND attempts = %s RETURNING {_JOB_COLUMNS}",
             (now, delay_seconds, _error_code(error_code) if error_code else None,
-             _safe_error(error) if error else None, session.organization_id, job.id, worker_id, worker_id),
+             _safe_error(error) if error else None, session.organization_id, job.id, holder, job.attempts),
         ).fetchone()
         if row is None:
-            _explain_lost_transition(conn, session, job)
+            _explain_lost_transition(conn, session, job, holder)
         queued = JobRecord(*row)
         if hook is not None:
             hook(conn, queued)
@@ -385,6 +448,10 @@ def recover_stale_jobs(session: TenantSession, *, now: Optional[datetime] = None
     """
     bound = _limit(limit)
     with session.transaction(Permission.RUN_JOBS) as conn:
+        # instant de reference declare a la base: le trigger n'accepte la reprise sans
+        # jeton que d'un bail expire a cet instant (revision 0006)
+        conn.execute("SELECT set_config('app.job_lease_recovery_at', COALESCE(%s::timestamptz, now())::text, true)",
+                     (now,))
         expired = conn.execute(
             "SELECT id, attempts, max_attempts FROM jobs "
             "WHERE organization_id = %s AND status = 'running' "
@@ -399,16 +466,18 @@ def recover_stale_jobs(session: TenantSession, *, now: Optional[datetime] = None
                     "UPDATE jobs SET status = 'queued', locked_at = NULL, locked_by = NULL, "
                     "    lease_expires_at = NULL, available_at = COALESCE(%s::timestamptz, now()), "
                     "    last_error_code = 'lease_expired', updated_at = clock_timestamp() "
-                    f"WHERE organization_id = %s AND id = %s AND status = 'running' RETURNING {_JOB_COLUMNS}",
-                    (now, session.organization_id, job_id),
+                    "WHERE organization_id = %s AND id = %s AND status = 'running' "
+                    f"  AND lease_expires_at < COALESCE(%s::timestamptz, now()) RETURNING {_JOB_COLUMNS}",
+                    (now, session.organization_id, job_id, now),
                 ).fetchone()
             else:
                 row = conn.execute(
                     "UPDATE jobs SET status = 'failed', finished_at = COALESCE(%s::timestamptz, now()), "
                     "    locked_at = NULL, locked_by = NULL, lease_expires_at = NULL, "
                     "    last_error_code = 'lease_expired', last_error = %s, updated_at = clock_timestamp() "
-                    f"WHERE organization_id = %s AND id = %s AND status = 'running' RETURNING {_JOB_COLUMNS}",
-                    (now, "bail expire, tentatives epuisees", session.organization_id, job_id),
+                    "WHERE organization_id = %s AND id = %s AND status = 'running' "
+                    f"  AND lease_expires_at < COALESCE(%s::timestamptz, now()) RETURNING {_JOB_COLUMNS}",
+                    (now, "bail expire, tentatives epuisees", session.organization_id, job_id, now),
                 ).fetchone()
             if row is not None:
                 record = JobRecord(*row)
@@ -521,10 +590,28 @@ def purge_terminal_jobs(session: TenantSession, *, before: datetime, statuses: S
 
 # -- aides internes -------------------------------------------------------------------------
 
-def _explain_lost_transition(conn, session: TenantSession, job: JobRecord) -> None:
+def _check_lease_seconds(lease_seconds: int) -> None:
+    if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) \
+            or not 1 <= lease_seconds <= MAX_LEASE_SECONDS:
+        raise ValueError(f"lease_seconds entre 1 et {MAX_LEASE_SECONDS}")
+
+
+def lease_token(attempts: int, holder: str) -> str:
+    """Jeton d'exclusion attendu par le trigger: `<attempts>:<locked_by>`."""
+    return f"{int(attempts)}:{holder}"
+
+
+def _declare_lease_holder(conn, job: JobRecord, holder: Optional[str]) -> None:
+    """Declare a la base, pour CETTE transaction seulement, la tentative dont on se reclame."""
+    token = lease_token(job.attempts, holder) if holder else ""
+    conn.execute("SELECT set_config('app.job_lease_token', %s, true)", (token,))
+
+
+def _explain_lost_transition(conn, session: TenantSession, job: JobRecord, holder: Optional[str]) -> None:
     """Aucune ligne mise a jour: dire pourquoi sans jamais reveler un autre tenant."""
     current = fetch_job(conn, session, job.id)
-    if current.status != JobStatus.RUNNING.value or current.locked_by != job.locked_by:
+    if (current.status != JobStatus.RUNNING.value or current.locked_by != holder
+            or current.attempts != job.attempts):
         raise JobLeaseLost(job.id)
     raise JobStateError(f"travail {current.status}: transition refusee")  # pragma: no cover - defense
 

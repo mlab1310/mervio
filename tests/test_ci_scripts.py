@@ -97,7 +97,8 @@ def test_a_module_with_a_similar_prefix_does_not_count_as_the_required_one(tmp_p
 def test_the_rls_modules_are_required():
     for module in ("tests.persistence.test_persistence_isolation", "tests.persistence.test_persistence_tenancy",
                    "tests.persistence.test_persistence_migrations", "tests.test_pytest_guard",
-                   "tests.test_ci_scripts", "tests.persistence.test_ci_migrations"):
+                   "tests.test_ci_scripts", "tests.persistence.test_ci_migrations",
+                   "tests.persistence.test_jobs_lease"):
         assert module in gate.REQUIRED_MODULES
 
 
