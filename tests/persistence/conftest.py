@@ -27,7 +27,11 @@ from urllib.parse import quote
 
 import pytest
 
-psycopg = pytest.importorskip("psycopg")
+if os.environ.get("MERVIO_REQUIRE_DATABASE_TESTS") == "1":
+    # 004.3: base obligatoire -> pilote absent = erreur de collecte, jamais un repertoire ignore
+    import psycopg
+else:
+    psycopg = pytest.importorskip("psycopg")
 from psycopg import sql  # noqa: E402
 from psycopg.conninfo import conninfo_to_dict  # noqa: E402
 

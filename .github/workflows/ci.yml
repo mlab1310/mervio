@@ -1,0 +1,118 @@
+# CI de Mervio (Mission 004.3). Aucun job facultatif, aucune erreur toleree.
+#
+#   lint      syntaxe et noms indefinis (sans reformatage)
+#   test      PostgreSQL 17 reel, migrations sur base neuve, suite COMPLETE, porte JUnit exacte
+#   security  secrets (historique complet), vulnerabilites et licences des dependances
+#
+# Le job Docker est ajoute en 004.3.8.
+# MERVIO_EXPECTED_TESTS est un nombre EXACT: tout ajout ou retrait de test impose de le modifier ici.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11.16"
+  MERVIO_EXPECTED_TESTS: "1203"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install CI tools
+        run: python -m pip install -r requirements-ci.txt
+      - name: Compile every Python file
+        run: python -m compileall -q src tests scripts benchmarks
+      - name: Syntax errors and undefined names
+        run: ruff check --no-cache --select E9,F63,F7,F82 src tests scripts benchmarks
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        # PostgreSQL 17.11, epingle par digest; locale C comme le cluster de developpement
+        image: postgres:17.11-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0
+        env:
+          POSTGRES_USER: mervio_admin
+          # ephemere et propre a l'execution: aucune valeur fixe dans le depot
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mervio_admin -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGPASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+      MERVIO_TEST_ADMIN_DATABASE_URL: postgresql://mervio_admin@127.0.0.1:5432/postgres
+      MERVIO_REQUIRE_DATABASE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the locked environment (exact versions, nothing else)
+        run: python -m pip install --no-deps -r requirements.lock
+      - name: Check installed dependencies are consistent
+        run: python -m pip check
+      - name: Licences of the locked dependencies
+        run: python scripts/ci_license_check.py requirements.lock
+      - name: Migrations on a fresh database (up, down, up, same schema)
+        env:
+          PYTHONPATH: src
+        run: python scripts/ci_migrations.py --postgres-major 17
+      - name: Full test suite with PostgreSQL required
+        run: python -m pytest -p no:cacheprovider -rs --junitxml=reports/junit.xml
+      - name: Test gate (exact count, zero skipped, required modules executed)
+        run: python scripts/ci_test_gate.py reports/junit.xml --expected-tests "$MERVIO_EXPECTED_TESTS"
+
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Secret scan of the full history (gitleaks, verified binary)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -sSfL -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --exit-code 1 .
+      - name: Install CI tools
+        run: python -m pip install -r requirements-ci.txt
+      - name: Known vulnerabilities of the locked dependencies
+        run: pip-audit --strict --no-deps --disable-pip --progress-spinner off -r requirements.lock

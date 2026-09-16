@@ -1,0 +1,5 @@
+# Outils de la CI (Mission 004.3), installes HORS de l'environnement de test (requirements.lock).
+# ruff: uniquement erreurs de syntaxe et noms indefinis (E9, F63, F7, F82), aucun reformatage.
+# pip-audit: vulnerabilites connues des versions exactes de requirements.lock.
+ruff==0.16.7
+pip-audit==2.10.1

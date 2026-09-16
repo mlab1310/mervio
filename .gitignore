@@ -35,3 +35,6 @@ data/benchmark/*
 
 # --- Mission 004.1: cluster PostgreSQL local jetable (scripts/dev_postgres.sh) ---
 .pgdata/
+
+# --- Mission 004.3: rapports produits par la CI (pytest --junitxml) ---
+reports/

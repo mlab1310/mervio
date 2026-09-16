@@ -18,6 +18,9 @@ from mervio.domain.quality import DataQualityReport  # noqa: E402
 
 SAMPLE_DIR = ROOT / "data" / "sample"
 
+# Mission 004.3: avec MERVIO_REQUIRE_DATABASE_TESTS=1, un test ignore fait echouer la session.
+pytest_plugins = ("pytest_guard",)
+
 
 def make_order(order_id, day, customer, lines, discount=0.0, shipping=0.0):
     """lines = [(sku, qty, price)]"""
