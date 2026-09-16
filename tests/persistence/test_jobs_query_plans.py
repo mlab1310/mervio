@@ -42,15 +42,15 @@ def nodes(node) -> list:
     return [node] + [child for plan_child in node.get("Plans", []) for child in nodes(plan_child)]
 
 
-def test_claiming_the_next_job_uses_the_ready_index_and_never_scans_the_queue(filled_queue, owner):
-    tree = plan(owner,
-                "SELECT id FROM jobs WHERE organization_id = %s AND status = 'queued' AND available_at <= now() "
-                "AND job_type = ANY(%s) AND attempts < max_attempts "
-                "ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
-                (filled_queue.organization_id, ["analysis"]))
-    used = [node for node in nodes(tree) if node.get("Index Name") == "jobs_ready_idx"]
-    assert used, json.dumps(tree)
+def test_the_real_claim_statement_uses_the_ready_index_and_never_scans_the_queue(filled_queue):
+    """Le plan explique est celui de l'instruction REELLE de prise, pas d'une approximation."""
+    from mervio.persistence import jobs
+
+    tree = jobs.explain_claim(filled_queue.session)
+    assert [node for node in nodes(tree) if node.get("Index Name") == "jobs_ready_idx"], json.dumps(tree)
     assert not [node for node in nodes(tree) if node["Node Type"] == "Seq Scan"], json.dumps(tree)
+    assert not [node for node in nodes(tree) if node["Node Type"] == "Sort"], json.dumps(tree)
+    assert [node for node in nodes(tree) if node["Node Type"] == "LockRows"], json.dumps(tree)
 
 
 def test_claiming_the_next_job_needs_no_sort(filled_queue, owner):

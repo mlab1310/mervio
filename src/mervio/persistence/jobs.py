@@ -134,6 +134,29 @@ _JOB_COLUMNS = ("id, organization_id, store_id, job_type, status, priority, atte
 #: `candidate`), donc `RETURNING` doit nommer sa table.
 _JOB_COLUMNS_QUALIFIED = ", ".join("jobs." + column.strip() for column in _JOB_COLUMNS.split(","))
 
+#: Prise du prochain travail, en UNE instruction. La CTE selectionne et verrouille
+#: (`FOR UPDATE SKIP LOCKED`), l'UPDATE transite vers `running`: aucun intervalle
+#: entre les deux, donc aucune prise en double et aucun worker bloque par un autre.
+#: Constante de module: `explain_claim` explique EXACTEMENT ce qui s'execute.
+_CLAIM_SQL = (
+    "WITH candidate AS ("
+    "    SELECT id FROM jobs"
+    "    WHERE organization_id = %s AND status = 'queued'"
+    "      AND available_at <= COALESCE(%s::timestamptz, now())"
+    "      AND job_type = ANY(%s) AND attempts < max_attempts"
+    "      AND (%s::uuid IS NULL OR id = %s::uuid)"
+    "    ORDER BY priority DESC, created_at ASC, id ASC"
+    "    FOR UPDATE SKIP LOCKED"
+    "    LIMIT 1"
+    ") "
+    "UPDATE jobs SET status = 'running', attempts = jobs.attempts + 1,"
+    "    locked_at = COALESCE(%s::timestamptz, now()), locked_by = %s,"
+    "    lease_expires_at = COALESCE(%s::timestamptz, now()) + make_interval(secs => %s),"
+    "    started_at = COALESCE(%s::timestamptz, now()), updated_at = clock_timestamp() "
+    "FROM candidate WHERE jobs.id = candidate.id AND jobs.organization_id = %s "
+    f"RETURNING {_JOB_COLUMNS_QUALIFIED}"
+)
+
 #: Crochet appele DANS la transaction qui change l'etat, avec (connexion, travail).
 #: Il sert a ecrire l'audit: l'evenement et le changement d'etat sont commis ensemble,
 #: ou pas du tout. Une exception du crochet annule la transition.
@@ -241,22 +264,7 @@ def claim_next_job(session: TenantSession, *, worker_id: str, job_types: Optiona
 
     with session.transaction(Permission.RUN_JOBS) as conn:
         row = conn.execute(
-            "WITH candidate AS ("
-            "    SELECT id FROM jobs"
-            "    WHERE organization_id = %s AND status = 'queued'"
-            "      AND available_at <= COALESCE(%s::timestamptz, now())"
-            "      AND job_type = ANY(%s) AND attempts < max_attempts"
-            "      AND (%s::uuid IS NULL OR id = %s::uuid)"
-            "    ORDER BY priority DESC, created_at ASC, id ASC"
-            "    FOR UPDATE SKIP LOCKED"
-            "    LIMIT 1"
-            ") "
-            "UPDATE jobs SET status = 'running', attempts = jobs.attempts + 1,"
-            "    locked_at = COALESCE(%s::timestamptz, now()), locked_by = %s,"
-            "    lease_expires_at = COALESCE(%s::timestamptz, now()) + make_interval(secs => %s),"
-            "    started_at = COALESCE(%s::timestamptz, now()), updated_at = clock_timestamp() "
-            "FROM candidate WHERE jobs.id = candidate.id AND jobs.organization_id = %s "
-            f"RETURNING {_JOB_COLUMNS_QUALIFIED}",
+            _CLAIM_SQL,
             (session.organization_id, now, kinds, target, target,
              now, worker_id, now, lease_seconds, now, session.organization_id),
         ).fetchone()
@@ -443,6 +451,24 @@ def list_jobs(session: TenantSession, *, store_id: Optional[UUID] = None, status
             (session.organization_id, store_id, store_id, statuses, statuses, kinds, kinds, _limit(limit)),
         ).fetchall()
     return [JobRecord(*r) for r in rows]
+
+
+def explain_claim(session: TenantSession, *, job_types: Optional[Sequence] = None,
+                  lease_seconds: int = DEFAULT_LEASE_SECONDS) -> dict:
+    """Plan d'execution de la prise, sans rien prendre (EXPLAIN sans ANALYZE n'execute pas).
+
+    Sert aux gardes anti-regression: la prise doit rester un acces par index. La
+    lecon de 004.1 vaut ici aussi, un index mal ordonne ne casse rien, il rend
+    seulement la file quadratique le jour ou elle grossit.
+    """
+    kinds = [JobType(k).value for k in (job_types if job_types is not None else list(JobType))]
+    with session.transaction(Permission.READ) as conn:
+        plan = conn.execute(
+            "EXPLAIN (FORMAT JSON) " + _CLAIM_SQL,
+            (session.organization_id, None, kinds, None, None,
+             None, "explain", None, lease_seconds, None, session.organization_id),
+        ).fetchone()[0]
+    return plan[0]["Plan"]
 
 
 def queue_statistics(session: TenantSession, *, now: Optional[datetime] = None) -> Dict[str, Any]:
