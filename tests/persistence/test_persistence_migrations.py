@@ -8,7 +8,7 @@ from mervio.persistence import migrate
 
 TENANT_TABLES = ("organizations", "memberships", "stores", "connections", "data_snapshots", "snapshot_sources",
                  "products", "orders", "order_lines", "payments", "refunds", "campaigns", "ad_daily_performance",
-                 "analysis_runs", "reports")
+                 "analysis_runs", "reports", "jobs", "audit_events")
 
 MONEY_COLUMNS = {
     ("products", "unit_cogs"), ("orders", "subtotal"), ("orders", "discount"), ("orders", "shipping"),
@@ -34,8 +34,9 @@ def _tables(url):
 
 
 def test_revisions_are_linear_and_versioned():
-    assert migrate.revisions() == ["0001_tenancy", "0002_snapshots", "0003_analysis_reports"]
-    assert migrate.head_revision() == "0003_analysis_reports"
+    assert migrate.revisions() == ["0001_tenancy", "0002_snapshots", "0003_analysis_reports", "0004_jobs",
+                                   "0005_audit"]
+    assert migrate.head_revision() == "0005_audit"
 
 
 def test_empty_database_upgrades_to_head(empty_database):
@@ -53,6 +54,8 @@ def test_each_revision_upgrades_and_downgrades_step_by_step(empty_database):
         "0002_snapshots": {"data_snapshots", "snapshot_sources", "products", "orders", "order_lines", "payments",
                            "refunds", "campaigns", "ad_daily_performance"},
         "0003_analysis_reports": {"analysis_runs", "reports"},
+        "0004_jobs": {"jobs"},
+        "0005_audit": {"audit_events"},
     }
     present = {"alembic_version"}
     for revision in migrate.revisions():
@@ -75,6 +78,8 @@ def test_schema_is_identical_whatever_the_migration_path(pg, empty_database):
     _, url = empty_database
     migrate.upgrade(url, "0001_tenancy")
     migrate.upgrade(url, "0002_snapshots")
+    migrate.upgrade(url, "0003_analysis_reports")
+    migrate.upgrade(url, "0004_jobs")
     migrate.upgrade(url)
 
     def columns(target):
@@ -104,7 +109,8 @@ def test_every_tenant_table_has_forced_rls_and_an_organization_boundary(owner):
 
 
 def test_store_owned_tables_carry_store_id(owner):
-    for table in set(TENANT_TABLES) - {"organizations", "memberships", "stores"}:
+    # jobs et audit_events couvrent aussi des operations d'organisation: store_id y est facultatif
+    for table in set(TENANT_TABLES) - {"organizations", "memberships", "stores", "jobs", "audit_events"}:
         assert owner.execute(
             "SELECT is_nullable FROM information_schema.columns WHERE table_name = %s AND column_name = 'store_id'",
             (table,)).fetchone() == ("NO",), table
@@ -147,8 +153,13 @@ def test_application_role_cannot_delete_or_rewrite_history(owner):
         assert not allowed(table, "DELETE"), table
         assert not allowed(table, "TRUNCATE"), table
     for table in ("snapshot_sources", "products", "orders", "order_lines", "payments", "refunds", "campaigns",
-                  "ad_daily_performance", "reports", "users"):
+                  "ad_daily_performance", "reports", "users", "audit_events"):
         assert not allowed(table, "UPDATE"), table
+    # 004.2: jobs et audit_events sont les seules tables ou la purge supprime; ni l'une ni
+    # l'autre ne se vident en bloc, et la politique RESTRICTIVE borne ce que DELETE atteint
+    for table in ("jobs", "audit_events"):
+        assert allowed(table, "DELETE"), table
+        assert not allowed(table, "TRUNCATE"), table
     assert allowed("memberships", "DELETE")
     # colonnes d'identite jamais modifiables par l'application
     for table, column in (("stores", "organization_id"), ("connections", "store_id"),
@@ -187,3 +198,74 @@ def test_migrations_refuse_to_run_without_an_explicit_url(monkeypatch):
     monkeypatch.delenv("MERVIO_MIGRATION_DATABASE_URL", raising=False)
     with pytest.raises(RuntimeError):
         migrate.upgrade()
+
+
+# -- Mission 004.2: file de travaux et audit -------------------------------------------------
+
+def test_the_new_tenant_indexes_lead_with_the_organization(owner):
+    """Lecon 004.1: un index de tenant commence par organization_id, sinon le plan derape."""
+    indexes = dict(owner.execute(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' "
+        "AND tablename IN ('jobs', 'audit_events')").fetchall())
+    for name, definition in indexes.items():
+        if name.endswith("_pkey") or "_tenant_key" in name:
+            continue  # cle primaire technique et cle composite de tenant
+        assert "(organization_id" in definition, name
+    for name in ("jobs_ready_idx", "jobs_lease_idx", "jobs_terminal_idx", "jobs_recent_idx",
+                 "jobs_idempotency_uniq", "audit_events_recent_idx", "audit_events_resource_idx",
+                 "audit_events_correlation_idx"):
+        assert name in indexes, name
+
+
+def test_the_ready_queue_index_is_partial_and_ordered_by_priority(owner):
+    definition = owner.execute(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'jobs_ready_idx'").fetchone()[0]
+    assert "WHERE (status = 'queued'::text)" in definition
+    assert "priority DESC" in definition
+
+
+def test_the_idempotency_key_is_prefixed_by_the_organization(owner):
+    """Sinon une violation d'unicite revelerait l'existence du travail d'un autre tenant."""
+    definition = owner.execute(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'jobs_idempotency_uniq'").fetchone()[0]
+    assert "(organization_id, job_type, idempotency_key)" in definition
+    assert "UNIQUE" in definition
+
+
+def test_deletion_is_restricted_by_a_restrictive_policy(owner):
+    """Politique RESTRICTIVE: elle s'ajoute par ET, elle ne peut pas etre contournee par une autre."""
+    policies = {row[0]: row for row in owner.execute(
+        "SELECT p.polname, p.polpermissive, p.polcmd, c.relname FROM pg_policy p "
+        "JOIN pg_class c ON c.oid = p.polrelid WHERE c.relname IN ('jobs', 'audit_events')").fetchall()}
+    assert policies["jobs_purge_terminal_only"][1] is False
+    assert policies["jobs_purge_terminal_only"][2] == "d"
+    assert policies["audit_events_retention_floor"][1] is False
+    assert policies["audit_events_retention_floor"][2] == "d"
+    assert policies["jobs_tenant_isolation"][1] is True
+    assert policies["audit_events_tenant_isolation"][1] is True
+
+
+def test_the_job_state_machine_lives_in_the_database(owner):
+    triggers = {row[0] for row in owner.execute(
+        "SELECT tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+        "WHERE c.relname IN ('jobs', 'audit_events') AND NOT t.tgisinternal").fetchall()}
+    assert {"jobs_guard_transition", "jobs_guard_insert", "audit_events_forbid_update"} <= triggers
+
+
+def test_the_job_table_keeps_its_invariants_as_check_constraints(owner):
+    constraints = {row[0] for row in owner.execute(
+        "SELECT conname FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+        "WHERE t.relname = 'jobs' AND c.contype = 'c'").fetchall()}
+    for name in ("jobs_lock_consistent", "jobs_finished_consistent", "jobs_attempts_bounded",
+                 "jobs_result_only_when_succeeded", "jobs_payload_is_object"):
+        assert name in constraints, name
+
+
+def test_the_new_tables_reference_their_store_with_a_composite_key(owner):
+    """Cle etrangere composite: une reference vers la boutique d'un autre tenant est impossible."""
+    for table in ("jobs", "audit_events"):
+        definition = owner.execute(
+            "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+            "WHERE t.relname = %s AND c.conname = %s", (table, f"{table}_store_fkey")).fetchone()[0]
+        assert definition.startswith("FOREIGN KEY (organization_id, store_id)"), table
+        assert "REFERENCES stores(organization_id, id)" in definition, table

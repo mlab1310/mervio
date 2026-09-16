@@ -55,3 +55,23 @@ class ImportRejected(PersistenceError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(message)
+
+
+class JobStateError(PersistenceError):
+    """Transition de travail impossible (etat courant incompatible)."""
+
+
+class JobLeaseLost(PersistenceError):
+    """Le bail du travail a expire et un autre worker l'a repris: le resultat est refuse.
+
+    Consequence assumee de l'execution AU MOINS une fois: le travail sera refait,
+    et l'idempotence de 004.1 empeche la double ecriture.
+    """
+
+    def __init__(self, job_id) -> None:
+        self.job_id = job_id
+        super().__init__("bail du travail perdu: resultat refuse")
+
+
+class PayloadRejected(PersistenceError):
+    """Charge utile de travail refusee (cle sensible, valeur trop grande, forme invalide)."""

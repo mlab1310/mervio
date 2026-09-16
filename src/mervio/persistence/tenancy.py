@@ -42,9 +42,15 @@ class Permission(str, Enum):
     IMPORT_DATA = "import_data"
     RUN_ANALYSIS = "run_analysis"
     READ_PROVENANCE = "read_provenance"
+    #: executer un travail deja mis en file (prise, resultat, echec, reprise)
+    RUN_JOBS = "run_jobs"
     MANAGE_CONNECTIONS = "manage_connections"
     MANAGE_STORES = "manage_stores"
+    #: lire le journal d'audit
+    READ_AUDIT = "read_audit"
     MANAGE_MEMBERS = "manage_members"
+    #: supprimer des donnees (purge de retention)
+    PURGE_DATA = "purge_data"
 
 
 MINIMUM_ROLE = {
@@ -52,9 +58,12 @@ MINIMUM_ROLE = {
     Permission.IMPORT_DATA: Role.ANALYST,
     Permission.RUN_ANALYSIS: Role.ANALYST,
     Permission.READ_PROVENANCE: Role.ANALYST,
+    Permission.RUN_JOBS: Role.ANALYST,
     Permission.MANAGE_CONNECTIONS: Role.ADMIN,
     Permission.MANAGE_STORES: Role.ADMIN,
+    Permission.READ_AUDIT: Role.ADMIN,
     Permission.MANAGE_MEMBERS: Role.OWNER,
+    Permission.PURGE_DATA: Role.OWNER,
 }
 
 

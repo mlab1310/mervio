@@ -40,7 +40,8 @@ def _python_files(*packages):
 
 
 def test_engine_and_existing_packages_never_import_persistence_or_database_drivers():
-    for path in _python_files("domain", "ingestion", "analytics", "llm", "reporting", "synthetic", "cli"):
+    for path in _python_files("domain", "ingestion", "analytics", "llm", "reporting", "synthetic", "cli",
+                              "observability"):
         for name in _imports(path):
             assert not name.startswith("mervio.persistence"), (path, name)
             assert not name.startswith("mervio.application.persisted_analysis"), (path, name)
@@ -122,6 +123,8 @@ def test_sql_fstrings_only_interpolate_reviewed_constants():
     import re
     sql_keyword = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|RETURNING)\b")
     allowed = {"_RUN_COLUMNS", "_REPORT_COLUMNS", "_SNAPSHOT_COLUMNS", "_STORE_COLUMNS", "_CONNECTION_COLUMNS",
+               # 004.2: listes de colonnes constantes de jobs.py et audit.py
+               "_JOB_COLUMNS", "_JOB_COLUMNS_QUALIFIED", "_AUDIT_COLUMNS",
                # snapshots._RowWriter._insert / _RowReader._rows et provenance.trace_record: constantes d'appel
                "table", "column_list", "arrays", "columns", "order"}
     for path in (SRC / "persistence").glob("*.py"):
@@ -135,3 +138,32 @@ def test_sql_fstrings_only_interpolate_reviewed_constants():
                 if isinstance(value, ast.FormattedValue):
                     assert isinstance(value.value, ast.Name) and value.value.id in allowed, (
                         path.name, node.lineno, ast.unparse(value.value))
+
+
+def test_the_workers_reach_the_database_only_through_the_persistence_layer():
+    """Mission 004.2: le worker manipule des depots, jamais un pilote SQL.
+
+    Consequence directe: aucune requete de job ou d'audit ne peut naitre hors de
+    `mervio.persistence`, donc aucune ne peut oublier le filtre d'organisation.
+    """
+    for path in _python_files("workers"):
+        for name in _imports(path):
+            assert name.split(".")[0] not in DATABASE_MODULES, (path, name)
+
+
+def test_observability_stays_free_of_database_and_engine_dependencies():
+    """Les logs JSON sont utilisables partout: ni base, ni moteur, ni dependance externe."""
+    for path in _python_files("observability"):
+        for name in _imports(path):
+            assert name.split(".")[0] not in DATABASE_MODULES, (path, name)
+            assert not name.startswith("mervio.") or name.startswith("mervio.observability"), (path, name)
+
+
+def test_the_workers_never_reimplement_analytics():
+    """Un gestionnaire orchestre; il ne calcule aucun KPI et n'appelle aucun LLM."""
+    forbidden = ("mervio.analytics.kpi", "mervio.analytics.health", "mervio.analytics.anomaly",
+                 "mervio.analytics.root_cause", "mervio.analytics.insights", "mervio.analytics.profitability",
+                 "mervio.analytics.timeseries", "mervio.llm")
+    for path in _python_files("workers"):
+        for name in _imports(path):
+            assert not name.startswith(forbidden), (path, name)
