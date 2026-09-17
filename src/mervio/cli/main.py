@@ -20,6 +20,7 @@ from ..config import ENGINE_VERSION, AnalyticsConfig
 from ..errors import MervioError
 from ..logging_config import configure_logging
 from ..reporting.writers import write_outputs
+from .admin import add_admin_parser, cmd_admin
 from .worker import add_worker_parser, cmd_worker
 
 SAMPLE_DIR = Path(__file__).resolve().parents[3] / "data" / "sample"
@@ -63,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--verbose", action="store_true")
 
     add_worker_parser(sub)
+    add_admin_parser(sub)
     return parser
 
 
@@ -294,6 +296,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # le worker configure sa propre journalisation (JSON) depuis WorkerSettings
         return cmd_worker(args)
     configure_logging(logging.DEBUG if getattr(args, "verbose", False) else logging.WARNING)
+    if args.command == "admin":
+        return cmd_admin(args)
     if args.command == "analyze":
         return _run_analysis(args, synthetic=False, label=args.label)
     if args.command == "validate":

@@ -108,6 +108,20 @@ mervio worker healthcheck [--ready] [--json]
   0 sain, 1 non sain, jamais d'autre code. Par défaut contrôle de vie ; `--ready` exige
   `ready` ou `busy`.
 
+## Administration opérateur (Mission 004.3.7)
+
+```bash
+export MERVIO_DATABASE_URL=postgresql://<role applicatif>@<hote>/<base>
+mervio admin demo provision --owner 'demo|me' --data-dir /srv/mervio-demo --service <role du worker>
+mervio admin org show --as 'demo|me' --org <uuid>
+mervio admin --help
+```
+
+Provisionnement (identité, organisation, membre, boutique, connexion CSV, autorisation d'un
+worker), mise en file, inspection et journal d'audit. Chaque opération d'organisation s'exécute
+au nom de l'humain `--as`, dont l'appartenance et le rôle sont relus en base (RLS forcée, rôle
+applicatif ordinaire) ; chaque changement est audité. Procédure : `docs/ADMIN_CLI.md`.
+
 ## Données et confidentialité
 
 - Les fichiers importés vont dans `data/uploads/`, **ignoré par Git**.

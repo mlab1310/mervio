@@ -172,6 +172,21 @@ class HealthCheckSettings:
         return _Reader(os.environ if environ is None else environ, socket.gethostname).health_check()
 
 
+@dataclass(frozen=True)
+class AdminSettings:
+    """Ce que lit `mervio admin` (004.3.7): la connexion applicative, rien d'autre.
+
+    Meme variable et memes regles que le worker (`MERVIO_DATABASE_URL` ou `..._FILE`). Le role
+    connecte est un role applicatif ordinaire: `Database` refuse un superutilisateur ou BYPASSRLS.
+    """
+
+    database_url: Secret = field(repr=False)
+
+    @classmethod
+    def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "AdminSettings":
+        return _Reader(os.environ if environ is None else environ, socket.gethostname).admin()
+
+
 class _Reader:
     """Lit et valide; rassemble TOUTES les erreurs avant d'echouer."""
 
@@ -308,6 +323,12 @@ class _Reader:
         return HealthCheckSettings(health_file=health_file, health_max_age_seconds=max_age,
                                    degraded_grace_seconds=degraded_grace)
 
+    def admin(self) -> "AdminSettings":
+        database_url = self.database_url()
+        if self.problems:
+            raise SettingsError(self.problems)
+        return AdminSettings(database_url=database_url)
+
     def settings(self) -> WorkerSettings:
         environment = self.choice("MERVIO_ENV", "development", ENVIRONMENTS)
         database_url = self.database_url()
@@ -345,5 +366,5 @@ class _Reader:
         )
 
 
-__all__ = ["ENVIRONMENTS", "JOB_TYPES", "LOG_FORMATS", "HealthCheckSettings", "Secret", "SettingsError",
-           "WorkerSettings", "describe_database_url"]
+__all__ = ["ENVIRONMENTS", "JOB_TYPES", "LOG_FORMATS", "AdminSettings", "HealthCheckSettings", "Secret",
+           "SettingsError", "WorkerSettings", "describe_database_url"]

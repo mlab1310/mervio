@@ -679,7 +679,10 @@ def test_0007_downgrades_to_the_exact_0006_schema_and_upgrades_again(pg, owner):
         assert _fingerprint(url) == _fingerprint(reference_url)
         migrate.upgrade(url, "0007_service_identity")
         assert migrate.current_revision(url) == "0007_service_identity"
-        assert _fingerprint(url) == head == _fingerprint(pg.url("migrator"))
+        assert _fingerprint(url) == head
+        # 004.3.7: 0007 n'est plus la tete; remontee complete, puis schema identique a la base de session
+        migrate.upgrade(url)
+        assert _fingerprint(url) == _fingerprint(pg.url("migrator"))
         # le role de groupe est global au cluster: jamais supprime par une descente
         assert owner.execute("SELECT count(*) FROM pg_roles WHERE rolname = 'mervio_worker'").fetchone()[0] == 1
     finally:

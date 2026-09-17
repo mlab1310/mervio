@@ -15,8 +15,9 @@ from __future__ import annotations
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from typing import Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 from uuid import UUID
 
 import psycopg
@@ -141,7 +142,14 @@ def ensure_user(database: Database, idp_subject: str) -> UUID:
         return conn.execute("SELECT id FROM users WHERE idp_subject = %s", (idp_subject,)).fetchone()[0]
 
 
-def create_organization(database: Database, *, owner_user_id: UUID, name: str) -> UUID:
+#: Crochet appele DANS la transaction qui cree la ressource, avec (connexion, identifiant).
+#: Il sert a ecrire l'audit (004.3.7): la trace et la creation sont commises ensemble, ou pas
+#: du tout. Meme contrat que `jobs.TransitionHook`.
+CreationHook = Callable[[Any, UUID], None]
+
+
+def create_organization(database: Database, *, owner_user_id: UUID, name: str,
+                        hook: Optional[CreationHook] = None) -> UUID:
     """Cree une organisation et son proprietaire dans une seule transaction."""
     organization_id = uuid.uuid4()
     with database.transaction(organization_id=organization_id, user_id=owner_user_id) as conn:
@@ -150,17 +158,100 @@ def create_organization(database: Database, *, owner_user_id: UUID, name: str) -
             "INSERT INTO memberships (id, organization_id, user_id, role) VALUES (%s, %s, %s, 'owner')",
             (uuid.uuid4(), organization_id, owner_user_id),
         )
+        if hook is not None:
+            hook(conn, organization_id)
     return organization_id
 
 
-def add_member(session: TenantSession, *, user_id: UUID, role: Role) -> None:
+def add_member(session: TenantSession, *, user_id: UUID, role: Role,
+               hook: Optional[CreationHook] = None) -> UUID:
+    """Ajoute un membre; renvoie l'identifiant de l'appartenance creee."""
+    membership_id = uuid.uuid4()
     with session.transaction(Permission.MANAGE_MEMBERS) as conn:
         if conn.execute("SELECT 1 FROM users WHERE id = %s", (user_id,)).fetchone() is None:
             raise NotFound("user")
         conn.execute(
             "INSERT INTO memberships (id, organization_id, user_id, role) VALUES (%s, %s, %s, %s)",
-            (uuid.uuid4(), session.organization_id, user_id, Role(role).value),
+            (membership_id, session.organization_id, user_id, Role(role).value),
         )
+        if hook is not None:
+            hook(conn, membership_id)
+    return membership_id
+
+
+@dataclass(frozen=True)
+class Member:
+    membership_id: UUID
+    user_id: UUID
+    subject: str
+    role: str
+    created_at: datetime
+
+
+def list_members(session: TenantSession) -> List[Member]:
+    """Membres de l'organisation. Reserve au proprietaire: la liste nomme des identites."""
+    with session.transaction(Permission.MANAGE_MEMBERS) as conn:
+        rows = conn.execute(
+            "SELECT m.id, m.user_id, u.idp_subject, m.role, m.created_at "
+            "FROM memberships m JOIN users u ON u.id = m.user_id "
+            "WHERE m.organization_id = %s ORDER BY m.created_at, m.id",
+            (session.organization_id,),
+        ).fetchall()
+    return [Member(*r) for r in rows]
+
+
+@dataclass(frozen=True)
+class UserRecord:
+    id: UUID
+    subject: str
+    kind: str
+
+    @property
+    def human(self) -> bool:
+        return self.kind == "human"
+
+
+def find_user(database: Database, idp_subject: str) -> Optional[UserRecord]:
+    """Identite plateforme d'un sujet, sans la creer. None si inconnue."""
+    if not isinstance(idp_subject, str) or not idp_subject or len(idp_subject) > 255:
+        return None
+    with database.transaction() as conn:
+        row = conn.execute("SELECT id, idp_subject, kind FROM users WHERE idp_subject = %s",
+                           (idp_subject,)).fetchone()
+    return UserRecord(*row) if row is not None else None
+
+
+def describe_users(database: Database, user_ids: Iterable[UUID]) -> Dict[UUID, UserRecord]:
+    """Sujets d'identifiants deja lus dans une organisation (table plateforme, sans donnee de tenant)."""
+    wanted = sorted({user_id for user_id in user_ids if isinstance(user_id, UUID)})
+    if not wanted:
+        return {}
+    with database.transaction() as conn:
+        rows = conn.execute("SELECT id, idp_subject, kind FROM users WHERE id = ANY(%s)", (wanted,)).fetchall()
+    return {r[0]: UserRecord(*r) for r in rows}
+
+
+@contextmanager
+def provisioning_lock(database: Database, scope: str) -> Iterator[None]:
+    """Serialise les provisionnements concurrents d'une meme portee (004.3.7).
+
+    Verrou consultatif de SESSION sur la connexion de `database`: il couvre la lecture
+    "existe deja?" et la creation, qui sont deux transactions distinctes. Il est libere a la
+    sortie, ou par la base si la connexion tombe. Une collision de hachage ne fait que
+    serialiser deux portees: aucune information ne passe d'un tenant a l'autre.
+    """
+    if not scope or len(scope) > 1000:
+        raise ValueError("portee de verrou invalide")
+    connection = database.connection()
+    connection.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (scope,))
+    try:
+        yield
+    finally:
+        try:
+            if not connection.closed:
+                connection.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (scope,))
+        except Exception:  # noqa: BLE001 - connexion perdue: la base a deja libere le verrou
+            pass
 
 
 def remove_member(session: TenantSession, *, user_id: UUID) -> None:

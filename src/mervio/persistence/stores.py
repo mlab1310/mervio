@@ -9,7 +9,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from .errors import NotFound
-from .tenancy import Permission, TenantSession
+from .tenancy import CreationHook, Permission, TenantSession
 
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 
@@ -39,7 +39,8 @@ _STORE_COLUMNS = "id, organization_id, name, currency, created_at"
 _CONNECTION_COLUMNS = "id, organization_id, store_id, kind, label, status, created_at, revoked_at"
 
 
-def create_store(session: TenantSession, *, name: str, currency: Optional[str] = None) -> Store:
+def create_store(session: TenantSession, *, name: str, currency: Optional[str] = None,
+                 hook: Optional[CreationHook] = None) -> Store:
     if currency is not None and not _CURRENCY_RE.match(currency):
         raise ValueError("devise de boutique: code ISO 4217 en majuscules attendu")
     with session.transaction(Permission.MANAGE_STORES) as conn:
@@ -48,7 +49,19 @@ def create_store(session: TenantSession, *, name: str, currency: Optional[str] =
             f"RETURNING {_STORE_COLUMNS}",
             (uuid.uuid4(), session.organization_id, name, currency),
         ).fetchone()
+        if hook is not None:
+            hook(conn, row[0])
     return Store(*row)
+
+
+def find_stores_by_name(session: TenantSession, name: str) -> List[Store]:
+    """Boutiques de l'organisation portant exactement ce nom (le nom n'est pas unique en base)."""
+    with session.transaction(Permission.READ) as conn:
+        rows = conn.execute(
+            f"SELECT {_STORE_COLUMNS} FROM stores WHERE organization_id = %s AND name = %s ORDER BY created_at, id",
+            (session.organization_id, name),
+        ).fetchall()
+    return [Store(*r) for r in rows]
 
 
 def get_store(session: TenantSession, store_id: UUID) -> Store:
@@ -75,7 +88,8 @@ def list_stores(session: TenantSession, *, limit: int = 100) -> List[Store]:
     return [Store(*r) for r in rows]
 
 
-def create_csv_connection(session: TenantSession, *, store_id: UUID, label: str) -> Connection:
+def create_csv_connection(session: TenantSession, *, store_id: UUID, label: str,
+                          hook: Optional[CreationHook] = None) -> Connection:
     with session.transaction(Permission.MANAGE_CONNECTIONS) as conn:
         fetch_store(conn, session, store_id)
         row = conn.execute(
@@ -83,7 +97,21 @@ def create_csv_connection(session: TenantSession, *, store_id: UUID, label: str)
             f"VALUES (%s, %s, %s, 'csv_upload', %s) RETURNING {_CONNECTION_COLUMNS}",
             (uuid.uuid4(), session.organization_id, store_id, label),
         ).fetchone()
+        if hook is not None:
+            hook(conn, row[0])
     return Connection(*row)
+
+
+def list_connections(session: TenantSession, store_id: UUID, *, include_revoked: bool = False,
+                     limit: int = 100) -> List[Connection]:
+    with session.transaction(Permission.READ) as conn:
+        fetch_store(conn, session, store_id)
+        rows = conn.execute(
+            f"SELECT {_CONNECTION_COLUMNS} FROM connections WHERE organization_id = %s AND store_id = %s "
+            "  AND (%s OR status = 'active') ORDER BY created_at, id LIMIT %s",
+            (session.organization_id, _uuid(store_id, "store"), include_revoked, _limit(limit)),
+        ).fetchall()
+    return [Connection(*r) for r in rows]
 
 
 def fetch_connection(conn, session: TenantSession, store_id: UUID, connection_id: UUID) -> Connection:

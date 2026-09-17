@@ -35,8 +35,8 @@ def _tables(url):
 
 def test_revisions_are_linear_and_versioned():
     assert migrate.revisions() == ["0001_tenancy", "0002_snapshots", "0003_analysis_reports", "0004_jobs",
-                                   "0005_audit", "0006_job_leases", "0007_service_identity"]
-    assert migrate.head_revision() == "0007_service_identity"
+                                   "0005_audit", "0006_job_leases", "0007_service_identity", "0008_admin_audit"]
+    assert migrate.head_revision() == "0008_admin_audit"
 
 
 def test_empty_database_upgrades_to_head(empty_database):
@@ -60,6 +60,8 @@ def test_each_revision_upgrades_and_downgrades_step_by_step(empty_database):
         "0006_job_leases": set(),
         # 004.3: identite de service et autorisations explicites par organisation
         "0007_service_identity": {"service_authorizations"},
+        # 004.3.7: vocabulaire d'audit de l'administration, aucune table
+        "0008_admin_audit": set(),
     }
     present = {"alembic_version"}
     for revision in migrate.revisions():

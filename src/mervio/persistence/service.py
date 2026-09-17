@@ -24,7 +24,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterator, List, Optional
+from typing import Callable, Iterator, List, Optional
 from uuid import UUID
 
 import psycopg
@@ -159,8 +159,16 @@ def _require_service(conn, service_user_id) -> UUID:
     return service_id
 
 
-def authorize_service(session: TenantSession, service_user_id: UUID) -> ServiceAuthorization:
-    """Autorise un service sur l'organisation. Idempotent: renvoie l'autorisation active."""
+#: Crochet appele DANS la transaction qui change l'autorisation (audit, 004.3.7).
+AuthorizationHook = Callable[[object, ServiceAuthorization], None]
+
+
+def authorize_service(session: TenantSession, service_user_id: UUID,
+                      hook: Optional[AuthorizationHook] = None) -> ServiceAuthorization:
+    """Autorise un service sur l'organisation. Idempotent: renvoie l'autorisation active.
+
+    `hook` n'est appele que si l'autorisation est CREEE: un rejeu ne change rien, donc ne trace rien.
+    """
     with session.transaction(Permission.MANAGE_SERVICES) as conn:
         service_id = _require_service(conn, service_user_id)
         row = conn.execute(
@@ -176,10 +184,13 @@ def authorize_service(session: TenantSession, service_user_id: UUID) -> ServiceA
                 "WHERE organization_id = %s AND service_user_id = %s AND revoked_at IS NULL",
                 (session.organization_id, service_id),
             ).fetchone()
+        elif hook is not None:
+            hook(conn, ServiceAuthorization(*row))
     return ServiceAuthorization(*row)
 
 
-def revoke_service(session: TenantSession, service_user_id: UUID) -> ServiceAuthorization:
+def revoke_service(session: TenantSession, service_user_id: UUID,
+                   hook: Optional[AuthorizationHook] = None) -> ServiceAuthorization:
     """Revoque l'autorisation active. Effet immediat: la base refuse la suite au service."""
     with session.transaction(Permission.MANAGE_SERVICES) as conn:
         service_id = _require_service(conn, service_user_id)
@@ -189,6 +200,8 @@ def revoke_service(session: TenantSession, service_user_id: UUID) -> ServiceAuth
             f"RETURNING {_AUTHORIZATION_COLUMNS}",
             (session.user_id, session.organization_id, service_id),
         ).fetchone()
+        if row is not None and hook is not None:
+            hook(conn, ServiceAuthorization(*row))
     if row is None:
         raise NotFound("service_authorization")
     return ServiceAuthorization(*row)

@@ -55,6 +55,13 @@ class Action(str, Enum):
     ANALYSIS_FAILED = "analysis.failed"
     PURGE_STARTED = "purge.started"
     PURGE_COMPLETED = "purge.completed"
+    # administration (004.3.7, revision 0008): toujours un humain qui agit pour lui-meme
+    ORGANIZATION_CREATED = "organization.created"
+    MEMBER_ADDED = "member.added"
+    STORE_CREATED = "store.created"
+    CONNECTION_CREATED = "connection.created"
+    SERVICE_AUTHORIZED = "service.authorized"
+    SERVICE_REVOKED = "service.revoked"
 
 
 class ResourceType(str, Enum):
@@ -63,6 +70,11 @@ class ResourceType(str, Enum):
     ANALYSIS_RUN = "analysis_run"
     REPORT = "report"
     ORGANIZATION = "organization"
+    # 004.3.7 (revision 0008)
+    MEMBERSHIP = "membership"
+    STORE = "store"
+    CONNECTION = "connection"
+    SERVICE_AUTHORIZATION = "service_authorization"
 
 
 class Outcome(str, Enum):

@@ -60,6 +60,11 @@ REQUIRED_MODULES = (
     # 004.3.6: commandes `mervio worker` et `mervio worker healthcheck`
     "tests.test_cli_worker",
     "tests.persistence.test_cli_worker_process",
+    # 004.3.7: administration operateur (autorisation, isolation, audit, idempotence, demonstration)
+    "tests.test_cli_admin",
+    "tests.persistence.test_admin_operations",
+    "tests.persistence.test_admin_migration",
+    "tests.persistence.test_cli_admin_process",
     # les gardes elles-memes: si elles ne s'executent plus, la porte ne prouve plus rien
     "tests.test_pytest_guard",
     "tests.test_requirements_lock",
