@@ -2,6 +2,32 @@
 
 Mesures reproductibles du moteur Mervio. **Mesurer d'abord ; aucune optimisation sans preuve** (ADR-004-012).
 
+## 0. Suite de performance (Mission 004.3.9) — `performance.py`
+
+**Point d'entrée actuel.** Il remplace, pour les nouvelles mesures, les scripts historiques ci-dessous (conservés
+pour relire leurs résultats de 004.0 à 004.3.5).
+
+```bash
+MERVIO_BENCH_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgres \
+    .venv/bin/python benchmarks/performance.py                 # matrice complète 10k / 100k / 1M
+.venv/bin/python benchmarks/performance.py --workloads analytics --sizes 10000,100000
+```
+
+| Fichier | Rôle |
+|---|---|
+| `performance.py` | matrice, répétitions, garde mémoire, agrégation, document JSON |
+| `perf_workloads.py` | charges, chacune dans un processus neuf |
+| `perf_harness.py` | statistiques (médiane, p95/p99 au rang le plus proche), RSS, environnement, base jetable, schéma |
+
+Charges **séparées** : moteur seul, persistance, file/dispatcher (infrastructure, gestionnaire vide
+explicitement étiqueté), processus `mervio worker` réel (import puis analyse réels), gardien de bail,
+concurrence de processus. Résultats dans `benchmark-results/` (ignoré par Git). Méthode, résultats et limites :
+`docs/PERFORMANCE.md`. Tests de l'outillage : `tests/test_benchmark_harness.py`,
+`tests/persistence/test_benchmark_suite.py`. Sur GitHub : workflow manuel `benchmarks`.
+
+Les sections 1 à 5 décrivent les scripts **historiques** ; leurs chiffres sont des références d'époque,
+pas des mesures actuelles.
+
 ## 1. Performance du moteur — `run_benchmark.py`
 
 ```bash
@@ -70,7 +96,8 @@ Seul le remplissage de la file est fait en lot (`INSERT … SELECT FROM unnest`,
 unitaire est mesuré à part, avec `workers.enqueue`, audit compris.
 - **Sortie :** `benchmarks/results/jobs_<date>_<arch>.json`.
 - **Référence (16/09/2026, PostgreSQL 17.11, Apple Silicon) :** prise à 1 M de travaux en attente = 0,47 ms (p50),
-  0,68 ms (p95) ; débit maximal ~1 460 travaux/s à 4 workers ; table `jobs` 486 Mo ; mémoire du worker 48 Mo,
+  0,68 ms (p95) ; débit maximal ~1 460 travaux/s à 4 workers **avec un gestionnaire vide** (cadre de la file,
+  pas un débit analytique ; mode 004.2 à liste explicite, avant le dispatcher de service) ; table `jobs` 486 Mo ; mémoire du worker 48 Mo,
   constante de 10 k à 1 M.
 - **Durée :** ~1 min pour 10 k et 100 k, ~7 min pour 1 M.
 

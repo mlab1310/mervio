@@ -137,6 +137,18 @@ Image `python:3.11.16-slim` épinglée par digest, dépendances depuis `requirem
 utilisateur non-root, aucun port, aucun secret. Environnement de développement et de CI, pas de
 production. Guide, variables, dépannage et limites : `docs/CONTAINER.md`.
 
+## Performance mesurée (Mission 004.3.9)
+
+```bash
+MERVIO_BENCH_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgres \
+    .venv/bin/python benchmarks/performance.py
+```
+
+Sur la machine de référence (Apple M5 Pro, PostgreSQL 17.11 local, données synthétiques) : analyse
+de 100 000 commandes en 3,7 s et 518 Mo ; chaîne réelle import → analyse → rapport → audit en 15 s ;
+à 1 M de commandes, 46 s et 3,7 à 4,9 Go pour le moteur, 159 s et 5,0 Go pour le worker. Méthode,
+tableaux, goulots et limites : `docs/PERFORMANCE.md` (ce ne sont pas des engagements).
+
 ## Données et confidentialité
 
 - Les fichiers importés vont dans `data/uploads/`, **ignoré par Git**.
@@ -200,4 +212,5 @@ volontaires (date invalide, doublons, remboursement négatif, coûts manquants).
 | `docs/MISSION_004_2_DECISIONS.md` | arbitrages de la file et de l'audit (ADR-004.2-001 à 006) |
 | `docs/ADMIN_CLI.md` | administration opérateur (`mervio admin`) |
 | `docs/CONTAINER.md` | image, compose, bootstrap PostgreSQL, smoke test conteneurisé |
+| `docs/PERFORMANCE.md` | mesures reproductibles : moteur, persistance, file, worker réel, concurrence, mémoire (004.3.9) |
 | `docs/ROADMAP.md` / `docs/TODO.md` | suite |

@@ -1,0 +1,79 @@
+# Benchmarks de performance (Mission 004.3.9). MANUEL uniquement: jamais sur push ni pull request.
+#
+# Mesure sur un runner GitHub (ubuntu-24.04, ressources partagees et variables): les chiffres ne sont
+# comparables qu'entre executions de CE workflow, jamais avec une machine de developpement.
+# Aucune porte de performance: le job echoue seulement si une charge echoue (pas si elle est lente).
+# Duree indicative: ~10 min pour 10k et 100k; 1M (a demander explicitement) ajoute ~15 min et ~5 Go.
+name: benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      sizes:
+        description: "Tailles en commandes (virgules), 1000000 au plus"
+        required: true
+        default: "10000,100000"
+      workloads:
+        description: "Charges: analytics,persistence,queue,worker,lease,concurrency"
+        required: true
+        default: "analytics,persistence,queue,worker,lease,concurrency"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.11.16"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    services:
+      postgres:
+        # meme PostgreSQL que le job test de ci.yml
+        image: postgres:17.11-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0
+        env:
+          POSTGRES_USER: mervio_admin
+          POSTGRES_PASSWORD: bench-${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mervio_admin -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGPASSWORD: bench-${{ github.run_id }}-${{ github.run_attempt }}
+      MERVIO_BENCH_ADMIN_DATABASE_URL: postgresql://mervio_admin@127.0.0.1:5432/postgres
+      # entrees transmises par l'environnement, jamais interpolees dans le script
+      BENCH_SIZES: ${{ inputs.sizes }}
+      BENCH_WORKLOADS: ${{ inputs.workloads }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the locked environment
+        run: python -m pip install --no-deps -r requirements.lock
+      - name: Runner resources
+        run: nproc && free -m && df -h .
+      - name: Benchmarks (the suite validates sizes and workloads)
+        run: python benchmarks/performance.py --sizes "$BENCH_SIZES" --workloads "$BENCH_WORKLOADS" --output benchmark-results
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30

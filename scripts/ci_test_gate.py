@@ -69,6 +69,9 @@ REQUIRED_MODULES = (
     "tests.test_container_artifacts",
     "tests.test_container_smoke",
     "tests.persistence.test_container_bootstrap",
+    # 004.3.9: outillage des benchmarks (statistiques, schema, isolation, execution reelle a petite echelle)
+    "tests.test_benchmark_harness",
+    "tests.persistence.test_benchmark_suite",
     # les gardes elles-memes: si elles ne s'executent plus, la porte ne prouve plus rien
     "tests.test_pytest_guard",
     "tests.test_requirements_lock",

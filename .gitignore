@@ -38,3 +38,6 @@ data/benchmark/*
 
 # --- Mission 004.3: rapports produits par la CI (pytest --junitxml) ---
 reports/
+
+# --- Mission 004.3.9: resultats locaux des benchmarks (benchmarks/performance.py) ---
+benchmark-results/
