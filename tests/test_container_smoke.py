@@ -429,3 +429,45 @@ def test_only_uuids_are_interpolated_in_control_queries():
     for bad in ("x' OR '1'='1", "", None, "1; DROP TABLE reports"):
         with pytest.raises(SmokeFailure):
             smoke_module.identifier(bad)
+
+
+
+def test_the_negative_worker_mounts_its_health_tmpfs_for_the_image_user():
+    docker = FakeDocker([
+        (contains("worker"), 2, "", '{"event": "worker.identity_refused"}\n'),
+        (contains("psql"), 0, "0\n", ""),
+        (contains("admin"), 3, '{"ok": false, "error": {"code": "database_unavailable", "message": "x"}}\n', ""),
+    ])
+    make(docker).refuse_privileged_connections()
+    worker = [argv for argv in docker.argvs() if argv[:2] == ["docker", "run"] and argv[-1] == "worker"][0]
+    assert worker[worker.index("--tmpfs") + 1] == "/run/mervio:uid=10001,gid=10001,mode=0700"
+
+
+def test_a_failure_prints_the_redacted_docker_health_verdicts():
+    holder = {}
+
+    class Unhealthy(FakeDocker):
+        def __call__(self, argv, **options):
+            result = super().__call__(argv, **options)
+            secret = holder["smoke"].passwords["MERVIO_WORKER_DB_PASSWORD"]
+            if "{{json .State.Health}}" in argv:
+                return subprocess.CompletedProcess(argv, 0, json.dumps({"Status": "unhealthy", "Log": [
+                    {"ExitCode": 1, "Output": f"unhealthy check=liveness state=- reason=missing {secret}"}]}), "")
+            if "up" in argv and "worker" in argv:
+                return subprocess.CompletedProcess(argv, 1, "", "container worker is unhealthy")
+            return result
+
+    docker = Unhealthy([(contains("ps", "--quiet"), 0, "cid\n", "")])
+    printed = []
+    smoke = smoke_module.Smoke(image="mervio:test", build=False, keep=False, runner=docker, log=printed.append,
+                               port=55999)
+    holder["smoke"] = smoke
+    for name in ("prerequisites", "check_image", "start_postgres", "refuse_unmigrated_schema", "migrate",
+                 "refuse_privileged_connections"):
+        setattr(smoke, name, lambda: None)
+    with pytest.raises(SmokeFailure, match="unhealthy"):
+        smoke.execute()
+    report = "\n".join(printed)
+    assert "reason=missing" in report
+    assert smoke.passwords["MERVIO_WORKER_DB_PASSWORD"] not in report
+    assert docker.argvs()[-1][-5:] == ["down", "--volumes", "--remove-orphans", "--timeout", "60"]

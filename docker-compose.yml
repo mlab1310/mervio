@@ -75,7 +75,9 @@ services:
       # fichiers d'import deposes par `admin`: le worker les LIT seulement
       - mervio_data:/var/lib/mervio/data:ro
     tmpfs:
-      - /run/mervio
+      # proprietaire explicite: runc donne au tmpfs le MODE du repertoire de l'image (0750) mais pas
+      # son proprietaire (root); sans uid/gid, l'utilisateur 10001 ne pourrait pas ecrire sa sante
+      - /run/mervio:uid=10001,gid=10001,mode=0700
       - /tmp
     read_only: true
     cap_drop:

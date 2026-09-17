@@ -464,7 +464,7 @@ def test_the_worker_is_hardened_and_healthchecked():
     assert worker["cap_drop"] == ["ALL"] and worker["security_opt"] == ["no-new-privileges:true"]
     assert "ports" not in worker and "expose" not in worker
     assert worker["networks"] == ["backend"]
-    assert worker["tmpfs"] == ["/run/mervio", "/tmp"]
+    assert worker["tmpfs"] == ["/run/mervio:uid=10001,gid=10001,mode=0700", "/tmp"]
     assert worker["volumes"] == ["mervio_data:/var/lib/mervio/data:ro"]
     assert "entrypoint" not in worker and "command" not in worker, "l'image lance `mervio worker`"
     assert "user" not in worker, "l'utilisateur non-root de l'image n'est jamais remplace"
@@ -592,3 +592,107 @@ def test_the_bootstrap_group_roles_are_exactly_those_of_the_migrations():
         statement = f"CREATE ROLE {group} NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
         assert statement in BOOTSTRAP_CODE, group
         assert statement in migration, group
+
+
+
+# =============================================================================================
+# tmpfs et proprietaire (echec CI de ec7ce24: worker unhealthy)
+# =============================================================================================
+#
+# runc (1.1 a 1.3) monte un tmpfs sur un repertoire existant avec `mode=<mode de ce repertoire>`
+# place AVANT les options fournies, mais sans son proprietaire: le tmpfs appartient a root.
+# /run/mervio (0750, 10001 dans l'image) devenait donc root:root 0750: le worker ne pouvait plus
+# ecrire son fichier de sante, `healthcheck` repondait `missing`, le conteneur etait unhealthy.
+
+def image_directories() -> dict:
+    """Repertoires crees par le Dockerfile: chemin -> (uid, gid, mode)."""
+    directories = {}
+    for keyword, arguments in final_stage():
+        if keyword != "RUN":
+            continue
+        for command in arguments.split("&&"):
+            tokens = command.split()
+            if tokens[:2] != ["install", "-d"]:
+                continue
+            options = dict(zip(tokens[2::2], tokens[3::2]))
+            paths = [t for t in tokens[2:] if t.startswith("/")]
+            for path in paths:
+                directories[path] = (options["-o"], options["-g"], options["-m"])
+    return directories
+
+
+def tmpfs_mount(entry: str):
+    path, _, raw = entry.partition(":")
+    options = dict(item.partition("=")[::2] for item in raw.split(",") if item)
+    return path, options
+
+
+def runc_tmpfs_root(entry: str, image_dirs: dict):
+    """(uid, gid, mode) de la racine du tmpfs, selon la regle de runc et du noyau (derniere valeur retenue)."""
+    path, options = tmpfs_mount(entry)
+    inherited = image_dirs.get(path, (None, None, "1777"))[2]
+    return options.get("uid", "0"), options.get("gid", "0"), options.get("mode", inherited)
+
+
+def writable_by(uid: str, gid: str, root) -> bool:
+    owner, group, mode = root
+    bits = int(mode, 8)
+    if owner == uid:
+        return bits & 0o300 == 0o300
+    if group == gid:
+        return bits & 0o030 == 0o030
+    return bits & 0o003 == 0o003
+
+
+def test_the_image_creates_the_health_directory_for_its_user():
+    assert image_directories()["/run/mervio"] == ("10001", "10001", "0750")
+
+
+def test_the_rule_reproduces_the_ci_failure():
+    image_dirs = image_directories()
+    assert not writable_by("10001", "10001", runc_tmpfs_root("/run/mervio", image_dirs)), "ec7ce24"
+    assert writable_by("10001", "10001", runc_tmpfs_root("/tmp", image_dirs))
+    assert writable_by("10001", "10001", runc_tmpfs_root("/run/mervio:uid=10001,gid=10001,mode=0700", image_dirs))
+    assert not writable_by("10001", "10001", runc_tmpfs_root("/run/mervio:mode=0700", image_dirs))
+
+
+def test_every_tmpfs_of_a_mervio_service_is_writable_by_the_image_user():
+    image_dirs = image_directories()
+    for name in ("worker", "migrate", "admin"):
+        for entry in SERVICES[name].get("tmpfs", []):
+            assert writable_by("10001", "10001", runc_tmpfs_root(entry, image_dirs)), (name, entry)
+            path, options = tmpfs_mount(entry)
+            assert set(options) <= {"uid", "gid", "mode", "size"}, entry
+            if path in image_dirs:
+                assert (options.get("uid"), options.get("gid")) == ("10001", "10001"), entry
+
+
+def test_the_health_file_lives_on_the_worker_tmpfs_and_is_private():
+    health = Path(SERVICES["worker"]["environment"]["MERVIO_WORKER_HEALTH_FILE"])
+    [entry] = [e for e in SERVICES["worker"]["tmpfs"] if tmpfs_mount(e)[0] == str(health.parent)]
+    assert tmpfs_mount(entry)[1] == {"uid": "10001", "gid": "10001", "mode": "0700"}
+    env = " ".join(a for k, a in final_stage() if k == "ENV")
+    assert f"MERVIO_WORKER_HEALTH_FILE={health}" in env
+
+
+def test_the_smoke_negative_worker_uses_the_same_tmpfs_as_compose():
+    smoke = SMOKE.read_text(encoding="utf-8")
+    assert 'HEALTH_TMPFS = f"/run/mervio:uid={IMAGE_UID},gid={IMAGE_UID},mode=0700"' in smoke
+    assert '"--tmpfs", HEALTH_TMPFS' in smoke and '"--tmpfs", "/run/mervio"' not in smoke
+
+
+def test_each_role_uses_the_password_its_bootstrap_role_was_created_with():
+    environment = SERVICES["postgres"]["environment"]
+    created = {}
+    for kind in ("MIGRATOR", "APP", "WORKER"):
+        role = environment[f"MERVIO_BOOTSTRAP_{kind}_ROLE"]
+        variable = re.fullmatch(r"\$\{(\w+):\?[^}]*\}", environment[f"MERVIO_BOOTSTRAP_{kind}_PASSWORD"]).group(1)
+        created[role] = variable
+    used = dict(re.findall(r"postgresql://(\w+):\$\{(\w+):\?", COMPOSE_TEXT))
+    assert used == created
+    assert len(set(created.values())) == 3 and "MERVIO_POSTGRES_PASSWORD" not in created.values()
+    for service, variable_name in (("worker", "MERVIO_DATABASE_URL"), ("admin", "MERVIO_DATABASE_URL"),
+                                   ("migrate", "MERVIO_MIGRATION_DATABASE_URL")):
+        role = re.match(r"postgresql://(\w+):", SERVICES[service]["environment"][variable_name]).group(1)
+        assert role == {"worker": "mervio_worker_svc", "admin": "mervio_app_user",
+                        "migrate": "mervio_migrator"}[service]

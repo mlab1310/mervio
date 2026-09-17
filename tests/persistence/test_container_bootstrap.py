@@ -351,3 +351,91 @@ def test_the_smoke_checks_detect_a_broken_database(smoke, boot):
         target.execute("ALTER TABLE stores NO FORCE ROW LEVEL SECURITY")
     with pytest.raises(smoke.module.SmokeFailure, match="RLS forcee"):
         smoke.check_schema(migrate.head_revision())
+
+
+# -- credentials, schema non migre, contrat de l'identite (analyse de l'echec CI de ec7ce24) ----
+
+def scram_matches(stored: str, password: str) -> bool:
+    """Verifie un secret SCRAM-SHA-256 de pg_authid (RFC 7677), sans passer par pg_hba."""
+    import base64
+    import hashlib
+    import hmac
+    method, rest = stored.split("$", 1)
+    assert method == "SCRAM-SHA-256", method
+    iterations_salt, keys = rest.split("$", 1)
+    iterations, salt = iterations_salt.split(":", 1)
+    stored_key, server_key = (base64.b64decode(part) for part in keys.split(":", 1))
+    salted = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), base64.b64decode(salt), int(iterations))
+    client_key = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
+    return (hmac.compare_digest(hashlib.sha256(client_key).digest(), stored_key)
+            and hmac.compare_digest(hmac.new(salted, b"Server Key", hashlib.sha256).digest(), server_key))
+
+
+def test_each_login_role_stores_exactly_the_password_it_was_given(boot):
+    """Les identifiants du bootstrap sont ceux que compose donne au worker et a l'admin (meme variable).
+
+    Verifie le secret stocke, et non une connexion: sur un serveur local en `trust`, une connexion
+    reussirait meme avec un mauvais mot de passe.
+    """
+    result = boot.run()
+    assert result.returncode == 0, published(result)
+    stored = dict(boot.query("SELECT rolname, rolpassword FROM pg_authid WHERE rolname = ANY(%s)",
+                             (list(boot.roles.values()),)))
+    for kind in KINDS:
+        secret = stored[boot.roles[kind]]
+        assert secret.startswith("SCRAM-SHA-256$"), "jamais de mot de passe en clair ni md5"
+        assert scram_matches(secret, boot.passwords[kind]), kind
+        for other in KINDS:
+            if other != kind:
+                assert not scram_matches(secret, boot.passwords[other]), (kind, other)
+        assert not scram_matches(secret, secrets.token_hex(24))
+
+
+def test_login_roles_really_connect_and_are_unprivileged_runtime_roles(boot):
+    assert boot.run().returncode == 0
+    for kind in KINDS:
+        with psycopg.connect(boot.url(kind), autocommit=True) as conn:
+            row = conn.execute("SELECT current_user, current_database(), r.rolsuper, r.rolbypassrls, "
+                               "r.rolcreaterole, r.rolcreatedb, pg_has_role(current_user, 'mervio_worker', 'MEMBER') "
+                               "FROM pg_roles r WHERE r.rolname = current_user").fetchone()
+        assert row == (boot.roles[kind], boot.database, False, False, False, False, kind == "worker"), kind
+
+
+def test_before_migrations_the_worker_refuses_the_schema_and_creates_nothing(boot, tmp_path):
+    """Le message `app_ensure_service_principal() does not exist` du log CI est cette etape VOULUE."""
+    assert boot.run().returncode == 0
+    process = subprocess.run([sys.executable, "-m", "mervio.cli", "worker"], cwd=ROOT,
+                             env=clean_environment(PYTHONPATH=ROOT / "src", MERVIO_DATABASE_URL=boot.url("worker"),
+                                                   MERVIO_WORKER_HEALTH_FILE=tmp_path / "health.json", **FAST),
+                             capture_output=True, text=True, timeout=120)
+    assert process.returncode == worker_runtime.EXIT_SCHEMA, published(process)
+    with psycopg.connect(boot.pg.admin_conninfo, dbname=boot.database, autocommit=True) as conn:
+        assert conn.execute("SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                            "WHERE n.nspname = 'public'").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname = 'app_ensure_service_principal'"
+                            ).fetchone() == (0,)
+    for secret in boot.passwords.values():
+        assert secret not in published(process)
+
+
+def test_migration_head_provides_the_service_identity_function_under_the_migrator(boot):
+    assert boot.run().returncode == 0
+    migrate.upgrade(boot.url("migrator"))
+    with psycopg.connect(boot.pg.admin_conninfo, dbname=boot.database, autocommit=True) as conn:
+        owner, definer = conn.execute(
+            "SELECT pg_get_userbyid(proowner), prosecdef FROM pg_proc WHERE proname = 'app_ensure_service_principal'"
+        ).fetchone()
+        grants = conn.execute(
+            "SELECT has_function_privilege(%s, 'app_ensure_service_principal()', 'EXECUTE'), "
+            "has_function_privilege(%s, 'app_ensure_service_principal()', 'EXECUTE'), "
+            "has_function_privilege('public', 'app_ensure_service_principal()', 'EXECUTE')",
+            (boot.roles["worker"], boot.roles["app"])).fetchone()
+    assert (owner, definer) == (boot.roles["migrator"], True)
+    assert grants == (True, False, False)
+    with psycopg.connect(boot.url("worker"), autocommit=True) as conn:
+        principal = conn.execute("SELECT app_ensure_service_principal()").fetchone()[0]
+        assert conn.execute("SELECT idp_subject, kind FROM users WHERE id = %s", (principal,)).fetchone() == (
+            f"service:{boot.roles['worker']}", "service")
+    with psycopg.connect(boot.url("app"), autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT app_ensure_service_principal()")

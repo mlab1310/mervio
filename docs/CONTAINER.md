@@ -128,7 +128,7 @@ docker compose logs -f worker
 - Autorisation explicite par organisation (`mervio admin service authorize`), RLS forcée,
   délégation humaine, audit, bail et fencing : inchangés.
 - Durcissement : système de fichiers racine en lecture seule, `tmpfs` pour `/run/mervio` (fichier
-  de santé) et `/tmp`, toutes les capacités retirées, `no-new-privileges`, aucun port, volume de
+  de santé, `uid=10001,gid=10001,mode=0700`) et `/tmp`, toutes les capacités retirées, `no-new-privileges`, aucun port, volume de
   données monté en **lecture seule**.
 - Logs JSON du produit sur stderr (UTC, `correlation_id`, redaction), lisibles par `docker logs`.
 - Signaux : `init: true` (tini en PID 1) transmet SIGTERM à Python, qui installe ses propres
@@ -230,7 +230,10 @@ docker compose down -v            # supprime aussi les volumes (base comprise)
 | worker sort en **4** | migrations non appliquées : `run --rm migrate` |
 | worker sort en **2** | configuration invalide ou rôle refusé (superutilisateur, BYPASSRLS, pas membre de `mervio_worker`) |
 | worker sort en **3** | base injoignable au-delà de `MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS` |
-| worker `unhealthy` | fichier de santé ancien (worker bloqué) ou état DEGRADED prolongé : `docker compose logs worker` |
+| worker `unhealthy`, `reason=missing` | le worker ne peut pas écrire `/run/mervio` : un tmpfs sans `uid`/`gid` appartient à root (runc ne reprend que le **mode** du répertoire de l'image) ; garder `uid=10001,gid=10001` |
+| worker `unhealthy`, `reason=stale` ou `database_unavailable` | worker bloqué ou état DEGRADED prolongé : `docker compose logs worker` |
+| log postgres `function app_ensure_service_principal() does not exist` | worker lancé avant les migrations (code 4, voulu dans le smoke test) |
+| log postgres `password authentication failed for user "mervio_app_user"` pendant le smoke test | étape volontaire « mauvais mot de passe refusé » (code 3) |
 | travail d'import `failed` : fichier introuvable | chemin de l'hôte au lieu de `/var/lib/mervio/data/...` |
 | travaux jamais pris | organisation non autorisée pour `mervio_worker_svc` (`admin service authorize`) |
 | `pull access denied for mervio` | image non construite : `docker compose build` |

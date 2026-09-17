@@ -57,6 +57,8 @@ DATA_DIR = "/var/lib/mervio/data/demo"
 OWNER = "smoke|owner"
 INTRUDER = "smoke|intruder"
 IMAGE_UID = 10001
+#: Meme montage que le service worker du compose (proprietaire explicite, voir docker-compose.yml).
+HEALTH_TMPFS = f"/run/mervio:uid={IMAGE_UID},gid={IMAGE_UID},mode=0700"
 #: Codes des commandes du produit (workers.runtime, admin.errors).
 WORKER_EXIT_OK, WORKER_EXIT_CONFIG, WORKER_EXIT_SCHEMA = 0, 2, 4
 ADMIN_EXIT_DATABASE, ADMIN_EXIT_NOT_FOUND = 3, 5
@@ -379,7 +381,7 @@ class Smoke:
         network = f"{self.project}_backend"
         superuser_url = (f"postgresql://{SUPERUSER}:{self.passwords['MERVIO_POSTGRES_PASSWORD']}"
                          f"@postgres:5432/{DATABASE}")
-        result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", "/run/mervio",
+        result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", HEALTH_TMPFS,
                            "-e", "MERVIO_DATABASE_URL", self.image, "worker"],
                           env=dict(self.environment, MERVIO_DATABASE_URL=superuser_url), check=False, timeout=300)
         self.expect(result.returncode == WORKER_EXIT_CONFIG,
@@ -579,6 +581,11 @@ class Smoke:
         except Exception:  # noqa: BLE001 - le diagnostic ne doit pas masquer l'echec
             return
         self.log(self.redact("--- logs des conteneurs (nettoyes) ---\n" + logs[-20000:]))
+        # verdicts du HEALTHCHECK Docker (codes fixes publies par `mervio worker healthcheck`, sans secret)
+        container = self.compose("ps", "--all", "--quiet", "worker", check=False).stdout.strip()
+        if container:
+            health = self.run(["docker", "inspect", "--format", "{{json .State.Health}}", container], check=False)
+            self.log(self.redact("--- sante du worker ---\n" + health.stdout[-4000:]))
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
