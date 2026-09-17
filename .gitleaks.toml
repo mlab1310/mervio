@@ -1,0 +1,19 @@
+# Analyse de secrets (Mission 004.3): toutes les regles par defaut de gitleaks.
+#
+# Une seule exception, volontairement etroite: la valeur FACTICE `sk_live_abcd1234efgh`
+# utilisee depuis les missions 002-003 par les tests de redaction du LLM, et seulement
+# sous tests/. Les deux conditions doivent etre vraies ensemble (condition = "AND").
+# Verifie avec gitleaks 8.30.1 en mode `git` (celui de la CI): une autre valeur sous
+# tests/, ou la meme valeur hors de tests/, fait echouer l'analyse. (En mode `dir`,
+# gitleaks applique le filtre de chemin seul: ne pas s'en servir pour juger ce fichier.)
+# Les nouveaux tests construisent leurs faux jetons a l'execution (aucune exception).
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Jeton Stripe factice des tests existants"
+condition = "AND"
+paths = ['''^tests/[A-Za-z0-9_]+\.py$''']
+regexTarget = "secret"
+regexes = ['''^sk_live_abcd1234efgh$''']

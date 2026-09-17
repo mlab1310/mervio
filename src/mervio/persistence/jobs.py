@@ -41,6 +41,7 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from ..observability.redaction import redact_text
 from .errors import JobLeaseLost, JobStateError, NotFound, PayloadRejected
 from .stores import _limit, _uuid, fetch_store
 from .tenancy import Permission, TenantSession
@@ -626,12 +627,13 @@ def _error_code(code: Optional[str]) -> Optional[str]:
 
 
 def _safe_error(message: str) -> str:
-    """Message d'erreur publiable: tronque, sans saut de ligne, sans chemin absolu.
+    """Message d'erreur publiable: tronque, sans saut de ligne, sans chemin absolu, sans secret.
 
-    Le detail complet reste dans les logs du worker; la file n'est pas un journal
-    d'exceptions (ADR-004.2-006).
+    Un message qui EST un chemin est masque en entier; dans un texte, les identifiants
+    d'URL, jetons, chemins absolus et e-mails sont masques (`redact_text`, 004.3). La file
+    n'est pas un journal d'exceptions (ADR-004.2-006).
     """
     text = " ".join(str(message or "").split())
     if text.startswith("/"):
         return "[redacted]"
-    return text[:2000]
+    return redact_text(text)[:2000]

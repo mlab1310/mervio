@@ -157,3 +157,17 @@ def test_the_expected_test_count_matches_the_collected_suite(request):
     if whole_suite:
         assert len(request.session.items) == expected, (
             f"{len(request.session.items)} tests collectes: mettre MERVIO_EXPECTED_TESTS a jour dans ci.yml")
+
+
+def test_the_secret_scan_keeps_every_default_rule_with_one_narrow_exception():
+    """Une seule exception: une valeur factice exacte ET un chemin de test (condition AND)."""
+    config = tomllib.loads((ROOT / ".gitleaks.toml").read_text(encoding="utf-8"))
+    assert config["extend"] == {"useDefault": True}
+    assert "rules" not in config
+    [allowlist] = config["allowlists"]
+    assert allowlist["condition"] == "AND"
+    assert allowlist["regexTarget"] == "secret"
+    assert allowlist["paths"] == [r"^tests/[A-Za-z0-9_]+\.py$"]
+    assert allowlist["regexes"] == [r"^sk_live_abcd1234efgh$"]
+    assert set(allowlist) == {"description", "condition", "regexTarget", "paths", "regexes"}
+    assert "--config .gitleaks.toml" in job("security")

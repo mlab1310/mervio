@@ -21,7 +21,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.11.16"
-  MERVIO_EXPECTED_TESTS: "1390"
+  MERVIO_EXPECTED_TESTS: "1569"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONDONTWRITEBYTECODE: "1"
 
@@ -111,7 +111,7 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict
           tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --exit-code 1 .
+          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner --exit-code 1 .
       - name: Install CI tools
         run: python -m pip install -r requirements-ci.txt
       - name: Known vulnerabilities of the locked dependencies
