@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-09-17T02:24:30+00:00",
+  "machine": {
+    "platform": "macOS-26.4-arm64-arm-64bit",
+    "python": "3.11.16",
+    "cpu_count": 18,
+    "postgresql": "17.11 (Homebrew)"
+  },
+  "scope": "mesures de base du processus (004.3.5); grande echelle en 004.3.9",
+  "scenarios": {
+    "idle": {
+      "scenario": "idle",
+      "polls_per_second": 0.3,
+      "mean_idle_wait_seconds": 2.904,
+      "cpu_percent": 0.04,
+      "peak_rss_mb": 40.5
+    },
+    "loop": {
+      "scenario": "loop",
+      "jobs": 300,
+      "bare_worker_jobs_per_second": 705.5,
+      "bare_worker_ms_per_job": 1.42,
+      "process_jobs_per_second": 198.5,
+      "process_ms_per_job": 5.04,
+      "overhead_ms_per_job": 3.62,
+      "peak_rss_mb": 39.5
+    },
+    "renewal": {
+      "scenario": "renewal",
+      "job_seconds": 10.0,
+      "lease_seconds": 3,
+      "renew_seconds": 0.5,
+      "renewals": 19,
+      "renewals_per_second": 1.9,
+      "renewal_p50_ms": 5.48,
+      "renewal_p95_ms": 13.892,
+      "renewal_max_ms": 13.892
+    },
+    "real": {
+      "scenario": "real",
+      "import_status": "succeeded",
+      "import_rows": 7503,
+      "import_ms": 307,
+      "analysis_status": "succeeded",
+      "analysis_ms": 83,
+      "wall_seconds_including_startup": 1.464,
+      "peak_rss_mb": 52.2
+    }
+  }
+}

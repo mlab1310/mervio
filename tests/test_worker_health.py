@@ -49,6 +49,7 @@ def verdict(**changes):
     ("starting", True, False, "starting"),
     ("draining", True, False, "draining"),
     ("stopped", False, False, "stopped"),
+    ("forced", False, False, "forced"),
 ])
 def test_the_state_decides_liveness_and_readiness(state, live, ready, reason):
     result = verdict(state=state)

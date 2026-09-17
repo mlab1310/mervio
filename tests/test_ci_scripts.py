@@ -101,7 +101,9 @@ def test_the_rls_modules_are_required():
                    "tests.persistence.test_jobs_lease", "tests.persistence.test_service_identity",
                    "tests.persistence.test_dispatcher", "tests.test_settings", "tests.test_redaction",
                    "tests.test_logging_contract", "tests.test_worker_health",
-                   "tests.persistence.test_published_errors"):
+                   "tests.persistence.test_published_errors", "tests.test_worker_lifecycle",
+                   "tests.persistence.test_worker_lease_keeper", "tests.persistence.test_worker_dispatched",
+                   "tests.persistence.test_worker_runtime"):
         assert module in gate.REQUIRED_MODULES
 
 

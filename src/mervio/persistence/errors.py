@@ -45,6 +45,10 @@ class ServiceIdentityError(UnsafeDatabaseConfiguration):
     """Le role connecte n'est pas le service attendu (non membre de mervio_worker, ou autre principal)."""
 
 
+class SchemaNotReady(UnsafeDatabaseConfiguration):
+    """Le schema de la base ne porte pas encore les objets attendus (migration manquante)."""
+
+
 class MoneyPrecisionError(PersistenceError):
     """Montant non representable exactement en numeric(19,4): refuse, jamais arrondi."""
 

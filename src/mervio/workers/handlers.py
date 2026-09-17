@@ -8,6 +8,9 @@ Aucun gestionnaire ne calcule quoi que ce soit: l'import passe par
 depuis 004.1. Le moteur deterministe reste la seule source de verite; aucun LLM
 n'intervient dans un KPI.
 
+Bail (004.3): chaque gestionnaire appelle `context.checkpoint()` avant ses ecritures;
+si la tentative a perdu son bail, l'appel leve `JobLeaseLost` et plus rien n'est ecrit.
+
 Idempotence: elle vient des cas d'usage de 004.1, pas du worker.
 - import: `inputs_sha256` -> un instantane scelle au plus par empreinte;
 - analyse: `analysis_runs_completed_uniq` -> un rapport au plus par execution.
@@ -44,6 +47,12 @@ class JobContext:
     log: EventLogger
     #: horloge injectable: un test fixe l'instant sans attendre
     now: Optional[datetime] = None
+    #: point d'arret cooperatif: leve `JobLeaseLost` si la tentative a perdu son bail (004.3)
+    checkpoint: Callable[[], None] = field(default=lambda: None)
+    #: acteur technique de l'audit (principal de service); defaut: l'utilisateur de la session
+    actor_id: Optional[UUID] = None
+    #: acteur metier (le demandeur) pour le compte duquel le service agit
+    on_behalf_of: Optional[UUID] = None
 
     @property
     def payload(self) -> dict:
@@ -65,10 +74,12 @@ class JobContext:
 
     def audit(self, conn, action, resource_type, resource_id, *, outcome=Outcome.SUCCEEDED,
               metadata: Optional[Mapping[str, Any]] = None) -> None:
+        self.checkpoint()  # jamais de trace d'une tentative qui a perdu son bail
         audit.record(conn, organization_id=self.session.organization_id, action=action,
                      resource_type=resource_type, resource_id=resource_id,
                      correlation_id=self.correlation_id, outcome=outcome, actor_type=ActorType.WORKER,
-                     actor_id=self.session.user_id, store_id=self.job.store_id, metadata=metadata)
+                     actor_id=self.actor_id if self.actor_id is not None else self.session.user_id,
+                     store_id=self.job.store_id, metadata=metadata, on_behalf_of=self.on_behalf_of)
 
 
 Handler = Callable[[JobContext], Dict[str, Any]]
@@ -127,7 +138,9 @@ def import_handler(context: JobContext) -> Dict[str, Any]:
     context.log.info("import.started", sources=sorted(sources), attempt=context.job.attempts)
 
     started = time.perf_counter()
+    context.checkpoint()
     result = import_csv_snapshot(context.session, store_id=store_id, connection_id=connection_id, request=request)
+    context.checkpoint()
     duration_ms = int((time.perf_counter() - started) * 1000)
 
     if result.status == "rejected":
@@ -170,8 +183,10 @@ def analysis_handler(context: JobContext) -> Dict[str, Any]:
                      attempt=context.job.attempts)
 
     started = time.perf_counter()
+    context.checkpoint()
     analysis = analyze_snapshot(context.session, store_id=store_id, snapshot_id=snapshot_id, config=config,
                                 today=as_of, label=label)
+    context.checkpoint()
     duration_ms = int((time.perf_counter() - started) * 1000)
 
     if analysis.status == "failed":
@@ -236,8 +251,10 @@ def purge_handler(context: JobContext) -> Dict[str, Any]:
     started = time.perf_counter()
     deleted_jobs: Dict[str, int] = {}
     for status, cutoff in policy.job_cutoffs(now).items():
+        context.checkpoint()
         deleted_jobs[status.value] = jobs.purge_terminal_jobs(
             context.session, before=cutoff, statuses=[status], limit=policy.batch_limit)
+    context.checkpoint()
     deleted_audit = audit.purge_expired_events(context.session, before=policy.audit_cutoff(now),
                                                limit=policy.batch_limit)
     duration_ms = int((time.perf_counter() - started) * 1000)

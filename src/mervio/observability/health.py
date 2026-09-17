@@ -14,8 +14,8 @@ chemin, message d'exception. Seulement un etat, des instants et des compteurs.
 
 Verdict (`evaluate`):
 
-    vivant (liveness)   le document est recent et l'etat n'est ni `stopped`, ni `degraded`
-                        depuis plus que la tolerance
+    vivant (liveness)   le document est recent et l'etat n'est ni `stopped`, ni `forced`,
+                        ni `degraded` depuis plus que la tolerance
     pret (readiness)    vivant ET etat `ready` ou `busy`
 
 Les raisons publiees sont des codes fixes (`stale`, `missing`, `invalid`...), jamais un
@@ -46,6 +46,8 @@ class WorkerState(str, Enum):
     DRAINING = "draining"
     DEGRADED = "degraded"
     STOPPED = "stopped"
+    #: arret force (delai de grace depasse ou second signal): travail libere, sortie non nulle
+    FORCED = "forced"
 
 
 @dataclass(frozen=True)
@@ -144,8 +146,8 @@ def evaluate(snapshot: HealthSnapshot, *, now: float, max_age_seconds: float,
         return HealthVerdict(False, False, "stale", state)
     if age < -CLOCK_SKEW_SECONDS:
         return HealthVerdict(False, False, "clock_skew", state)
-    if state == WorkerState.STOPPED.value:
-        return HealthVerdict(False, False, "stopped", state)
+    if state in (WorkerState.STOPPED.value, WorkerState.FORCED.value):
+        return HealthVerdict(False, False, state, state)
     if state == WorkerState.DEGRADED.value:
         since = snapshot.degraded_since if snapshot.degraded_since is not None else snapshot.updated_at
         if now - since > degraded_grace_seconds:

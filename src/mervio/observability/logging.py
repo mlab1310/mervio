@@ -54,10 +54,12 @@ EVENTS = frozenset({
     # cycle de vie du processus
     "worker.starting", "worker.config", "worker.database_connected", "worker.database_unavailable",
     "worker.database_recovered", "worker.schema_checked", "worker.ready", "worker.stopping",
-    "worker.shutdown_forced", "worker.stopped",
+    "worker.shutdown_forced", "worker.stopped", "worker.identity_refused", "worker.crashed", "worker.exit_forced",
+    "worker.state_changed", "worker.callback_failed",
     # travaux (004.2 et 004.3)
     "job.enqueued", "job.claimed", "job.succeeded", "job.failed", "job.requeued", "job.recovered",
     "job.cancelled", "job.lease_renewed", "job.lease_renew_failed", "job.lease_lost", "job.result_unrecorded",
+    "job.abandoned", "job.publish_retry", "job.organization_skipped", "job.release_failed", "job.lease_keeper_stuck", "job.lease_callback_failed",
     # gestionnaires
     "import.started", "import.succeeded", "import.failed", "analysis.started", "analysis.succeeded",
     "analysis.failed", "purge.started", "purge.completed",

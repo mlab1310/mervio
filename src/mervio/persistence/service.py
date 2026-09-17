@@ -30,7 +30,7 @@ from uuid import UUID
 import psycopg
 
 from .database import Database
-from .errors import NotFound, PermissionDenied, ServiceIdentityError, TenantAccessDenied
+from .errors import NotFound, PermissionDenied, SchemaNotReady, ServiceIdentityError, TenantAccessDenied
 from .jobs import ENQUEUE_PERMISSION, JobRecord
 from .stores import _uuid
 from .tenancy import Permission, Role, TenantContext, TenantSession
@@ -75,6 +75,7 @@ def service_principal(database: Database) -> ServicePrincipal:
 
     Refus (`ServiceIdentityError`) si le role n'herite pas de `mervio_worker`: la base
     refuse alors l'execution de la fonction, et aucun principal n'est cree.
+    `SchemaNotReady` si la base n'est pas migree jusqu'a la revision 0007.
     """
     try:
         with database.transaction() as conn:
@@ -83,6 +84,8 @@ def service_principal(database: Database) -> ServicePrincipal:
             row = conn.execute("SELECT id, idp_subject FROM users WHERE id = %s", (principal_id,)).fetchone()
     except psycopg.errors.InsufficientPrivilege:
         raise ServiceIdentityError("le role connecte n'est pas un role de service") from None
+    except (psycopg.errors.UndefinedFunction, psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+        raise SchemaNotReady("schema sans identite de service: appliquer les migrations") from None
     return ServicePrincipal(row[0], row[1])
 
 

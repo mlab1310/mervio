@@ -294,7 +294,7 @@ def claim_next_job(session: TenantSession, *, worker_id: str, job_types: Optiona
 # -- fin d'execution -----------------------------------------------------------------------
 
 def renew_lease(session: TenantSession, job: JobRecord, *, worker_id: Optional[str] = None,
-                lease_seconds: int = DEFAULT_LEASE_SECONDS,
+                lease_seconds: int = DEFAULT_LEASE_SECONDS, timeout_ms: Optional[int] = None,
                 hook: Optional[TransitionHook] = None) -> JobRecord:
     """Prolonge le bail d'un travail en cours. Seul son detenteur y parvient.
 
@@ -306,10 +306,14 @@ def renew_lease(session: TenantSession, job: JobRecord, *, worker_id: Optional[s
     Refus (`JobLeaseLost`): travail termine, remis en file, repris par une autre
     tentative (meme worker_id), autre detenteur, bail expire. Travail d'un autre
     tenant ou inexistant: `NotFound`, indiscernables.
+
+    `timeout_ms` borne l'attente (verrou compris): un renouvellement bloque echoue au lieu
+    d'empecher le gardien de constater l'echeance de son bail (004.3).
     """
     _check_lease_seconds(lease_seconds)
     holder = worker_id if worker_id is not None else job.locked_by
     with session.transaction(Permission.RUN_JOBS) as conn:
+        _limit_statement_time(conn, timeout_ms)
         _declare_lease_holder(conn, job, holder)
         row = conn.execute(
             "UPDATE jobs SET lease_expires_at = GREATEST(lease_expires_at, now() + make_interval(secs => %s)), "
@@ -359,7 +363,8 @@ def mark_succeeded(session: TenantSession, job: JobRecord, *, result: Optional[M
 
 def mark_failed(session: TenantSession, job: JobRecord, *, error_code: str, error: str = "",
                 retryable: bool = True, worker_id: Optional[str] = None,
-                now: Optional[datetime] = None, hook: Optional[TransitionHook] = None) -> JobRecord:
+                now: Optional[datetime] = None, hook: Optional[TransitionHook] = None,
+                backoff_base: int = BACKOFF_BASE_SECONDS, backoff_cap: int = BACKOFF_CAP_SECONDS) -> JobRecord:
     """Echec d'une tentative.
 
     Reprise si l'erreur est transitoire ET qu'il reste des tentatives: le travail
@@ -370,7 +375,7 @@ def mark_failed(session: TenantSession, job: JobRecord, *, error_code: str, erro
     retry = bool(retryable) and job.attempts < job.max_attempts
     if retry:
         return requeue(session, job, error_code=code, error=message, worker_id=worker_id, now=now,
-                       delay_seconds=backoff_seconds(job.attempts), hook=hook)
+                       delay_seconds=backoff_seconds(job.attempts, base=backoff_base, cap=backoff_cap), hook=hook)
     holder = worker_id if worker_id is not None else job.locked_by
     with session.transaction(Permission.RUN_JOBS) as conn:
         _declare_lease_holder(conn, job, holder)
@@ -392,7 +397,7 @@ def mark_failed(session: TenantSession, job: JobRecord, *, error_code: str, erro
 
 def requeue(session: TenantSession, job: JobRecord, *, delay_seconds: int = 0, error_code: Optional[str] = None,
             error: str = "", worker_id: Optional[str] = None, now: Optional[datetime] = None,
-            hook: Optional[TransitionHook] = None) -> JobRecord:
+            hook: Optional[TransitionHook] = None, timeout_ms: Optional[int] = None) -> JobRecord:
     """Remet un travail en cours dans la file, apres un delai. L'historique des tentatives est conserve.
 
     Meme regle de detention que `mark_succeeded`.
@@ -401,6 +406,7 @@ def requeue(session: TenantSession, job: JobRecord, *, delay_seconds: int = 0, e
         raise ValueError("delay_seconds entre 0 et 604800")
     holder = worker_id if worker_id is not None else job.locked_by
     with session.transaction(Permission.RUN_JOBS) as conn:
+        _limit_statement_time(conn, timeout_ms)
         _declare_lease_holder(conn, job, holder)
         row = conn.execute(
             "UPDATE jobs SET status = 'queued', locked_at = NULL, locked_by = NULL, lease_expires_at = NULL, "
@@ -595,6 +601,14 @@ def _check_lease_seconds(lease_seconds: int) -> None:
     if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) \
             or not 1 <= lease_seconds <= MAX_LEASE_SECONDS:
         raise ValueError(f"lease_seconds entre 1 et {MAX_LEASE_SECONDS}")
+
+
+def _limit_statement_time(conn, timeout_ms: Optional[int]) -> None:
+    if timeout_ms is None:
+        return
+    if not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or not 1 <= timeout_ms <= 3_600_000:
+        raise ValueError("timeout_ms entre 1 et 3600000")
+    conn.execute("SELECT set_config('statement_timeout', %s, true)", (str(timeout_ms),))
 
 
 def lease_token(attempts: int, holder: str) -> str:
