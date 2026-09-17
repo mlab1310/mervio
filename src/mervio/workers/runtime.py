@@ -20,7 +20,7 @@ Arret:
   publie plus rien; code 5. Si le gestionnaire ne rend pas la main (calcul pur), le
   processus est termine apres `forced_exit_delay`.
 
-Codes de sortie (le point d'entree de la commande arrive en 004.3.6):
+Codes de sortie (rendus tels quels par la commande `mervio worker`, cli/worker.py):
     0 arret propre   1 erreur interne   2 configuration ou identite refusee
     3 base injoignable au demarrage   4 schema non migre   5 arret force
 """
@@ -104,6 +104,8 @@ class WorkerRuntime:
         self._clock = clock
         self._stop = threading.Event()
         self._forced = threading.Event()
+        #: pose quand l'arret force est entierement publie (log, etat): le processus ne sort pas avant
+        self._force_published = threading.Event()
         self._control = threading.RLock()
         self._stop_requests = 0
         self._timers: list = []
@@ -169,6 +171,7 @@ class WorkerRuntime:
         released = self.worker.force_release() if self.worker is not None else False
         self.log.warning("worker.shutdown_forced", reason=reason, released=released, busy=self.busy)
         self.lifecycle.transition_if_allowed(ProcessState.FORCED)
+        self._force_published.set()
         self._schedule(self.forced_exit_delay, self._hard_exit_if_stuck)
 
     def _hard_exit_if_stuck(self) -> None:
@@ -243,7 +246,7 @@ class WorkerRuntime:
                 continue
             self._databases = [main, lease]
             self.log.info("worker.database_connected", principal_id=str(self.principal.id),
-                          service=self.principal.name, **describe_database_url(settings.database_url.reveal()))
+                          principal_name=self.principal.name, **describe_database_url(settings.database_url.reveal()))
             self.worker = Worker(
                 dispatcher=Dispatcher(main, self.principal, batch=settings.dispatch_batch),
                 registry=self.registry, worker_id=self.worker_id, lease_seconds=settings.lease_seconds,
@@ -288,6 +291,9 @@ class WorkerRuntime:
                     timer.cancel()
             self._close_databases()
         if self._forced.is_set():
+            # le fil qui force libere le bail AVANT de journaliser: sans cette attente, le processus
+            # pouvait sortir avant la ligne `worker.shutdown_forced`
+            self._force_published.wait(self.forced_exit_delay)
             exit_code, reason = EXIT_FORCED, "forced"
             self.lifecycle.transition_if_allowed(ProcessState.FORCED)
         else:

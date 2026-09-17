@@ -87,6 +87,27 @@ son sort et sa trace d'audit dans la même transaction.
 
 Détails : `docs/MISSION_004_2_HANDOFF.md`.
 
+## Processus worker (Mission 004.3)
+
+```bash
+pip install -e '.[persistence]'
+MERVIO_DATABASE_URL=postgresql://<role>@<hote>/<base> \
+MERVIO_WORKER_HEALTH_FILE=/run/mervio/health.json \
+mervio worker                              # ou: python -m mervio.cli worker
+mervio worker healthcheck [--ready] [--json]
+```
+
+- **Configuration :** uniquement les variables `MERVIO_*` (liste et règles : `src/mervio/settings.py`).
+  Une configuration invalide est refusée avant toute connexion, sans jamais afficher de valeur.
+- **Logs :** JSON sur stderr, une ligne par événement.
+- **Arrêt :** premier SIGTERM/SIGINT → le travail en cours se termine (délai de grâce) ;
+  délai dépassé ou second signal → le travail est remis en file et le processus sort en 5.
+- **Codes de sortie :** 0 arrêt propre, 1 erreur interne, 2 configuration ou identité refusée
+  (ou extra `persistence` absent), 3 base injoignable, 4 schéma non migré, 5 arrêt forcé.
+- **`healthcheck` :** lit seulement le fichier de santé (ni base, ni réseau, ni URL de base) ;
+  0 sain, 1 non sain, jamais d'autre code. Par défaut contrôle de vie ; `--ready` exige
+  `ready` ou `busy`.
+
 ## Données et confidentialité
 
 - Les fichiers importés vont dans `data/uploads/`, **ignoré par Git**.

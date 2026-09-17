@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Porte CI: le rapport JUnit de pytest prouve une execution COMPLETE (Mission 004.3).
 
-    python scripts/ci_test_gate.py reports/junit.xml --expected-tests 1687
+    python scripts/ci_test_gate.py reports/junit.xml --expected-tests 1733
 
 Independante de la configuration pytest (conftest, plugins): meme si une garde de la suite
 etait retiree par erreur, cette porte relit le resultat brut et refuse:
@@ -57,6 +57,9 @@ REQUIRED_MODULES = (
     "tests.persistence.test_worker_dispatched",
     "tests.persistence.test_worker_runtime",
     "tests.test_jobs_unit",
+    # 004.3.6: commandes `mervio worker` et `mervio worker healthcheck`
+    "tests.test_cli_worker",
+    "tests.persistence.test_cli_worker_process",
     # les gardes elles-memes: si elles ne s'executent plus, la porte ne prouve plus rien
     "tests.test_pytest_guard",
     "tests.test_requirements_lock",

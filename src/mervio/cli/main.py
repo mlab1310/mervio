@@ -20,6 +20,7 @@ from ..config import ENGINE_VERSION, AnalyticsConfig
 from ..errors import MervioError
 from ..logging_config import configure_logging
 from ..reporting.writers import write_outputs
+from .worker import add_worker_parser, cmd_worker
 
 SAMPLE_DIR = Path(__file__).resolve().parents[3] / "data" / "sample"
 _STATUS_LABEL = {"valid": "VALIDE", "valid_with_issues": "VALIDE AVEC RESERVES", "invalid": "INVALIDE"}
@@ -60,6 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--out", default="analysis/demo")
     demo.add_argument("--today", default="2026-09-14")
     demo.add_argument("--verbose", action="store_true")
+
+    add_worker_parser(sub)
     return parser
 
 
@@ -287,6 +290,9 @@ def _print_inspection(inspection) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "worker":
+        # le worker configure sa propre journalisation (JSON) depuis WorkerSettings
+        return cmd_worker(args)
     configure_logging(logging.DEBUG if getattr(args, "verbose", False) else logging.WARNING)
     if args.command == "analyze":
         return _run_analysis(args, synthetic=False, label=args.label)

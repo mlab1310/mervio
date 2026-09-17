@@ -56,6 +56,8 @@ EVENTS = frozenset({
     "worker.database_recovered", "worker.schema_checked", "worker.ready", "worker.stopping",
     "worker.shutdown_forced", "worker.stopped", "worker.identity_refused", "worker.crashed", "worker.exit_forced",
     "worker.state_changed", "worker.callback_failed",
+    # point d'entree `mervio worker` (004.3.6)
+    "worker.config_invalid", "worker.dependency_missing",
     # travaux (004.2 et 004.3)
     "job.enqueued", "job.claimed", "job.succeeded", "job.failed", "job.requeued", "job.recovered",
     "job.cancelled", "job.lease_renewed", "job.lease_renew_failed", "job.lease_lost", "job.result_unrecorded",

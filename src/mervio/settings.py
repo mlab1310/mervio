@@ -155,6 +155,23 @@ class WorkerSettings:
         }
 
 
+@dataclass(frozen=True)
+class HealthCheckSettings:
+    """Ce que lit `mervio worker healthcheck`: le fichier et ses tolerances, rien d'autre.
+
+    Memes variables et memes regles que `WorkerSettings`, mais sans URL de base: un controle
+    de sante ne doit ni exiger ni lire le secret de connexion.
+    """
+
+    health_file: Optional[Path]
+    health_max_age_seconds: int
+    degraded_grace_seconds: int
+
+    @classmethod
+    def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "HealthCheckSettings":
+        return _Reader(os.environ if environ is None else environ, socket.gethostname).health_check()
+
+
 class _Reader:
     """Lit et valide; rassemble TOUTES les erreurs avant d'echouer."""
 
@@ -266,15 +283,37 @@ class _Reader:
         return path
 
     # -- assemblage ------------------------------------------------------------------------
+    def poll(self) -> Tuple[float, float]:
+        interval = self.number("MERVIO_WORKER_POLL_INTERVAL_SECONDS", 1.0, 0.05, 60.0, kind=float)
+        maximum = self.number("MERVIO_WORKER_POLL_MAX_SECONDS", max(5.0, interval), 0.05, 60.0, kind=float)
+        if maximum < interval:
+            self.fail("MERVIO_WORKER_POLL_MAX_SECONDS", "superieur ou egal a MERVIO_WORKER_POLL_INTERVAL_SECONDS")
+        return interval, maximum
+
+    def health(self, poll_max: float) -> Tuple[Optional[Path], int, int]:
+        health_file = self.health_file()
+        heartbeat = max(poll_max, BUSY_HEARTBEAT_SECONDS)
+        max_age = self.number("MERVIO_WORKER_HEALTH_MAX_AGE_SECONDS", max(60, int(3 * heartbeat) + 1), 1, 3600)
+        if max_age < 3 * heartbeat:
+            self.fail("MERVIO_WORKER_HEALTH_MAX_AGE_SECONDS",
+                      "au moins trois fois le plus long intervalle de rafraichissement du worker")
+        degraded_grace = self.number("MERVIO_WORKER_DEGRADED_GRACE_SECONDS", 120, 1, 86400)
+        return health_file, max_age, degraded_grace
+
+    def health_check(self) -> "HealthCheckSettings":
+        _, poll_max = self.poll()
+        health_file, max_age, degraded_grace = self.health(poll_max)
+        if self.problems:
+            raise SettingsError(self.problems)
+        return HealthCheckSettings(health_file=health_file, health_max_age_seconds=max_age,
+                                   degraded_grace_seconds=degraded_grace)
+
     def settings(self) -> WorkerSettings:
         environment = self.choice("MERVIO_ENV", "development", ENVIRONMENTS)
         database_url = self.database_url()
         worker_name = self.worker_name()
         job_types = self.job_types()
-        poll_interval = self.number("MERVIO_WORKER_POLL_INTERVAL_SECONDS", 1.0, 0.05, 60.0, kind=float)
-        poll_max = self.number("MERVIO_WORKER_POLL_MAX_SECONDS", max(5.0, poll_interval), 0.05, 60.0, kind=float)
-        if poll_max < poll_interval:
-            self.fail("MERVIO_WORKER_POLL_MAX_SECONDS", "superieur ou egal a MERVIO_WORKER_POLL_INTERVAL_SECONDS")
+        poll_interval, poll_max = self.poll()
         dispatch_batch = self.number("MERVIO_WORKER_DISPATCH_BATCH", 50, 1, 1000)
         lease = self.number("MERVIO_JOB_LEASE_SECONDS", 300, 30, 86400)
         renew = self.number("MERVIO_JOB_LEASE_RENEW_SECONDS", max(1, lease // 3), 1, 86400)
@@ -287,13 +326,7 @@ class _Reader:
         backoff_cap = self.number("MERVIO_JOB_BACKOFF_CAP_SECONDS", max(3600, backoff_base), 1, 86400)
         if backoff_cap < backoff_base:
             self.fail("MERVIO_JOB_BACKOFF_CAP_SECONDS", "superieur ou egal a MERVIO_JOB_BACKOFF_BASE_SECONDS")
-        health_file = self.health_file()
-        heartbeat = max(poll_max, BUSY_HEARTBEAT_SECONDS)
-        health_max_age = self.number("MERVIO_WORKER_HEALTH_MAX_AGE_SECONDS", max(60, int(3 * heartbeat) + 1), 1, 3600)
-        if health_max_age < 3 * heartbeat:
-            self.fail("MERVIO_WORKER_HEALTH_MAX_AGE_SECONDS",
-                      "au moins trois fois le plus long intervalle de rafraichissement du worker")
-        degraded_grace = self.number("MERVIO_WORKER_DEGRADED_GRACE_SECONDS", 120, 1, 86400)
+        health_file, health_max_age, degraded_grace = self.health(poll_max)
         log_level = LOG_LEVELS[self.choice("MERVIO_LOG_LEVEL", "INFO", tuple(LOG_LEVELS), normalize=str.upper)]
         log_format = self.choice("MERVIO_LOG_FORMAT", "json", LOG_FORMATS)
         if environment == "production" and log_format != "json":
@@ -312,5 +345,5 @@ class _Reader:
         )
 
 
-__all__ = ["ENVIRONMENTS", "JOB_TYPES", "LOG_FORMATS", "Secret", "SettingsError", "WorkerSettings",
-           "describe_database_url"]
+__all__ = ["ENVIRONMENTS", "JOB_TYPES", "LOG_FORMATS", "HealthCheckSettings", "Secret", "SettingsError",
+           "WorkerSettings", "describe_database_url"]

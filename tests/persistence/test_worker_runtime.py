@@ -186,6 +186,30 @@ def test_a_job_longer_than_the_grace_is_released_and_the_stop_is_forced(pg, tmp_
     assert running.runtime.lifecycle.history[-2:] == [S.DRAINING, S.FORCED]
 
 
+def test_the_run_returns_only_after_the_forced_stop_is_published(pg, tmp_path, authorized, json_logs):
+    """004.3.6: le fil qui force libere le bail puis journalise; `run` ne rend pas la main entre les deux.
+
+    Sinon `mervio worker` sortait parfois (code 5) sans la ligne `worker.shutdown_forced`.
+    """
+    enqueue_scripted(authorized, mode="checkpointed", seconds=20)
+    running = Running(settings_for(pg, tmp_path, MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS=0))
+    running.wait_state(S.BUSY)
+    worker = running.runtime.worker
+    release = worker.force_release
+
+    def slow_release():
+        released = release()
+        time.sleep(1.0)
+        return released
+
+    worker.force_release = slow_release
+    running.runtime.request_stop("SIGTERM")
+    assert running.join().exit_code == EXIT_FORCED
+    names = [line["event"] for line in log_events(json_logs)]
+    assert "worker.shutdown_forced" in names
+    assert names.index("worker.shutdown_forced") < names.index("worker.stopped")
+
+
 def test_a_second_request_forces_the_stop_immediately(pg, tmp_path, authorized):
     job = enqueue_scripted(authorized, mode="sql", seconds=30)
     running = Running(settings_for(pg, tmp_path, MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS=60))
@@ -286,6 +310,8 @@ def test_the_health_file_follows_a_busy_worker_without_leaking(pg, tmp_path, aut
     enqueue_scripted(authorized, mode="checkpointed", seconds=1.5)
     running = Running(settings_for(pg, tmp_path))
     running.wait_state(S.BUSY)
+    # l'historique change avant l'ecriture du fichier (rappel de transition): attendre le fichier lui-meme
+    wait_until(lambda: read_health(tmp_path / "health.json").state == "busy", timeout=5)
     first = read_health(tmp_path / "health.json")
     time.sleep(0.6)
     second = read_health(tmp_path / "health.json")
