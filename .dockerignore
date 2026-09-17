@@ -1,0 +1,38 @@
+# Contexte de construction de l'image (Mission 004.3.8): LISTE BLANCHE.
+# Tout est exclu, puis seuls les fichiers dont le Dockerfile a besoin sont reinclus.
+# Un nouveau fichier du depot (secret, donnee client, base locale) n'entre donc jamais
+# dans le contexte par inadvertance. Verifie par tests/test_container_artifacts.py.
+*
+
+!pyproject.toml
+!requirements-runtime.lock
+!requirements-build.lock
+!src/
+
+# Defense en profondeur: meme sous src/, jamais d'artefact ni de secret.
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+**/.git
+**/.venv
+**/.env
+**/.env.*
+**/secrets
+**/*.pem
+**/*.key
+**/credentials*.json
+**/.coverage
+**/.coverage.*
+**/coverage.xml
+**/htmlcov
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/.pgdata
+**/.DS_Store
+**/.idea
+**/.vscode

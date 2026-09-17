@@ -61,7 +61,7 @@ avec isolation des organisations (clés composites + Row Level Security).
 
 ```bash
 pip install -e '.[dev,persistence]'
-scripts/dev_postgres.sh start            # ou: docker compose up -d postgres
+scripts/dev_postgres.sh start            # ou: docker compose up -d --wait postgres (.env requis, docs/CONTAINER.md)
 MERVIO_TEST_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgres python -m pytest
 ```
 
@@ -121,6 +121,21 @@ Provisionnement (identité, organisation, membre, boutique, connexion CSV, autor
 worker), mise en file, inspection et journal d'audit. Chaque opération d'organisation s'exécute
 au nom de l'humain `--as`, dont l'appartenance et le rôle sont relus en base (RLS forcée, rôle
 applicatif ordinaire) ; chaque changement est audité. Procédure : `docs/ADMIN_CLI.md`.
+
+## Conteneur (Mission 004.3.8)
+
+```bash
+cp .env.example .env                      # quatre mots de passe: openssl rand -hex 24
+docker compose build
+docker compose up -d --wait postgres      # PostgreSQL 17 + bootstrap des roles (aucun superutilisateur pour Mervio)
+docker compose --profile ops run --rm migrate          # migrations: etape explicite
+docker compose up -d --wait worker        # healthcheck = mervio worker healthcheck
+python scripts/container_smoke.py         # smoke test complet en vrais conteneurs
+```
+
+Image `python:3.11.16-slim` épinglée par digest, dépendances depuis `requirements-runtime.lock`,
+utilisateur non-root, aucun port, aucun secret. Environnement de développement et de CI, pas de
+production. Guide, variables, dépannage et limites : `docs/CONTAINER.md`.
 
 ## Données et confidentialité
 
@@ -183,4 +198,6 @@ volontaires (date invalide, doublons, remboursement négatif, coûts manquants).
 | `docs/MISSION_004_1_HANDOFF.md` | persistance : état et règles |
 | `docs/MISSION_004_2_HANDOFF.md` | tâches de fond et audit ; état et suite (Mission 004.3) |
 | `docs/MISSION_004_2_DECISIONS.md` | arbitrages de la file et de l'audit (ADR-004.2-001 à 006) |
+| `docs/ADMIN_CLI.md` | administration opérateur (`mervio admin`) |
+| `docs/CONTAINER.md` | image, compose, bootstrap PostgreSQL, smoke test conteneurisé |
 | `docs/ROADMAP.md` / `docs/TODO.md` | suite |

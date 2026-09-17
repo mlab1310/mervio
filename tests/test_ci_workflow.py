@@ -36,8 +36,10 @@ def expected_tests() -> int:
     return int(match.group(1))
 
 
-def test_the_three_jobs_exist_and_are_bounded():
-    for name in ("lint", "test", "security"):
+def test_the_four_jobs_exist_and_are_bounded():
+    assert re.findall(r"^  ([a-z][\w-]*):\n", CODE.split("\njobs:\n", 1)[1], flags=re.M) == [
+        "lint", "test", "security", "docker"]
+    for name in ("lint", "test", "security", "docker"):
         block = job(name)
         assert "runs-on: ubuntu-24.04" in block
         assert re.search(r"timeout-minutes: \d+", block), name
@@ -171,3 +173,32 @@ def test_the_secret_scan_keeps_every_default_rule_with_one_narrow_exception():
     assert allowlist["regexes"] == [r"^sk_live_abcd1234efgh$"]
     assert set(allowlist) == {"description", "condition", "regexTarget", "paths", "regexes"}
     assert "--config .gitleaks.toml" in job("security")
+
+
+def test_the_security_job_also_audits_the_image_build_tool():
+    assert "pip-audit --strict --no-deps --disable-pip --progress-spinner off -r requirements-build.lock" in "\n".join(
+        run_commands(job("security")))
+
+
+def test_the_docker_job_builds_then_runs_the_real_smoke_test_then_checks_cleanup():
+    block = job("docker")
+    assert re.search(r"^    needs: lint$", block, flags=re.M)
+    commands = run_commands(block)
+    assert commands == [
+        "docker version && docker compose version",
+        "docker build --tag mervio:ci .",
+        "python scripts/container_smoke.py --image mervio:ci --skip-build",
+        'test -z "$(docker ps --all --quiet --filter label=com.docker.compose.project)'
+        '$(docker volume ls --quiet --filter label=com.docker.compose.project)'
+        '$(docker network ls --quiet --filter label=com.docker.compose.project)"',
+    ]
+    assert "--keep" not in block, "la pile est toujours supprimee"
+    assert "services:" not in block, "PostgreSQL vient du compose teste, pas d'un service du runner"
+
+
+def test_the_docker_job_publishes_nothing_and_uses_no_credential():
+    block = job("docker")
+    for forbidden in ("docker login", "docker push", "registry", "secrets.", "GITHUB_TOKEN", "--privileged",
+                      "PASSWORD", "packages: write", "id-token"):
+        assert forbidden not in block, forbidden
+    assert "persist-credentials: false" in block

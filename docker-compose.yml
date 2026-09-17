@@ -1,29 +1,164 @@
-# PostgreSQL local de developpement (Mission 004.1, ADR-004-002).
-# Aucun autre service: pas de Redis, pas de file, pas de stockage objet a ce stade.
+# Environnement conteneurise de DEVELOPPEMENT et de SMOKE TEST (Mission 004.3.8).
+# Pas un deploiement de production. Guide complet: docs/CONTAINER.md.
 #
-#   cp .env.example .env          # puis choisir un mot de passe local
-#   docker compose up -d postgres
-#   docker compose down -v        # detruit aussi le volume
+#   postgres   PostgreSQL 17.11 (digest de la CI) + bootstrap des roles (docker/postgres)
+#   worker     mervio worker            (demarre avec `up`)
+#   migrate    migrations Alembic       (profil ops: etape EXPLICITE, jamais au demarrage du worker)
+#   admin      mervio admin ...         (profil ops: commandes operateur ponctuelles)
 #
-# Le mot de passe vient de .env (ignore par Git). Aucune valeur par defaut n'est
-# fournie ici: compose refuse de demarrer sans elle.
+#   cp .env.example .env                 # puis quatre mots de passe (openssl rand -hex 24)
+#   docker compose build
+#   docker compose up -d --wait postgres
+#   docker compose --profile ops run --rm migrate
+#   docker compose up -d --wait worker
+#   docker compose --profile ops run --rm admin demo provision --owner 'demo|me' \
+#       --data-dir /var/lib/mervio/data/demo --service mervio_worker_svc
+#   docker compose down                  # (-v detruit aussi la base et les donnees de demo)
+#
+# Aucun secret ici: les mots de passe viennent de .env (ignore par Git) ou de l'environnement;
+# compose refuse de demarrer sans eux. Aucun autre service: ni Redis, ni file, ni HTTP.
+name: mervio
+
 services:
   postgres:
-    image: postgres:17
+    image: postgres:17.11-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0
     environment:
+      # superutilisateur du conteneur: bootstrap et tests seulement, jamais utilise par Mervio
       POSTGRES_USER: mervio_admin
       POSTGRES_PASSWORD: ${MERVIO_POSTGRES_PASSWORD:?definir MERVIO_POSTGRES_PASSWORD dans .env}
-      POSTGRES_DB: mervio_dev
-    ports:
-      # uniquement sur la boucle locale
-      - "127.0.0.1:55432:5432"
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+      MERVIO_BOOTSTRAP_DATABASE: mervio
+      MERVIO_BOOTSTRAP_MIGRATOR_ROLE: mervio_migrator
+      MERVIO_BOOTSTRAP_MIGRATOR_PASSWORD: ${MERVIO_MIGRATOR_DB_PASSWORD:?definir MERVIO_MIGRATOR_DB_PASSWORD dans .env}
+      MERVIO_BOOTSTRAP_APP_ROLE: mervio_app_user
+      MERVIO_BOOTSTRAP_APP_PASSWORD: ${MERVIO_APP_DB_PASSWORD:?definir MERVIO_APP_DB_PASSWORD dans .env}
+      MERVIO_BOOTSTRAP_WORKER_ROLE: mervio_worker_svc
+      MERVIO_BOOTSTRAP_WORKER_PASSWORD: ${MERVIO_WORKER_DB_PASSWORD:?definir MERVIO_WORKER_DB_PASSWORD dans .env}
     volumes:
       - mervio_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/10-mervio-bootstrap.sql:/docker-entrypoint-initdb.d/10-mervio-bootstrap.sql:ro
+    ports:
+      # uniquement sur la boucle locale (tests de developpement, inspection)
+      - "127.0.0.1:${MERVIO_POSTGRES_PORT:-55432}:5432"
+    networks:
+      - backend
+      - edge
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mervio_admin -d mervio_dev"]
+      # TCP: le serveur temporaire de l'initialisation n'ecoute que sur socket, il n'est donc pas
+      # declare pret avant la fin du bootstrap.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "mervio_admin", "-d", "mervio"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
+    stop_grace_period: 30s
+
+  worker:
+    image: ${MERVIO_IMAGE:-mervio:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MERVIO_ENV: ${MERVIO_ENV:-development}
+      # role worker: membre de mervio_app et mervio_worker, ni superutilisateur ni BYPASSRLS.
+      # Son principal `service:mervio_worker_svc` est derive de ce role par la base.
+      MERVIO_DATABASE_URL: postgresql://mervio_worker_svc:${MERVIO_WORKER_DB_PASSWORD:?definir MERVIO_WORKER_DB_PASSWORD dans .env}@postgres:5432/mervio
+      MERVIO_WORKER_NAME: ${MERVIO_WORKER_NAME:-compose-worker}
+      MERVIO_WORKER_HEALTH_FILE: /run/mervio/worker-health.json
+      MERVIO_LOG_FORMAT: json
+      MERVIO_LOG_LEVEL: ${MERVIO_LOG_LEVEL:-INFO}
+    volumes:
+      # fichiers d'import deposes par `admin`: le worker les LIT seulement
+      - mervio_data:/var/lib/mervio/data:ro
+    tmpfs:
+      - /run/mervio
+      - /tmp
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # tini en PID 1: transmet SIGTERM au worker et recolte les processus orphelins
+    init: true
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mervio", "worker", "healthcheck"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # superieur a MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS (30 par defaut): SIGKILL n'arrive
+    # qu'apres l'arret gracieux ou force du worker
+    stop_grace_period: 45s
+    restart: "no"
+
+  migrate:
+    image: ${MERVIO_IMAGE:-mervio:local}
+    pull_policy: never
+    profiles: ["ops"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "mervio.persistence"]
+    command: ["upgrade"]
+    environment:
+      # role proprietaire du schema: ni superutilisateur, ni BYPASSRLS, ni CREATEROLE
+      MERVIO_MIGRATION_DATABASE_URL: postgresql://mervio_migrator:${MERVIO_MIGRATOR_DB_PASSWORD:?definir MERVIO_MIGRATOR_DB_PASSWORD dans .env}@postgres:5432/mervio
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    networks:
+      - backend
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  admin:
+    image: ${MERVIO_IMAGE:-mervio:local}
+    pull_policy: never
+    profiles: ["ops"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["mervio", "admin"]
+    command: ["--help"]
+    environment:
+      # role applicatif: membre de mervio_app seulement; `Database` refuse superutilisateur et BYPASSRLS
+      MERVIO_DATABASE_URL: postgresql://mervio_app_user:${MERVIO_APP_DB_PASSWORD:?definir MERVIO_APP_DB_PASSWORD dans .env}@postgres:5432/mervio
+    volumes:
+      # `demo provision --data-dir /var/lib/mervio/data/...` ecrit ici, le worker y lit
+      - mervio_data:/var/lib/mervio/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    networks:
+      - backend
+    healthcheck:
+      disable: true
+    restart: "no"
+
+networks:
+  # interne: aucun acces sortant pour worker, migrate et admin
+  backend:
+    internal: true
+  # seulement pour publier le port PostgreSQL sur 127.0.0.1
+  edge: {}
 
 volumes:
   mervio_pgdata:
+  mervio_data:

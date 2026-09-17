@@ -65,6 +65,10 @@ REQUIRED_MODULES = (
     "tests.persistence.test_admin_operations",
     "tests.persistence.test_admin_migration",
     "tests.persistence.test_cli_admin_process",
+    # 004.3.8: conteneur (artefacts, pilote du smoke test, bootstrap PostgreSQL et verifications reelles)
+    "tests.test_container_artifacts",
+    "tests.test_container_smoke",
+    "tests.persistence.test_container_bootstrap",
     # les gardes elles-memes: si elles ne s'executent plus, la porte ne prouve plus rien
     "tests.test_pytest_guard",
     "tests.test_requirements_lock",

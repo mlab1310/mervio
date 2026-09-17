@@ -1,0 +1,5 @@
+# Outil de CONSTRUCTION du paquet dans l'etape `build` du Dockerfile (Mission 004.3.8).
+# Jamais present dans l'image finale. Version exacte: la construction se fait sans isolation
+# (`pip wheel --no-build-isolation`), donc sans telecharger un setuptools flottant.
+# Doit satisfaire [build-system].requires de pyproject.toml (tests/test_container_artifacts.py).
+setuptools==84.0.0
