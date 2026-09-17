@@ -13,7 +13,9 @@ Securite:
 Roles d'une session:
 - migrator : proprietaire de la base et du schema, NON superutilisateur;
 - app      : LOGIN, membre de mervio_app, ni superutilisateur ni BYPASSRLS (role applicatif reel);
-- bypass   : BYPASSRLS, membre de mervio_app; sert uniquement a prouver la barriere applicative seule.
+- bypass   : BYPASSRLS, membre de mervio_app; sert uniquement a prouver la barriere applicative seule;
+- worker, worker2 (004.3): LOGIN, membres de mervio_app ET mervio_worker, ni superutilisateur ni
+  BYPASSRLS; deux services distincts, donc deux principaux `service:<role>`.
 
 Sans MERVIO_TEST_ADMIN_DATABASE_URL, les tests PostgreSQL sont ignores, sauf si
 MERVIO_REQUIRE_DATABASE_TESTS=1 (CI): ils echouent alors.
@@ -37,9 +39,9 @@ from psycopg.conninfo import conninfo_to_dict  # noqa: E402
 
 ADMIN_URL_ENV = "MERVIO_TEST_ADMIN_DATABASE_URL"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
-TABLES = ("audit_events", "jobs", "reports", "analysis_runs", "ad_daily_performance", "campaigns", "refunds",
-          "payments", "order_lines", "orders", "products", "snapshot_sources", "data_snapshots", "connections",
-          "stores", "memberships", "users", "organizations")
+TABLES = ("service_authorizations", "audit_events", "jobs", "reports", "analysis_runs", "ad_daily_performance",
+          "campaigns", "refunds", "payments", "order_lines", "orders", "products", "snapshot_sources",
+          "data_snapshots", "connections", "stores", "memberships", "users", "organizations")
 
 
 @dataclass
@@ -96,7 +98,7 @@ def pg() -> PgCluster:
         pytest.fail(f"{ADMIN_URL_ENV} pointe vers un hote non local ({host}): refus par securite")
 
     suffix = secrets.token_hex(5)
-    passwords = {kind: secrets.token_hex(16) for kind in ("migrator", "app", "bypass")}
+    passwords = {kind: secrets.token_hex(16) for kind in ("migrator", "app", "bypass", "worker", "worker2")}
     cluster = PgCluster(admin, host or "127.0.0.1", str(params.get("port", "5432")), f"mervio_test_{suffix}",
                         suffix, passwords)
     from mervio.persistence import migrate
@@ -113,11 +115,15 @@ def pg() -> PgCluster:
                 sql.Identifier(cluster.role("app")), sql.Literal(passwords["app"])))
             conn.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER BYPASSRLS PASSWORD {} IN ROLE mervio_app").format(
                 sql.Identifier(cluster.role("bypass")), sql.Literal(passwords["bypass"])))
+            for kind in ("worker", "worker2"):
+                conn.execute(sql.SQL(
+                    "CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {} IN ROLE mervio_app, mervio_worker").format(
+                    sql.Identifier(cluster.role(kind)), sql.Literal(passwords[kind])))
         yield cluster
     finally:
         cluster.drop_database(cluster.database)
         with cluster.admin() as conn:
-            for kind in ("bypass", "app", "migrator"):
+            for kind in ("worker2", "worker", "bypass", "app", "migrator"):
                 conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(cluster.role(kind))))
 
 
@@ -172,3 +178,41 @@ def tenant_a(db):
 @pytest.fixture
 def tenant_b(db):
     return make_tenant(db, "B")
+
+
+# -- services (004.3) ------------------------------------------------------------------------
+
+@pytest.fixture
+def worker_db(db, pg):
+    """Connexion du role worker (membre de mervio_worker). Depend de `db`: base deja videe."""
+    from mervio.persistence.database import Database
+    database = Database(pg.url("worker"))
+    yield database
+    database.close()
+
+
+@pytest.fixture
+def worker2_db(db, pg):
+    from mervio.persistence.database import Database
+    database = Database(pg.url("worker2"))
+    yield database
+    database.close()
+
+
+@pytest.fixture
+def principal(worker_db):
+    from mervio.persistence.service import service_principal
+    return service_principal(worker_db)
+
+
+@pytest.fixture
+def principal2(worker2_db):
+    from mervio.persistence.service import service_principal
+    return service_principal(worker2_db)
+
+
+@pytest.fixture
+def worker_conn(worker_db, pg):
+    """SQL brut sous le role worker."""
+    with psycopg.connect(pg.url("worker"), autocommit=True) as conn:
+        yield conn

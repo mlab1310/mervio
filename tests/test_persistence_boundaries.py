@@ -125,6 +125,8 @@ def test_sql_fstrings_only_interpolate_reviewed_constants():
     allowed = {"_RUN_COLUMNS", "_REPORT_COLUMNS", "_SNAPSHOT_COLUMNS", "_STORE_COLUMNS", "_CONNECTION_COLUMNS",
                # 004.2: listes de colonnes constantes de jobs.py et audit.py
                "_JOB_COLUMNS", "_JOB_COLUMNS_QUALIFIED", "_AUDIT_COLUMNS",
+               # 004.3: liste de colonnes constante de service.py
+               "_AUTHORIZATION_COLUMNS",
                # snapshots._RowWriter._insert / _RowReader._rows et provenance.trace_record: constantes d'appel
                "table", "column_list", "arrays", "columns", "order"}
     for path in (SRC / "persistence").glob("*.py"):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Porte CI: le rapport JUnit de pytest prouve une execution COMPLETE (Mission 004.3).
 
-    python scripts/ci_test_gate.py reports/junit.xml --expected-tests 1291
+    python scripts/ci_test_gate.py reports/junit.xml --expected-tests 1390
 
 Independante de la configuration pytest (conftest, plugins): meme si une garde de la suite
 etait retiree par erreur, cette porte relit le resultat brut et refuse:
@@ -41,6 +41,9 @@ REQUIRED_MODULES = (
     "tests.persistence.test_jobs_query_plans",
     # 004.3: bail renouvelable, jeton d'exclusion, courses reelles
     "tests.persistence.test_jobs_lease",
+    # 004.3: identite de service, autorisations explicites, delegation, dispatcher
+    "tests.persistence.test_service_identity",
+    "tests.persistence.test_dispatcher",
     "tests.test_jobs_unit",
     # les gardes elles-memes: si elles ne s'executent plus, la porte ne prouve plus rien
     "tests.test_pytest_guard",

@@ -41,6 +41,10 @@ class UnsafeDatabaseConfiguration(PersistenceError):
     """Connexion refusee: role superutilisateur ou BYPASSRLS, encodage non UTF-8, URL absente."""
 
 
+class ServiceIdentityError(UnsafeDatabaseConfiguration):
+    """Le role connecte n'est pas le service attendu (non membre de mervio_worker, ou autre principal)."""
+
+
 class MoneyPrecisionError(PersistenceError):
     """Montant non representable exactement en numeric(19,4): refuse, jamais arrondi."""
 

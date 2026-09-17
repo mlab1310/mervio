@@ -51,6 +51,8 @@ class Permission(str, Enum):
     MANAGE_MEMBERS = "manage_members"
     #: supprimer des donnees (purge de retention)
     PURGE_DATA = "purge_data"
+    #: autoriser ou revoquer un service (worker) sur l'organisation (004.3)
+    MANAGE_SERVICES = "manage_services"
 
 
 MINIMUM_ROLE = {
@@ -64,6 +66,8 @@ MINIMUM_ROLE = {
     Permission.READ_AUDIT: Role.ADMIN,
     Permission.MANAGE_MEMBERS: Role.OWNER,
     Permission.PURGE_DATA: Role.OWNER,
+    # un service autorise traite TOUTES les donnees de l'organisation: decision du proprietaire
+    Permission.MANAGE_SERVICES: Role.OWNER,
 }
 
 

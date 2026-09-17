@@ -1,6 +1,7 @@
 """Journal d'audit en ajout seul.
 
-Une ligne repond a sept questions: QUI (`actor_type`, `actor_id`), a fait QUOI
+Une ligne repond a sept questions: QUI (`actor_type`, `actor_id`, et pour le compte de
+QUI `on_behalf_of`, 004.3), a fait QUOI
 (`action`), sur QUELLE RESSOURCE (`resource_type`, `resource_id`), pour QUELLE
 ORGANISATION (`organization_id`, `store_id`), QUAND (`created_at`), sous QUELLE
 CORRELATION (`correlation_id`), avec QUEL RESULTAT (`outcome`).
@@ -34,7 +35,7 @@ class ActorType(str, Enum):
     USER = "user"
     #: la plateforme elle-meme (recuperation d'un bail, purge planifiee)
     SYSTEM = "system"
-    #: un worker executant un travail pour le compte d'un utilisateur
+    #: un worker executant un travail pour le compte d'un utilisateur (`on_behalf_of`)
     WORKER = "worker"
 
 
@@ -84,17 +85,23 @@ class AuditEvent:
     outcome: str
     metadata: dict
     created_at: datetime
+    #: acteur metier (humain) pour le compte duquel l'acteur technique agit (004.3)
+    on_behalf_of: Optional[UUID] = None
 
 
 _AUDIT_COLUMNS = ("id, organization_id, store_id, actor_type, actor_id, action, resource_type, resource_id, "
-                  "correlation_id, outcome, metadata, created_at")
+                  "correlation_id, outcome, metadata, created_at, on_behalf_of")
 
 
 def record(conn, *, organization_id: UUID, action, resource_type, resource_id: UUID,
            correlation_id, outcome=Outcome.SUCCEEDED, actor_type=ActorType.SYSTEM,
            actor_id: Optional[UUID] = None, store_id: Optional[UUID] = None,
-           metadata: Optional[Mapping[str, Any]] = None) -> AuditEvent:
+           metadata: Optional[Mapping[str, Any]] = None, on_behalf_of: Optional[UUID] = None) -> AuditEvent:
     """Ajoute un evenement dans la transaction ouverte `conn`.
+
+    `actor_*` nomme l'acteur technique (un humain, le systeme, un principal de service);
+    `on_behalf_of` l'humain a l'origine de la demande quand l'acteur agit pour lui. Sous
+    le role worker, la base impose l'un et l'autre (revision 0007).
 
     `metadata` passe par le meme filtre que les logs: une cle qui evoque un secret
     ou une PII est remplacee par `[redacted]`, une valeur trop longue est tronquee,
@@ -102,11 +109,12 @@ def record(conn, *, organization_id: UUID, action, resource_type, resource_id: U
     """
     row = conn.execute(
         "INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, action, resource_type, "
-        "resource_id, correlation_id, outcome, metadata) "
-        f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_AUDIT_COLUMNS}",
+        "resource_id, correlation_id, outcome, metadata, on_behalf_of) "
+        f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_AUDIT_COLUMNS}",
         (uuid.uuid4(), organization_id, store_id, ActorType(actor_type).value, actor_id, Action(action).value,
          ResourceType(resource_type).value, _uuid(resource_id, "resource"), _uuid(correlation_id, "correlation"),
-         Outcome(outcome).value, Jsonb(scrub(metadata or {}))),
+         Outcome(outcome).value, Jsonb(scrub(metadata or {})),
+         _uuid(on_behalf_of, "on_behalf_of") if on_behalf_of is not None else None),
     ).fetchone()
     return AuditEvent(*row)
 
@@ -114,12 +122,13 @@ def record(conn, *, organization_id: UUID, action, resource_type, resource_id: U
 def record_event(session: TenantSession, *, action, resource_type, resource_id: UUID, correlation_id,
                  outcome=Outcome.SUCCEEDED, actor_type=ActorType.SYSTEM, actor_id: Optional[UUID] = None,
                  store_id: Optional[UUID] = None, metadata: Optional[Mapping[str, Any]] = None,
-                 permission: Permission = Permission.RUN_JOBS) -> AuditEvent:
+                 permission: Permission = Permission.RUN_JOBS, on_behalf_of: Optional[UUID] = None) -> AuditEvent:
     """Ajoute un evenement dans sa propre transaction (hors d'une unite de travail existante)."""
     with session.transaction(permission) as conn:
         return record(conn, organization_id=session.organization_id, action=action, resource_type=resource_type,
                       resource_id=resource_id, correlation_id=correlation_id, outcome=outcome,
-                      actor_type=actor_type, actor_id=actor_id, store_id=store_id, metadata=metadata)
+                      actor_type=actor_type, actor_id=actor_id, store_id=store_id, metadata=metadata,
+                      on_behalf_of=on_behalf_of)
 
 
 def list_events(session: TenantSession, *, resource_type=None, resource_id: Optional[UUID] = None,
