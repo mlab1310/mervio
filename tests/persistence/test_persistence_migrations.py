@@ -36,8 +36,8 @@ def _tables(url):
 def test_revisions_are_linear_and_versioned():
     assert migrate.revisions() == ["0001_tenancy", "0002_snapshots", "0003_analysis_reports", "0004_jobs",
                                    "0005_audit", "0006_job_leases", "0007_service_identity", "0008_admin_audit",
-                                   "0009_qualify_security_functions"]
-    assert migrate.head_revision() == "0009_qualify_security_functions"
+                                   "0009_qualify_security_functions", "0010_qualify_residual_security"]
+    assert migrate.head_revision() == "0010_qualify_residual_security"
 
 
 def test_empty_database_upgrades_to_head(empty_database):
@@ -65,6 +65,8 @@ def test_each_revision_upgrades_and_downgrades_step_by_step(empty_database):
         "0008_admin_audit": set(),
         # 004.3.10: qualification des fonctions de securite (anti-ombrage pg_temp), aucune table
         "0009_qualify_security_functions": set(),
+        # 004.4.1: gardes d'instantanes qualifiees (risque residuel D-049), aucune table
+        "0010_qualify_residual_security": set(),
     }
     present = {"alembic_version"}
     for revision in migrate.revisions():
