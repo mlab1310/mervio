@@ -86,7 +86,7 @@ def test_upgrade_accepts_admin_events_and_downgrade_keeps_them_but_refuses_new_o
         assert validated == {"audit_events_action_check": False, "audit_events_resource_type_check": False}
 
     migrate.upgrade(database)
-    assert migrate.current_revision(database) == "0008_admin_audit"
+    assert migrate.current_revision(database) == migrate.head_revision()
     with psycopg.connect(database, autocommit=True) as conn:
         _trace(conn, organization_id, "service.revoked", "service_authorization")
         assert _count(conn, organization_id) == 9
