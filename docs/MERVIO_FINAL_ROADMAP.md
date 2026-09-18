@@ -324,6 +324,11 @@ d'organisations.
    - rôle `mervio_dispatcher` et fonction `SECURITY DEFINER` qui ne renvoie que des métadonnées d'aiguillage
      (organisation, nombre de travaux prêts) ;
    - le worker découvre les organisations ayant du travail, avec équité (tour de rôle).
+   > **Mise à jour 004.3.3 (implémentation réelle) :** cette option `SECURITY DEFINER` / rôle
+   > `mervio_dispatcher` **n'a pas été retenue**. Le répartiteur adopté (révision `0007_service_identity`,
+   > `src/mervio/persistence/dispatch.py`) repose sur **RLS + identité de service + autorisation explicite
+   > par organisation** (`service_authorizations`), **sans fonction `SECURITY DEFINER` ni rôle
+   > `mervio_dispatcher`**. Détail et raisons : `docs/DECISIONS.md` (D-050).
 5. **Enchaînement minimal** : un import réussi peut demander une analyse (champ `then` dans la charge utile, validé ;
    clé d'idempotence dérivée).
 6. **CLI d'administration** (`mervio admin …`) : créer utilisateur, organisation, boutique, connexion CSV ;
