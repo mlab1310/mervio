@@ -33,7 +33,7 @@ def make_order(order_id, day, customer, lines, discount=0.0, shipping=0.0):
         currency="EUR", subtotal=subtotal, discount=discount, shipping=shipping,
         tax=round(subtotal * 0.2, 2),
         total=subtotal + shipping, financial_status="paid",
-        items=items, customer_email=customer,
+        items=items,
     )
 
 

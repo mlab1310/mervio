@@ -36,6 +36,12 @@ sys.path.insert(0, str(HERE))
 
 import perf_harness as harness  # noqa: E402
 
+from mervio.identity import MasterKey  # noqa: E402
+
+#: cle maitre d'identite du banc (004.4.2): tiree a l'execution, jamais ecrite
+TEST_MASTER_KEY_HEX = os.urandom(32).hex()
+TEST_MASTER_KEY = MasterKey.from_hex(TEST_MASTER_KEY_HEX)
+
 ANALYSIS_DAY = date.fromisoformat(harness.ANALYSIS_DAY)
 SOURCES = {"shopify_orders": "shopify_orders.csv", "shopify_products": "shopify_products.csv",
            "stripe": "stripe_transactions.csv", "google_ads": "google_ads.csv"}
@@ -159,12 +165,16 @@ def persistence(payload: Mapping[str, Any]) -> Dict[str, Any]:
     paths = engine_paths(directory)
     files = {kind: path for kind, path in vars(paths).items() if path}
 
-    dataset = _timed("csv_load_dataset", lambda: load_dataset(paths), timings)
+    # 004.4.2 (F-08): un instantane persiste exige la cle d'identite de l'organisation
+    from mervio.persistence.identity_keys import ensure_identity_key
+    identity = ensure_identity_key(session, TEST_MASTER_KEY)
+    dataset = _timed("csv_load_dataset", lambda: load_dataset(paths, identity), timings)
     order_count = len(dataset.orders)
     sources = [SourceFile(kind, *file_sha256(path)) for kind, path in files.items()]
     record = _timed("db_write_snapshot", lambda: snapshots.write_snapshot(
         session, store_id=store.id, connection_id=connection.id, dataset=dataset, sources=sources,
-        inputs_sha256=uuid.uuid4().hex + uuid.uuid4().hex, synthetic=True, synthetic_manifest=manifest), timings)
+        inputs_sha256=uuid.uuid4().hex + uuid.uuid4().hex, synthetic=True, identity=identity,
+        synthetic_manifest=manifest), timings)
     with app.transaction(organization_id=session.organization_id, user_id=session.user_id) as conn:
         first_sizes = _table_sizes(conn)
     loaded = _timed("db_load_dataset", lambda: snapshots.load_dataset(session, store.id, record.id), timings)
@@ -184,7 +194,7 @@ def persistence(payload: Mapping[str, Any]) -> Dict[str, Any]:
     request = SnapshotImportRequest(synthetic=True, synthetic_manifest=manifest,
                                     **{kind: str(path) for kind, path in files.items()})
     imported = _timed("app_import_csv_snapshot", lambda: import_csv_snapshot(
-        session, store_id=other_store.id, connection_id=other_connection.id, request=request), timings)
+        session, store_id=other_store.id, connection_id=other_connection.id, request=request, master_key=TEST_MASTER_KEY), timings)
 
     with app.transaction(organization_id=session.organization_id, user_id=session.user_id) as conn:
         sizes = _table_sizes(conn)
@@ -379,6 +389,7 @@ class WorkerProcess:
             "MERVIO_LOG_LEVEL": log_level, "MERVIO_ENV": "development",
             # attente de file courte et explicite: la latence de sondage est rapportee a part
             "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.1", "MERVIO_WORKER_POLL_MAX_SECONDS": "1",
+            "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
         })
         environment.update(extra or {})
         self._log = open(self.log_path, "w", encoding="utf-8")
@@ -602,7 +613,7 @@ def lease(payload: Mapping[str, Any]) -> Dict[str, Any]:
             result = import_csv_snapshot(
                 context.session, store_id=uuid.UUID(pair["store_id"]), connection_id=uuid.UUID(pair["connection_id"]),
                 request=SnapshotImportRequest(synthetic=True, synthetic_manifest=manifest,
-                                              **_sources(directory)))
+                                              **_sources(directory)), master_key=TEST_MASTER_KEY)
             count += result.status == "completed"
         return {"imports": count}
 

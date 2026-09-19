@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 
 from mervio.analytics.pipeline import run_analysis
+from mervio.identity import CustomerIdentity
 from mervio.llm import build_llm_context
 
 REQUIRED_KEYS = {
@@ -78,10 +79,22 @@ def test_data_quality_records_injected_defects(sample_report):
 
 
 def test_analysis_is_deterministic(sample_paths):
-    a = run_analysis(sample_paths, today=date(2026, 9, 14))
-    b = run_analysis(sample_paths, today=date(2026, 9, 14))
+    # 004.4.2 (D-058): determinisme a cle d'identite IDENTIQUE; sans cle, une cle ephemere est tiree
+    identity = CustomerIdentity.ephemeral()
+    a = run_analysis(sample_paths, today=date(2026, 9, 14), identity=identity)
+    b = run_analysis(sample_paths, today=date(2026, 9, 14), identity=identity)
     a["_meta"].pop("generated_at"), b["_meta"].pop("generated_at")
     assert a == b
+
+
+def test_without_an_explicit_key_only_the_customer_pseudonyms_differ(sample_paths):
+    a = run_analysis(sample_paths, today=date(2026, 9, 14))
+    b = run_analysis(sample_paths, today=date(2026, 9, 14))
+    for report in (a, b):
+        report["_meta"].pop("generated_at")
+    ids = [[c.pop("customer_id") for c in r["customers"]["top_customers"]] for r in (a, b)]
+    assert a == b  # KPI, series, constats, clients (hors pseudonymes): identiques
+    assert ids[0] != ids[1] and all(i.startswith("cust_") for i in ids[0] + ids[1])
 
 
 def test_time_series_length_matches_lookback(sample_report):

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import secrets
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,12 @@ from mervio.settings import (
 
 PASSWORD = "Sup3r-S3cret-Pa55"
 URL = f"postgresql://mervio_worker:{PASSWORD}@db.internal:6543/mervio"
+#: cle maitre d'identite FACTICE, tiree a l'execution (jamais de cle litterale dans le depot)
+MASTER_KEY = secrets.token_hex(32)
 
 
 def load(**variables):
-    environ = {"MERVIO_DATABASE_URL": URL}
+    environ = {"MERVIO_DATABASE_URL": URL, "MERVIO_IDENTITY_MASTER_KEY": MASTER_KEY}
     environ.update({k: v for k, v in variables.items() if v is not None})
     for key in [k for k, v in variables.items() if v is None]:
         environ.pop(key, None)
@@ -246,9 +249,10 @@ def test_an_explicit_worker_name_must_be_safe(name):
 
 
 def test_the_default_worker_name_is_a_sanitized_hostname():
-    settings = WorkerSettings.from_env({"MERVIO_DATABASE_URL": URL}, hostname=lambda: "pod name/ü" + "x" * 50)
+    environ = {"MERVIO_DATABASE_URL": URL, "MERVIO_IDENTITY_MASTER_KEY": MASTER_KEY}
+    settings = WorkerSettings.from_env(environ, hostname=lambda: "pod name/ü" + "x" * 50)
     assert settings.worker_name == ("pod-name--" + "x" * 30)
-    assert WorkerSettings.from_env({"MERVIO_DATABASE_URL": URL}, hostname=lambda: "").worker_name == "worker"
+    assert WorkerSettings.from_env(environ, hostname=lambda: "").worker_name == "worker"
 
 
 def test_the_health_file_must_be_absolute():
@@ -265,6 +269,7 @@ def test_every_problem_is_reported_at_once():
 
 def test_the_real_environment_is_read_by_default(monkeypatch):
     monkeypatch.setenv("MERVIO_DATABASE_URL", URL)
+    monkeypatch.setenv("MERVIO_IDENTITY_MASTER_KEY", MASTER_KEY)
     monkeypatch.setenv("MERVIO_WORKER_DISPATCH_BATCH", "7")
     assert WorkerSettings.from_env().dispatch_batch == 7
 
@@ -279,3 +284,43 @@ def test_the_settings_module_has_no_database_dependency():
             imported.add(("." * node.level) + (node.module or ""))
     assert not {name for name in imported if name.split(".")[0] in ("psycopg", "sqlalchemy", "alembic")}
     assert not {name for name in imported if "persistence" in name or "workers" in name}
+
+
+# -- cle maitre d'identite (004.4.2, D-053) --------------------------------------------------
+
+def test_the_identity_master_key_is_required_when_imports_are_served():
+    refused({"MERVIO_IDENTITY_MASTER_KEY"}, MERVIO_IDENTITY_MASTER_KEY=None)
+    with pytest.raises(SettingsError) as error:  # `import` est un mot du vocabulaire, pas une valeur secrete
+        load(MERVIO_IDENTITY_MASTER_KEY=None, MERVIO_WORKER_JOB_TYPES="import")
+    assert [name for name, _ in error.value.problems] == ["MERVIO_IDENTITY_MASTER_KEY"]
+
+
+def test_the_identity_master_key_is_optional_without_imports():
+    settings = load(MERVIO_IDENTITY_MASTER_KEY=None, MERVIO_WORKER_JOB_TYPES="analysis,purge")
+    assert settings.identity_master_key is None
+    assert settings.public()["identity_master_configured"] is False
+
+
+@pytest.mark.parametrize("value", ["ab" * 31, "zz" * 32, "abcde" * 13, "not-hexadecimal-" * 5])
+def test_a_malformed_identity_master_key_is_refused_without_its_value(value):
+    refused({"MERVIO_IDENTITY_MASTER_KEY"}, MERVIO_IDENTITY_MASTER_KEY=value)
+
+
+def test_the_identity_master_key_can_come_from_a_secret_file(tmp_path):
+    secret_file = tmp_path / "identity-master-key"
+    secret_file.write_text(MASTER_KEY + "\n", encoding="utf-8")
+    settings = load(MERVIO_IDENTITY_MASTER_KEY=None, MERVIO_IDENTITY_MASTER_KEY_FILE=str(secret_file))
+    assert settings.identity_master_key == Secret(MASTER_KEY)
+    refused({"MERVIO_IDENTITY_MASTER_KEY"}, MERVIO_IDENTITY_MASTER_KEY_FILE=str(secret_file))  # les deux: refus
+    refused({"MERVIO_IDENTITY_MASTER_KEY_FILE"}, MERVIO_IDENTITY_MASTER_KEY=None,
+            MERVIO_IDENTITY_MASTER_KEY_FILE="relative/key")
+    refused({"MERVIO_IDENTITY_MASTER_KEY_FILE"}, MERVIO_IDENTITY_MASTER_KEY=None,
+            MERVIO_IDENTITY_MASTER_KEY_FILE=str(tmp_path / "absent"))
+
+
+def test_the_identity_master_key_is_never_displayed():
+    settings = load()
+    assert settings.identity_master_key == Secret(MASTER_KEY)
+    for text in (repr(settings), str(settings), repr(settings.identity_master_key), str(settings.public())):
+        assert MASTER_KEY not in text
+    assert settings.public()["identity_master_configured"] is True

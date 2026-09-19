@@ -72,9 +72,15 @@ Trois migrations Alembic linéaires :
 - `OrderItem` : `sku`, `title`, `quantity`, `unit_price`, `product_ref`.
 - `Payment` : `payment_ref`, `created_at`, `amount`, `fee`, `net`, `status`, `order_ref`, `customer_email`, `source`.
 - `Refund` : `refund_ref`, `created_at`, `amount`, `order_ref`, `source`.
+
 - `Product` : `sku`, `product_ref`, `title`, `unit_cogs`.
 - `Campaign` : `campaign_ref`, `name`, `channel`.
 - `DailyAdPerformance` : `campaign_ref`, `day`, `spend`, `impressions`, `clicks`, `conversions`, `conversion_value`.
+
+> **Mise à jour 004.4.2 (révision `0011_identity_pii_schema`)** : `orders.customer_email` et
+> `payments.customer_email` sont supprimés ; `customer_ref` est une référence à clé (`c1:`/`g1:`,
+> D-053) imposée par la contrainte `orders_customer_ref_keyed` pour toute nouvelle ligne. Le texte
+> ci-dessus décrit le schéma de 004.1.
 
 **La sémantique 003.3 est transportée, jamais réinterprétée :**
 - `subtotal` reste le sous-total après remise, avant port et taxes (D-041) ;
@@ -364,6 +370,10 @@ Machine : Apple Silicon (18 cœurs), PostgreSQL 17.11 local, Python 3.11.16.
    dans la période.
 9. `_meta.generated_at` diffère entre deux exécutions : c'est la seule différence possible entre deux rapports d'une
    même analyse (déjà vrai en CLI).
+   > **Note 004.4.2 (audit post-implémentation, F-01)** : affirmation vraie dans un même processus seulement.
+   > Entre deux processus, l'ordre de `root_causes[].campaign_contributors` peut aussi différer lorsque deux
+   > campagnes ont le même `conversions_delta` (itération d'ensemble, `analytics/root_cause.py`, dépendante de
+   > `PYTHONHASHSEED`). Risque résiduel MEDIUM, préexistant, hors 004.4.2 : `docs/MISSION_004_4_2_HARDENING.md`.
 10. **Zéro négatif** (`-0.0`) et montants à plus de 4 décimales sont refusés à l'import. Cas non observé dans les
     connecteurs actuels (la plupart des champs sont normalisés par `or 0.0`).
 11. **Tests PostgreSQL ignorés** sans base configurée : la CI doit fournir PostgreSQL et

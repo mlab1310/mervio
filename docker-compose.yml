@@ -68,6 +68,8 @@ services:
       # Son principal `service:mervio_worker_svc` est derive de ce role par la base.
       MERVIO_DATABASE_URL: postgresql://mervio_worker_svc:${MERVIO_WORKER_DB_PASSWORD:?definir MERVIO_WORKER_DB_PASSWORD dans .env}@postgres:5432/mervio
       MERVIO_WORKER_NAME: ${MERVIO_WORKER_NAME:-compose-worker}
+      # cle maitre d'identite (004.4.2, D-053): hors base, jamais journalisee; obligatoire pour les imports
+      MERVIO_IDENTITY_MASTER_KEY: ${MERVIO_IDENTITY_MASTER_KEY:?definir MERVIO_IDENTITY_MASTER_KEY dans .env}
       MERVIO_WORKER_HEALTH_FILE: /run/mervio/worker-health.json
       MERVIO_LOG_FORMAT: json
       MERVIO_LOG_LEVEL: ${MERVIO_LOG_LEVEL:-INFO}

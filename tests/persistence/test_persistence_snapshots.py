@@ -19,12 +19,12 @@ from mervio.persistence.errors import MoneyPrecisionError, NotFound, SnapshotInt
 from mervio.persistence.snapshots import SourceFile, write_snapshot
 from mervio.persistence.stores import create_store, revoke_connection
 
-from .persistence_support import SAMPLE_FILES, engine_files, make_tenant
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY, engine_files, make_tenant, org_identity
 
 
 def _import(tenant, files, **extra):
     return import_csv_snapshot(tenant.session, store_id=tenant.store_id, connection_id=tenant.connection_id,
-                               request=SnapshotImportRequest(**files, **extra))
+                               request=SnapshotImportRequest(**files, **extra), master_key=TEST_MASTER_KEY)
 
 
 def test_sample_import_restores_a_dataset_equal_to_the_csv_ingestion(db, tenant_a):
@@ -32,7 +32,7 @@ def test_sample_import_restores_a_dataset_equal_to_the_csv_ingestion(db, tenant_
     assert result.status == "completed"
     record = result.snapshot
     assert record.status == "completed" and record.ingested_at is not None
-    expected = load_dataset(SourcePaths(**SAMPLE_FILES))
+    expected = load_dataset(SourcePaths(**SAMPLE_FILES), org_identity(tenant_a))  # D-058: meme cle
     restored = snapshots.load_dataset(tenant_a.session, tenant_a.store_id, record.id)
     assert restored == expected
     # ordre des listes et des dictionnaires: condition des sommes flottantes identiques
@@ -170,13 +170,14 @@ def test_records_of_a_sealed_snapshot_cannot_be_modified_or_deleted(owner, seale
 
 
 def test_import_is_all_or_nothing(db, tenant_a):
-    dataset = load_dataset(SourcePaths(**SAMPLE_FILES))
+    identity = org_identity(tenant_a)  # 004.4.2 (F-08): cle d'organisation, seul le defaut vise est en cause
+    dataset = load_dataset(SourcePaths(**SAMPLE_FILES), identity)
     last = dataset.orders[-1]
     dataset.orders[-1] = replace(last, total=12.345678)  # non representable: refuse en fin d'ecriture
     sources = [SourceFile(kind, "0" * 64, 1) for kind in SAMPLE_FILES]
     with pytest.raises(MoneyPrecisionError):
         write_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                       dataset=dataset, sources=sources, inputs_sha256="1" * 64, synthetic=False)
+                       dataset=dataset, sources=sources, inputs_sha256="1" * 64, synthetic=False, identity=identity)
     assert snapshots.list_snapshots(tenant_a.session, tenant_a.store_id) == []
 
 
@@ -184,9 +185,13 @@ def test_import_is_all_or_nothing(db, tenant_a):
                                      "missing_source_file"])
 def test_inconsistent_datasets_are_refused(db, tenant_a, corrupt):
     at = datetime(2026, 9, 1, 12)
-    order = Order("#1", "c@example.invalid", at, "EUR", 10.0, 0.0, 0.0, 0.0, 10.0, "paid",
+    # 004.4.2: reference client calculee avec la cle de l'ORGANISATION (F-08), pour que seul le defaut
+    # vise soit en cause
+    identity = org_identity(tenant_a)
+    order = Order("#1", identity.ref_email("c@example.invalid"), at, "EUR", 10.0, 0.0, 0.0,
+                  0.0, 10.0, "paid",
                   items=[OrderItem("#1", "A", "A", 1, 10.0)])
-    dataset = Dataset(orders=[order], quality=DataQualityReport(), currency="EUR")
+    dataset = Dataset(orders=[order], quality=DataQualityReport(), currency="EUR", identity_key_id=identity.key_id)
     kinds = ["shopify_orders"]
     if corrupt == "line_of_other_order":
         order.items[0] = OrderItem("#2", "A", "A", 1, 10.0)
@@ -204,7 +209,7 @@ def test_inconsistent_datasets_are_refused(db, tenant_a, corrupt):
     with pytest.raises((SnapshotIntegrityError, MoneyPrecisionError)):
         write_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
                        dataset=dataset, sources=[SourceFile(k, "0" * 64, 1) for k in kinds],
-                       inputs_sha256="2" * 64, synthetic=False)
+                       inputs_sha256="2" * 64, synthetic=False, identity=identity)
     assert snapshots.list_snapshots(tenant_a.session, tenant_a.store_id) == []
 
 
@@ -229,4 +234,4 @@ def test_synthetic_generator_dataset_roundtrips(db, tenant_a, synthetic_set):
     assert result.status == "completed" and result.snapshot.synthetic and result.snapshot.not_for_production
     assert result.snapshot.synthetic_manifest["not_for_production"] is True
     restored = snapshots.load_dataset(tenant_a.session, tenant_a.store_id, result.snapshot.id)
-    assert restored == load_dataset(SourcePaths(**files))
+    assert restored == load_dataset(SourcePaths(**files), org_identity(tenant_a))

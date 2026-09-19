@@ -17,6 +17,8 @@ from mervio.workers.errors import PermanentJobError, RetryableJobError
 from mervio.workers.handlers import HandlerRegistry, default_registry
 from mervio.workers.worker import Worker
 
+from .persistence_support import TEST_MASTER_KEY
+
 #: Crochet des tests en processus: appele par le gestionnaire `after_work` avec son contexte.
 AFTER_WORK: List[Callable] = []
 
@@ -63,7 +65,7 @@ def scripted_registry(*, with_defaults: bool = False) -> HandlerRegistry:
     registry = HandlerRegistry()
     if with_defaults:
         for kind in (JobType.IMPORT, JobType.PURGE):
-            registry.register(kind, default_registry().resolve(kind))
+            registry.register(kind, default_registry(identity_master=TEST_MASTER_KEY).resolve(kind))
     return registry.register(JobType.ANALYSIS, scripted_handler)
 
 

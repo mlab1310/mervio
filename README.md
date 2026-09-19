@@ -49,8 +49,13 @@ Produit dans `--out` :
 Autres options : `--grain week\|month`, `--lookback N`, `--today AAAA-MM-JJ`,
 `--print-report`, `--verbose`.
 
+Identité client (004.4.2) : aucun e-mail n'entre dans le modèle ni dans le rapport ; chaque client
+est une référence HMAC à clé. Par défaut la clé est **éphémère** (pseudonymes non liables d'une
+exécution à l'autre) ; `--identity-key-file FICHIER` (32 octets en hexadécimal) rend le rapport
+reproductible octet pour octet.
+
 ```bash
-python -m pytest        # suite complète : 2147 tests (avec PostgreSQL : 2147 passés, 0 échec, 0 ignoré ; sans base, les tests PostgreSQL sont ignorés)
+python -m pytest        # suite complète : 2253 tests (avec PostgreSQL : 2253 passés, 0 échec, 0 ignoré ; sans base, les tests PostgreSQL sont ignorés)
 ```
 
 ## Persistance PostgreSQL (optionnelle, Mission 004.1)
@@ -92,6 +97,7 @@ Détails : `docs/MISSION_004_2_HANDOFF.md`.
 ```bash
 pip install -e '.[persistence]'
 MERVIO_DATABASE_URL=postgresql://<role>@<hote>/<base> \
+MERVIO_IDENTITY_MASTER_KEY=<openssl rand -hex 32> \
 MERVIO_WORKER_HEALTH_FILE=/run/mervio/health.json \
 mervio worker                              # ou: python -m mervio.cli worker
 mervio worker healthcheck [--ready] [--json]
@@ -125,7 +131,7 @@ applicatif ordinaire) ; chaque changement est audité. Procédure : `docs/ADMIN_
 ## Conteneur (Mission 004.3.8)
 
 ```bash
-cp .env.example .env                      # quatre mots de passe: openssl rand -hex 24
+cp .env.example .env                      # quatre mots de passe (openssl rand -hex 24) + cle d'identite (openssl rand -hex 32)
 docker compose build
 docker compose up -d --wait postgres      # PostgreSQL 17 + bootstrap des roles (aucun superutilisateur pour Mervio)
 docker compose --profile ops run --rm migrate          # migrations: etape explicite

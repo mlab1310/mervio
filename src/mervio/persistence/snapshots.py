@@ -23,6 +23,7 @@ from psycopg.types.numeric import FloatLoader
 
 from ..config import ENGINE_VERSION
 from ..domain.models import Campaign, DailyAdPerformance, Dataset, Order, OrderItem, Payment, Product, Refund
+from ..identity import ORIGIN_ORGANIZATION, CustomerIdentity
 from .codec import quality_from_document, quality_to_document
 from .errors import ImportRejected, NotFound, SnapshotIntegrityError
 from .money import money_to_db, optional_money_to_db
@@ -33,8 +34,10 @@ CSV_SOURCE = "csv"
 CSV_CONNECTOR = "mervio.ingestion.csv"
 #: formats de fichiers lus par les connecteurs CSV actuels
 CSV_SCHEMA_VERSION = "shopify_orders_csv/1,shopify_products_csv/1,stripe_csv/1,google_ads_csv/1"
-#: la normalisation est le code des connecteurs du moteur: sa version suit celle du moteur
-NORMALIZATION_VERSION = f"mervio-ingestion/{ENGINE_VERSION}"
+#: Semantique des donnees normalisees, INDEPENDANTE de la version du moteur (D-058).
+#: "mervio-normalization/2" (004.4.2): reference client a cle (`c1:`/`g1:`), aucun e-mail persiste.
+#: Les instantanes anterieurs portent "mervio-ingestion/0.1.0" (reference client = e-mail, D-057).
+NORMALIZATION_VERSION = "mervio-normalization/2"
 
 SOURCE_KINDS = ("shopify_orders", "shopify_products", "stripe", "google_ads")
 _REFUND_SOURCE_KIND = {"shopify": "shopify_orders", "stripe": "stripe"}
@@ -99,10 +102,19 @@ def write_snapshot(
     sources: Sequence[SourceFile],
     inputs_sha256: str,
     synthetic: bool,
+    identity: CustomerIdentity,
     synthetic_manifest: Optional[dict] = None,
     supersedes_snapshot_id: Optional[UUID] = None,
 ) -> SnapshotRecord:
-    """Persiste un Dataset normalise comme instantane scelle. Tout ou rien."""
+    """Persiste un Dataset normalise comme instantane scelle. Tout ou rien.
+
+    `identity` (obligatoire, 004.4.2, F-08): la cle d'identite de l'ORGANISATION de la session
+    (`persistence.identity_keys.ensure_identity_key`). Le jeu doit avoir ete normalise avec
+    elle (`dataset.identity_key_id`): un jeu calcule avec une cle ephemere ou explicite (CLI
+    locale), ou avec la cle d'une autre organisation, est refuse avant toute ecriture. Aucune
+    reference client non liable ne peut ainsi entrer en base.
+    """
+    _require_organization_identity(session, dataset, identity)
     synthetic = bool(synthetic or (synthetic_manifest or {}).get("synthetic"))
     kinds = [s.kind for s in sources]
     if len(set(kinds)) != len(kinds) or any(k not in SOURCE_KINDS for k in kinds):
@@ -153,6 +165,16 @@ def write_snapshot(
              Jsonb(quality_to_document(dataset.quality)), session.organization_id, snapshot_id),
         ).fetchone()
     return SnapshotRecord(*row)
+
+
+def _require_organization_identity(session: TenantSession, dataset: Dataset, identity: CustomerIdentity) -> None:
+    """Garde F-08: seule la cle d'identite de l'organisation de la session peut alimenter la base."""
+    if not isinstance(identity, CustomerIdentity) or identity.origin != ORIGIN_ORGANIZATION:
+        raise SnapshotIntegrityError("cle d'identite d'organisation requise pour persister un instantane")
+    if identity.organization_id != session.organization_id:
+        raise SnapshotIntegrityError("cle d'identite d'une autre organisation")
+    if dataset.identity_key_id != identity.key_id:
+        raise SnapshotIntegrityError("jeu de donnees normalise avec une autre cle d'identite")
 
 
 def record_failed_snapshot(
@@ -262,7 +284,7 @@ class _RowWriter:
 
         def rows():
             for position, o in enumerate(orders):
-                yield (source_id, position, o.source, o.order_id, o.order_id, o.customer_id, o.customer_email,
+                yield (source_id, position, o.source, o.order_id, o.order_id, o.customer_id,
                        _utc(o.created_at), o.currency,
                        money_to_db(o.subtotal, field="orders.subtotal"), money_to_db(o.discount, field="orders.discount"),
                        money_to_db(o.shipping, field="orders.shipping"), money_to_db(o.tax, field="orders.tax"),
@@ -270,9 +292,8 @@ class _RowWriter:
         return self._insert(
             "orders",
             ("snapshot_source_id", "position", "source", "source_record_id", "order_ref", "customer_ref",
-             "customer_email", "created_at", "currency", "subtotal", "discount", "shipping", "tax", "total",
-             "financial_status"),
-            ("uuid", "int", "text", "text", "text", "text", "text", "timestamptz", "text", "numeric", "numeric",
+             "created_at", "currency", "subtotal", "discount", "shipping", "tax", "total", "financial_status"),
+            ("uuid", "int", "text", "text", "text", "text", "timestamptz", "text", "numeric", "numeric",
              "numeric", "numeric", "numeric", "text"), rows())
 
     def _order_lines(self, orders: List[Order]) -> int:
@@ -299,13 +320,13 @@ class _RowWriter:
                        money_to_db(p.amount, field="payments.amount"),
                        optional_money_to_db(p.fee, field="payments.fee"),
                        optional_money_to_db(p.net, field="payments.net"),
-                       p.status, p.order_id, p.customer_email)
+                       p.status, p.order_id)
         return self._insert(
             "payments",
             ("snapshot_source_id", "position", "source", "source_record_id", "payment_ref", "created_at", "amount",
-             "fee", "net", "status", "order_ref", "customer_email"),
-            ("uuid", "int", "text", "text", "text", "timestamptz", "numeric", "numeric", "numeric", "text", "text",
-             "text"), rows())
+             "fee", "net", "status", "order_ref"),
+            ("uuid", "int", "text", "text", "text", "timestamptz", "numeric", "numeric", "numeric", "text", "text"),
+            rows())
 
     def _refunds(self, refunds: List[Refund]) -> int:
         def rows():
@@ -494,10 +515,10 @@ class _RowReader:
         orders = [
             Order(order_id=order_ref, customer_id=customer_ref, created_at=_naive(created_at), currency=currency,
                   subtotal=subtotal, discount=discount, shipping=shipping, tax=tax, total=total,
-                  financial_status=financial_status, customer_email=customer_email, source=source)
-            for (source, order_ref, customer_ref, customer_email, created_at, currency, subtotal, discount, shipping,
+                  financial_status=financial_status, source=source)
+            for (source, order_ref, customer_ref, created_at, currency, subtotal, discount, shipping,
                  tax, total, financial_status) in self._rows(
-                "source, order_ref, customer_ref, customer_email, created_at, currency, subtotal, discount, shipping, "
+                "source, order_ref, customer_ref, created_at, currency, subtotal, discount, shipping, "
                 "tax, total, financial_status", "orders", "position")
         ]
         for order_position, position, sku, title, quantity, unit_price, product_ref in self._rows(
@@ -510,9 +531,9 @@ class _RowReader:
         return orders
 
     def payments(self) -> List[Payment]:
-        return [Payment(payment_ref, _naive(created_at), amount, fee, net, status, order_ref, customer_email, source)
-                for source, payment_ref, created_at, amount, fee, net, status, order_ref, customer_email in self._rows(
-                    "source, payment_ref, created_at, amount, fee, net, status, order_ref, customer_email",
+        return [Payment(payment_ref, _naive(created_at), amount, fee, net, status, order_ref, source)
+                for source, payment_ref, created_at, amount, fee, net, status, order_ref in self._rows(
+                    "source, payment_ref, created_at, amount, fee, net, status, order_ref",
                     "payments", "position")]
 
     def refunds(self) -> List[Refund]:

@@ -28,7 +28,7 @@ from mervio.application.persisted_analysis import SnapshotImportRequest, import_
 from mervio.persistence import migrate
 from mervio.persistence.service import authorize_service
 
-from .persistence_support import SAMPLE_FILES
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY
 
 BEFORE = "0009_qualify_security_functions"
 AFTER = "0010_qualify_residual_security"
@@ -108,7 +108,7 @@ def test_a_forged_temp_snapshot_cannot_open_an_analysis_on_an_unsealed_snapshot(
 @pytest.fixture
 def sealed(db, tenant_a):
     imported = import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id,
-                                   connection_id=tenant_a.connection_id, request=SnapshotImportRequest(**SAMPLE_FILES))
+                                   connection_id=tenant_a.connection_id, request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY)
     assert imported.snapshot.status == "completed"
     return tenant_a, imported.snapshot.id
 

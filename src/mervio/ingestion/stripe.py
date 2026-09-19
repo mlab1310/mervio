@@ -61,12 +61,11 @@ def ingest_stripe(path: str | Path, quality: DataQualityReport) -> Tuple[List[Pa
         quality.observe_currency(SOURCE, row.get("Currency") or "")
         status = (row.get("Status") or "unknown").strip().lower()
         order_ref = first_present(row, ("order_id", "Order ID", "metadata.order_id"))
-        email = first_present(row, ("Customer Email", "customer_email", "Email"))
+        # l'e-mail client de l'export Stripe n'est pas lu: aucun KPI n'en depend (004.4.2)
 
         payments.append(Payment(
             payment_id=payment_id, created_at=created_at, amount=amount, fee=fee, net=net,
             status=status, order_id=order_ref.strip() if order_ref else None,
-            customer_email=email.strip().lower() if email else None,
         ))
 
         refunded = parse_float(

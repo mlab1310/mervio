@@ -58,7 +58,7 @@ Le jeton OIDC remplacera ce paramètre avec l'API.
 # 1. migrations (rôle propriétaire du schéma)
 MERVIO_MIGRATION_DATABASE_URL=... python -m mervio.persistence upgrade
 # 2. le worker démarre et enregistre son principal service:<rôle>
-MERVIO_DATABASE_URL=postgresql://<rôle worker>@hote/base mervio worker &
+MERVIO_DATABASE_URL=postgresql://<rôle worker>@hote/base MERVIO_IDENTITY_MASTER_KEY=<openssl rand -hex 32> mervio worker &
 # 3. provisionnement complet, rejouable
 export MERVIO_DATABASE_URL=postgresql://<rôle applicatif>@hote/base
 mervio admin demo provision --owner 'demo|me' --data-dir /srv/mervio-demo --service <rôle worker> --json

@@ -12,7 +12,7 @@ import pytest
 
 from mervio.application.persisted_analysis import SnapshotImportRequest, analyze_snapshot, import_csv_snapshot
 
-from .persistence_support import SAMPLE_FILES
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY
 
 
 def _context(conn, organization_id):
@@ -22,7 +22,7 @@ def _context(conn, organization_id):
 @pytest.fixture
 def history(db, tenant_a):
     imported = import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                                   request=SnapshotImportRequest(**SAMPLE_FILES))
+                                   request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=imported.snapshot.id)
     return tenant_a, imported.snapshot, outcome
 

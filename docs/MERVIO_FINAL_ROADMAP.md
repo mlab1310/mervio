@@ -412,6 +412,9 @@ de fichiers par des objets appartenant au tenant, et figer le contrat de donnée
      local, KMS en 004.9) ;
    - commandes invitées : `guest:` + HMAC de l'identifiant de commande (comportement actuel conservé, sans donnée
      brute).
+     > **Implémenté en 004.4.2 sous la forme `g1:` + 128 bits de HMAC** (et `c1:` pour un client identifié par
+     > e-mail) : le préfixe versionné remplace `guest:` ; aucune référence `guest:<commande>` n'est plus produite
+     > (D-053, `src/mervio/identity.py`).
 2. **Migration** :
    - suppression de `orders.customer_email` et `payments.customer_email` (aucun module analytique ne les lit :
      vérifié) ;

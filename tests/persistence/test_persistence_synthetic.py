@@ -11,7 +11,7 @@ from mervio.synthetic import validate_dataset
 from mervio.synthetic.evaluation import evaluate
 from mervio.synthetic.scenarios import get_scenario
 
-from .persistence_support import analysis_day, engine_files
+from .persistence_support import TEST_MASTER_KEY, analysis_day, engine_files, org_identity
 
 
 def test_synthetic_dataset_survives_persistence_with_identical_authoritative_results(db, tenant_a, synthetic_set):
@@ -21,13 +21,13 @@ def test_synthetic_dataset_survives_persistence_with_identical_authoritative_res
     today = analysis_day(synthetic_set.manifest)
 
     imported = import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                                   request=SnapshotImportRequest(**files, synthetic_manifest=synthetic_set.manifest))
+                                   request=SnapshotImportRequest(**files, synthetic_manifest=synthetic_set.manifest), master_key=TEST_MASTER_KEY)
     assert imported.status == "completed"
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=imported.snapshot.id,
                                today=today)
     persisted = analyses.get_report(tenant_a.session, tenant_a.store_id, outcome.report.id).report()
 
-    direct = run_analysis(SourcePaths(**files), today=today)
+    direct = run_analysis(SourcePaths(**files), today=today, identity=org_identity(tenant_a))  # D-058: meme cle
     for key in ("generated_at", "dataset_is_synthetic", "analysis_label"):
         persisted["_meta"].pop(key, None)
         direct["_meta"].pop(key, None)
@@ -42,7 +42,7 @@ def test_synthetic_markers_are_kept_from_manifest_to_report(db, tenant_a, synthe
     files = engine_files(synthetic_set.directory)
     # meme sans synthetic=True explicite, le manifeste suffit a marquer l'instantane
     imported = import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                                   request=SnapshotImportRequest(**files, synthetic_manifest=synthetic_set.manifest))
+                                   request=SnapshotImportRequest(**files, synthetic_manifest=synthetic_set.manifest), master_key=TEST_MASTER_KEY)
     snapshot = imported.snapshot
     assert snapshot.synthetic is True and snapshot.not_for_production is True
     assert snapshot.synthetic_manifest["synthetic"] is True and snapshot.synthetic_manifest["not_for_production"] is True
@@ -74,7 +74,7 @@ def test_scenario_ground_truth_evaluation_is_unchanged_after_persistence(db, ten
     files = engine_files(result.directory)
     today = analysis_day(result.manifest)
     imported = import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                                   request=SnapshotImportRequest(**files, synthetic_manifest=result.manifest))
+                                   request=SnapshotImportRequest(**files, synthetic_manifest=result.manifest), master_key=TEST_MASTER_KEY)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=imported.snapshot.id,
                                today=today)
     persisted = analyses.get_report(tenant_a.session, tenant_a.store_id, outcome.report.id).report()

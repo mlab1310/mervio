@@ -27,7 +27,7 @@ from mervio.persistence.codec import serialize_report
 from mervio.persistence.errors import NotFound, SnapshotIntegrityError
 from mervio.reporting.writers import REPORT_JSON, write_outputs
 
-from .persistence_support import SAMPLE_FILES, analysis_day, engine_files
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY, analysis_day, engine_files, org_identity
 
 FROZEN = datetime(2026, 9, 14, 6, 30, 0, tzinfo=timezone.utc)
 
@@ -43,8 +43,9 @@ def frozen_clock(monkeypatch):
     monkeypatch.setattr(report_module, "datetime", _FrozenDatetime)
 
 
-def _cli_report_bytes(files, tmp_path, *, today, synthetic, label=""):
-    result = analyze_dataset(AnalysisRequest(**files, today=today, synthetic=synthetic, label=label))
+def _cli_report_bytes(files, tmp_path, *, today, synthetic, label="", identity=None):
+    result = analyze_dataset(AnalysisRequest(**files, today=today, synthetic=synthetic, label=label,
+                                             identity=identity))
     assert result.succeeded, result.error
     out = tmp_path / "cli_output"
     write_outputs(result, out)
@@ -53,7 +54,7 @@ def _cli_report_bytes(files, tmp_path, *, today, synthetic, label=""):
 
 def _import(tenant, files, **extra):
     result = import_csv_snapshot(tenant.session, store_id=tenant.store_id, connection_id=tenant.connection_id,
-                                 request=SnapshotImportRequest(**files, **extra))
+                                 request=SnapshotImportRequest(**files, **extra), master_key=TEST_MASTER_KEY)
     assert result.status == "completed", result.error
     return result.snapshot
 
@@ -61,7 +62,8 @@ def _import(tenant, files, **extra):
 def test_cli_report_persisted_and_retrieved_is_byte_for_byte_identical(db, tenant_a, synthetic_set, tmp_path):
     files = engine_files(synthetic_set.directory)
     today = analysis_day(synthetic_set.manifest)
-    report, cli_bytes = _cli_report_bytes(files, tmp_path, today=today, synthetic=True)
+    report, cli_bytes = _cli_report_bytes(files, tmp_path, today=today, synthetic=True,
+                                          identity=org_identity(tenant_a))  # D-058: meme cle explicite
     snapshot = _import(tenant_a, files, synthetic_manifest=synthetic_set.manifest)
 
     run = analyses.start_run(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=snapshot.id,
@@ -79,7 +81,8 @@ def test_cli_report_persisted_and_retrieved_is_byte_for_byte_identical(db, tenan
 def test_full_saas_chain_reproduces_the_cli_report_byte_for_byte(db, tenant_a, synthetic_set, tmp_path, frozen_clock):
     files = engine_files(synthetic_set.directory)
     today = analysis_day(synthetic_set.manifest)
-    _, cli_bytes = _cli_report_bytes(files, tmp_path, today=today, synthetic=True, label="hebdo")
+    _, cli_bytes = _cli_report_bytes(files, tmp_path, today=today, synthetic=True, label="hebdo",
+                                     identity=org_identity(tenant_a))
 
     snapshot = _import(tenant_a, files, synthetic_manifest=synthetic_set.manifest)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=snapshot.id, today=today,
@@ -93,7 +96,8 @@ def test_full_chain_is_byte_identical_on_the_versioned_sample(db, tenant_a, tmp_
                                                                                     frozen_clock):
     """Jeu versionne data/sample: dates invalides, doublons, remboursements Stripe, lignes rejetees."""
     today = date(2026, 9, 14)
-    _, cli_bytes = _cli_report_bytes(SAMPLE_FILES, tmp_path, today=today, synthetic=False)
+    _, cli_bytes = _cli_report_bytes(SAMPLE_FILES, tmp_path, today=today, synthetic=False,
+                                     identity=org_identity(tenant_a))
     snapshot = _import(tenant_a, SAMPLE_FILES)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=snapshot.id, today=today)
     assert analyses.get_report(tenant_a.session, tenant_a.store_id, outcome.report.id).payload_bytes() == cli_bytes
@@ -104,7 +108,8 @@ def test_full_chain_is_byte_identical_on_the_versioned_sample(db, tenant_a, tmp_
 def test_partial_sources_keep_byte_identity(db, tenant_a, tmp_path, frozen_clock, sources):
     files = {k: v for k, v in SAMPLE_FILES.items() if k in sources}
     today = date(2026, 9, 14)
-    _, cli_bytes = _cli_report_bytes(files, tmp_path, today=today, synthetic=False)
+    _, cli_bytes = _cli_report_bytes(files, tmp_path, today=today, synthetic=False,
+                                     identity=org_identity(tenant_a))
     snapshot = _import(tenant_a, files)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=snapshot.id, today=today)
     assert analyses.get_report(tenant_a.session, tenant_a.store_id, outcome.report.id).payload_bytes() == cli_bytes
@@ -113,7 +118,7 @@ def test_partial_sources_keep_byte_identity(db, tenant_a, tmp_path, frozen_clock
 def test_monthly_grain_keeps_byte_identity(db, tenant_a, synthetic_set, tmp_path, frozen_clock):
     files = engine_files(synthetic_set.directory)
     config = AnalyticsConfig(grain="month")
-    result = analyze_dataset(AnalysisRequest(**files, config=config, synthetic=True))
+    result = analyze_dataset(AnalysisRequest(**files, config=config, synthetic=True, identity=org_identity(tenant_a)))
     write_outputs(result, tmp_path / "month")
     snapshot = _import(tenant_a, files, synthetic_manifest=synthetic_set.manifest)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=snapshot.id, config=config)
@@ -245,10 +250,12 @@ def test_analysis_failure_is_recorded_on_the_run(db, tenant_a):
     from mervio.domain.models import Dataset
     from mervio.domain.quality import DataQualityReport
     from mervio.persistence.snapshots import SourceFile, write_snapshot
+    identity = org_identity(tenant_a)  # 004.4.2 (F-08): cle d'organisation obligatoire
     empty = write_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                           dataset=Dataset(quality=DataQualityReport(), currency="unknown"),
+                           dataset=Dataset(quality=DataQualityReport(), currency="unknown",
+                                           identity_key_id=identity.key_id),
                            sources=[SourceFile("shopify_orders", "3" * 64, 0)], inputs_sha256="4" * 64,
-                           synthetic=False)
+                           synthetic=False, identity=identity)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=empty.id)
     assert outcome.status == "failed" and outcome.report is None and outcome.error
     assert outcome.run.status == "failed" and outcome.run.failure_code == "insufficient_data"
@@ -261,6 +268,105 @@ def test_failed_snapshot_cannot_be_analysed(db, tenant_a, tmp_path):
     broken = tmp_path / "orders.csv"
     broken.write_text("foo\n1\n", encoding="utf-8")
     failed = import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                                 request=SnapshotImportRequest(shopify_orders=str(broken))).snapshot
+                                 request=SnapshotImportRequest(shopify_orders=str(broken)), master_key=TEST_MASTER_KEY).snapshot
     with pytest.raises(SnapshotIntegrityError):
         analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=failed.id)
+
+
+def test_the_cli_with_the_organization_key_file_reproduces_the_persisted_report(db, tenant_a, tmp_path, frozen_clock,
+                                                                                  capsys):
+    """004.4.2 (D-058): `mervio analyze --identity-key-file` = rapport persiste, octet pour octet."""
+    from mervio.cli.main import main
+    key_file = tmp_path / "organization.key"
+    key_file.write_text(org_identity(tenant_a).export_hex(), encoding="utf-8")
+    today = date(2026, 9, 14)
+    out = tmp_path / "cli"
+    assert main(["analyze", "--shopify-orders", SAMPLE_FILES["shopify_orders"], "--shopify-products",
+                 SAMPLE_FILES["shopify_products"], "--stripe", SAMPLE_FILES["stripe"], "--google-ads",
+                 SAMPLE_FILES["google_ads"], "--today", today.isoformat(), "--out", str(out),
+                 "--identity-key-file", str(key_file)]) == 0
+    snapshot = _import(tenant_a, SAMPLE_FILES)
+    outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=snapshot.id, today=today)
+    persisted = analyses.get_report(tenant_a.session, tenant_a.store_id, outcome.report.id).payload_bytes()
+    assert persisted == (out / REPORT_JSON).read_bytes()
+    assert org_identity(tenant_a).export_hex() not in capsys.readouterr().out  # la cle n'est jamais affichee
+
+    # sans cle explicite: autre cle ephemere, donc autres pseudonymes, memes KPI
+    ephemeral = tmp_path / "ephemeral"
+    assert main(["analyze", "--shopify-orders", SAMPLE_FILES["shopify_orders"], "--today", today.isoformat(),
+                 "--out", str(ephemeral), "--ephemeral-identity-key"]) == 0
+    bad = tmp_path / "bad.key"
+    bad.write_text("not-a-key", encoding="utf-8")
+    assert main(["analyze", "--shopify-orders", SAMPLE_FILES["shopify_orders"], "--out", str(tmp_path / "x"),
+                 "--identity-key-file", str(bad)]) == 2
+    assert "not-a-key" not in capsys.readouterr().err
+
+
+_PERSISTED_PROCESS = """
+import sys, uuid
+from datetime import date
+from mervio.application.persisted_analysis import SnapshotImportRequest, analyze_snapshot, import_csv_snapshot
+from mervio.identity import MasterKey
+from mervio.persistence import analyses
+from mervio.persistence.database import Database
+from mervio.persistence.tenancy import TenantContext, TenantSession
+url, master, org, user, store, connection, today, out = sys.argv[1:9]
+files = dict(item.split("=", 1) for item in sys.argv[9:])
+database = Database(url)
+session = TenantSession(database, TenantContext(uuid.UUID(org), uuid.UUID(user)))
+imported = import_csv_snapshot(session, store_id=uuid.UUID(store), connection_id=uuid.UUID(connection),
+                               request=SnapshotImportRequest(**files), master_key=MasterKey.from_hex(master))
+assert imported.status == "completed", imported.error_code
+outcome = analyze_snapshot(session, store_id=uuid.UUID(store), snapshot_id=imported.snapshot.id,
+                           today=date.fromisoformat(today))
+open(out, "wb").write(analyses.get_report(session, uuid.UUID(store), outcome.report.id).payload_bytes())
+database.close()
+"""
+
+
+def test_cli_and_persisted_processes_with_different_hash_seeds_agree_on_the_versioned_sample(pg, db, tenant_a,
+                                                                                               tmp_path):
+    """D-058 entre PROCESSUS: `mervio analyze --identity-key-file` (PYTHONHASHSEED=1) et le chemin persiste
+    (PYTHONHASHSEED=2, sous-processus distinct) donnent les memes octets, `_meta.generated_at` excepte
+    (seule valeur non deterministe documentee: horloge murale, non figeable entre deux processus).
+
+    PORTEE LIMITEE, VOLONTAIREMENT: le jeu `data/sample` n'a aucune egalite de `conversions_delta` entre
+    campagnes. Ce test NE COUVRE PAS le risque residuel F-01 (ordre de `campaign_contributors` dependant
+    de PYTHONHASHSEED en cas d'egalite, `analytics/root_cause.py`, preexistant, hors 004.4.2): sur un jeu
+    synthetique avec egalites, les octets different d'un processus a l'autre. Voir
+    `docs/MISSION_004_4_2_HARDENING.md`.
+    """
+    import os
+    import re
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from .persistence_support import TEST_MASTER_KEY_HEX
+    root = Path(__file__).resolve().parents[2]
+    key = tmp_path / "organization.key"
+    key.write_text(org_identity(tenant_a).export_hex(), encoding="utf-8")
+    today = "2026-09-14"
+
+    def env(seed):
+        return dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1",
+                    PYTHONPATH=f"{root / 'src'}{os.pathsep}{root / 'tests'}")
+
+    flags = {"shopify_orders": "--shopify-orders", "shopify_products": "--shopify-products", "stripe": "--stripe",
+             "google_ads": "--google-ads"}
+    cli = [sys.executable, "-m", "mervio.cli", "analyze", "--today", today, "--out", str(tmp_path / "cli"),
+           "--identity-key-file", str(key)]
+    for kind, path in SAMPLE_FILES.items():
+        cli += [flags[kind], path]
+    subprocess.run(cli, cwd=root, env=env("1"), capture_output=True, text=True, timeout=300, check=True)
+    persisted_file = tmp_path / "persisted.json"
+    subprocess.run([sys.executable, "-c", _PERSISTED_PROCESS, pg.url("app"), TEST_MASTER_KEY_HEX,
+                    str(tenant_a.organization_id), str(tenant_a.owner_id), str(tenant_a.store_id),
+                    str(tenant_a.connection_id), today, str(persisted_file)]
+                   + [f"{kind}={path}" for kind, path in SAMPLE_FILES.items()],
+                   cwd=root, env=env("2"), capture_output=True, text=True, timeout=300, check=True)
+
+    stamp = re.compile(rb'"generated_at": "[^"]+"')
+    cli_bytes, persisted_bytes = (tmp_path / "cli" / REPORT_JSON).read_bytes(), persisted_file.read_bytes()
+    assert len(stamp.findall(cli_bytes)) == len(stamp.findall(persisted_bytes)) == 1
+    assert stamp.sub(b"", cli_bytes) == stamp.sub(b"", persisted_bytes)

@@ -31,6 +31,8 @@ Bibliotheque standard uniquement: ce module n'importe ni pilote de base ni persi
     MERVIO_WORKER_DEGRADED_GRACE_SECONDS      120           1 a 86400
     MERVIO_LOG_LEVEL                          INFO          DEBUG | INFO | WARNING | ERROR
     MERVIO_LOG_FORMAT                         json          json | text (text refuse en production)
+    MERVIO_IDENTITY_MASTER_KEY (ou ..._FILE)  -             hexadecimal, 32 octets au moins; OBLIGATOIRE si le
+                                                            worker traite des imports (cle maitre d'identite, D-053)
 
 Le nom du principal de service n'est pas configurable: la base le derive du role de
 connexion (revision 0007).
@@ -47,6 +49,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 from .errors import ConfigurationError
+from .identity import IdentityKeyError, parse_hex_key
 
 ENVIRONMENTS = ("development", "test", "staging", "production")
 JOB_TYPES = ("import", "analysis", "purge")
@@ -120,6 +123,8 @@ class WorkerSettings:
     degraded_grace_seconds: int
     log_level: int
     log_format: str
+    #: cle maitre d'identite (hexadecimal); jamais affichee, jamais en base (D-053)
+    identity_master_key: Optional[Secret] = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None, *,
@@ -152,6 +157,7 @@ class WorkerSettings:
             "degraded_grace_seconds": self.degraded_grace_seconds,
             "log_level": logging.getLevelName(self.log_level),
             "log_format": self.log_format,
+            "identity_master_configured": self.identity_master_key is not None,
         }
 
 
@@ -267,6 +273,35 @@ class _Reader:
             self.fail(name, "nom de base obligatoire")
         return Secret(direct)
 
+    def identity_master_key(self, *, required: bool) -> Optional[Secret]:
+        """Cle maitre d'identite (D-053): hexadecimal, au moins 32 octets. Jamais la valeur dans une erreur."""
+        name = "MERVIO_IDENTITY_MASTER_KEY"
+        direct, file_name = self.raw(name), self.raw(name + "_FILE")
+        if direct and file_name:
+            self.fail(name, f"definir {name} ou {name}_FILE, pas les deux")
+            return None
+        if file_name:
+            path = Path(file_name)
+            if not path.is_absolute():
+                self.fail(name + "_FILE", "chemin absolu attendu")
+                return None
+            try:
+                direct = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                self.fail(name + "_FILE", "fichier illisible")
+                return None
+            name = name + "_FILE"
+        if not direct:
+            if required:
+                self.fail("MERVIO_IDENTITY_MASTER_KEY", "obligatoire pour les travaux import (cle maitre d'identite)")
+            return None
+        try:
+            parse_hex_key(direct)
+        except IdentityKeyError:
+            self.fail(name, "au moins 64 caracteres hexadecimaux (32 octets)")
+            return None
+        return Secret(direct)
+
     def worker_name(self) -> str:
         value = self.raw("MERVIO_WORKER_NAME")
         if value is None:
@@ -334,6 +369,7 @@ class _Reader:
         database_url = self.database_url()
         worker_name = self.worker_name()
         job_types = self.job_types()
+        identity_master_key = self.identity_master_key(required="import" in job_types)
         poll_interval, poll_max = self.poll()
         dispatch_batch = self.number("MERVIO_WORKER_DISPATCH_BATCH", 50, 1, 1000)
         lease = self.number("MERVIO_JOB_LEASE_SECONDS", 300, 30, 86400)
@@ -363,6 +399,7 @@ class _Reader:
             shutdown_grace_seconds=grace, startup_timeout_seconds=startup, backoff_base_seconds=backoff_base,
             backoff_cap_seconds=backoff_cap, health_file=health_file, health_max_age_seconds=health_max_age,
             degraded_grace_seconds=degraded_grace, log_level=log_level, log_format=log_format,
+            identity_master_key=identity_master_key,
         )
 
 

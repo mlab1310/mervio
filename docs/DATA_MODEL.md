@@ -16,6 +16,13 @@ Modèle interne normalisé (`src/mervio/models.py`), indépendant des sources.
 | `Customer` | dérivée : `orders_count`, `revenue`, `first_order_at` | calculée |
 | `Dataset` | conteneur + `quality` + `customer_first_order` | — |
 
+**Identité client (004.4.2, D-053)** : `Order.customer_id` est une référence **à clé**, jamais un
+e-mail : `c1:` + 128 bits de HMAC-SHA256 de l'e-mail normalisé (minuscules, sans espaces), ou
+`g1:` + HMAC de l'identifiant de commande pour un invité (un client par commande, comme avant).
+La clé est celle de l'organisation (chemin SaaS, `mervio.persistence.identity_keys`) ou une clé
+explicite / éphémère (CLI locale, `--identity-key-file`). L'e-mail est lu par le connecteur Shopify,
+transformé, puis oublié ; `Order`, `Payment` et `Customer` ne portent plus aucun e-mail.
+
 ## Définitions qui engagent les chiffres
 
 **CA avant ajustements** (D-048, anciennement « CA net ») = `Order.subtotal` (D-041).

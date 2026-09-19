@@ -696,3 +696,13 @@ def test_each_role_uses_the_password_its_bootstrap_role_was_created_with():
         role = re.match(r"postgresql://(\w+):", SERVICES[service]["environment"][variable_name]).group(1)
         assert role == {"worker": "mervio_worker_svc", "admin": "mervio_app_user",
                         "migrate": "mervio_migrator"}[service]
+
+
+def test_only_the_worker_receives_the_identity_master_key_and_never_a_value():
+    """004.4.2 (D-053): la cle maitre d'identite est obligatoire pour le worker, fournie par .env, jamais ecrite."""
+    worker = SERVICES["worker"]["environment"]["MERVIO_IDENTITY_MASTER_KEY"]
+    assert worker.startswith("${MERVIO_IDENTITY_MASTER_KEY:?") and worker.endswith("}")
+    for service in set(SERVICES) - {"worker"}:
+        assert "MERVIO_IDENTITY_MASTER_KEY" not in (SERVICES[service].get("environment") or {}), service
+    assert sum("MERVIO_IDENTITY_MASTER_KEY" in line for line in COMPOSE_TEXT.splitlines()) == 1  # le worker seul
+    assert "MERVIO_IDENTITY_MASTER_KEY=" in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()

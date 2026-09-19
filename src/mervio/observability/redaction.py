@@ -40,10 +40,13 @@ FORBIDDEN_KEY_FRAGMENTS = (
     "path", "filename", "file_name", "content", "body", "raw",
     # 004.3: chaines de connexion et equivalents
     "dsn", "database_url", "conninfo", "access_key", "session_key",
+    # 004.4.2: cle maitre et cle d'identite d'organisation (D-053)
+    "master_key", "identity_key",
 )
 
 _SECRET_WORDS = (r"password|passwd|pwd|secret|client_secret|token|access_token|refresh_token|api[_-]?key|"
-                 r"apikey|authorization|access[_-]?key|private[_-]?key|session[_-]?key|cookie|signature")
+                 r"apikey|authorization|access[_-]?key|private[_-]?key|session[_-]?key|cookie|signature|"
+                 r"(?:mervio_)?identity_master_key(?:_file)?|master[_-]?key|identity[_-]?key")
 
 _PATTERNS = (
     # identifiants dans une URL: on garde le schema, l'utilisateur et l'hote

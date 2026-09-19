@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 from ..analytics.pipeline import SourcePaths, run_analysis
 from ..config import AnalyticsConfig
 from ..errors import InsufficientDataError, MervioError
+from ..identity import CustomerIdentity
 from ..logging_config import get_logger
 from .imports import REQUIRED_SOURCES, FileValidation, validate_many
 
@@ -37,6 +38,8 @@ class AnalysisRequest:
     #: marque le jeu de donnees comme synthetique (commande demo)
     synthetic: bool = False
     label: str = ""
+    #: cle des references client; None = cle ephemere tiree pour cette analyse (D-058)
+    identity: Optional[CustomerIdentity] = field(default=None, repr=False)
 
     def provided(self) -> Dict[str, Optional[str]]:
         return {
@@ -132,7 +135,8 @@ def analyze_dataset(request: AnalysisRequest) -> AnalysisResult:
         )
 
     try:
-        report = run_analysis(request.to_source_paths(), request.config, today=request.today)
+        report = run_analysis(request.to_source_paths(), request.config, today=request.today,
+                              identity=request.identity)
     except InsufficientDataError as exc:
         return rejected(f"donnees insuffisantes: {exc}")
     except MervioError as exc:

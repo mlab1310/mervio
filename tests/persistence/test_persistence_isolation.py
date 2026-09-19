@@ -27,7 +27,7 @@ from mervio.persistence.stores import (
 )
 from mervio.persistence.tenancy import TenantContext, TenantSession
 
-from .persistence_support import SAMPLE_FILES, make_tenant
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY, make_tenant
 
 TENANT_TABLES = ("organizations", "memberships", "stores", "connections", "data_snapshots", "snapshot_sources",
                  "products", "orders", "order_lines", "payments", "refunds", "campaigns", "ad_daily_performance",
@@ -45,7 +45,7 @@ class World:
 
 def _populate(tenant) -> World:
     imported = import_csv_snapshot(tenant.session, store_id=tenant.store_id, connection_id=tenant.connection_id,
-                                   request=SnapshotImportRequest(**SAMPLE_FILES))
+                                   request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY)
     assert imported.status == "completed"
     outcome = analyze_snapshot(tenant.session, store_id=tenant.store_id, snapshot_id=imported.snapshot.id)
     assert outcome.status == "completed"
@@ -89,7 +89,7 @@ def _cross_tenant_writes(writer, victim: World):
         "revoke_foreign_connection": lambda: revoke_connection(writer, t.store_id, t.connection_id),
         "import_into_foreign_store": lambda: import_csv_snapshot(
             writer, store_id=t.store_id, connection_id=t.connection_id,
-            request=SnapshotImportRequest(**SAMPLE_FILES)),
+            request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY),
         "analyze_foreign_snapshot": lambda: analyze_snapshot(writer, store_id=t.store_id,
                                                              snapshot_id=victim.snapshot_id),
     }
@@ -291,9 +291,10 @@ def test_foreign_natural_keys_fail_as_missing_references_never_as_duplicates(app
             app_conn.execute(
                 "INSERT INTO orders (organization_id, store_id, snapshot_id, snapshot_source_id, position, source, "
                 "source_record_id, order_ref, customer_ref, created_at, currency, subtotal, discount, shipping, tax, "
-                "total, financial_status) VALUES (%s, %s, %s, %s, 0, 'shopify', 'x', 'x', 'x', now(), 'EUR', 1, 0, 0, "
+                "total, financial_status) VALUES (%s, %s, %s, %s, 0, 'shopify', 'x', 'x', %s, now(), 'EUR', 1, 0, 0, "
                 "0, 1, 'paid')",
-                (b.tenant.organization_id, b.tenant.store_id, a.snapshot_id, uuid.uuid4()))
+                # 004.4.2: reference client au format a cle, pour que seule la cle etrangere soit en cause
+                (b.tenant.organization_id, b.tenant.store_id, a.snapshot_id, uuid.uuid4(), "g1:" + "0" * 32))
 
 
 def test_tenant_context_is_transaction_local(app_conn, worlds):

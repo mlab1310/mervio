@@ -10,6 +10,7 @@ from mervio.ingestion.base import parse_date, parse_datetime, parse_float, parse
 from mervio.ingestion.google_ads import ingest_google_ads
 from mervio.ingestion.shopify import ingest_shopify_orders, ingest_shopify_products
 from mervio.ingestion.stripe import ingest_stripe
+from mervio.identity import REF_PATTERN, CustomerIdentity
 from mervio.domain.quality import DataQualityReport, QualityStatus
 
 SRC = "test"
@@ -106,8 +107,20 @@ def test_shopify_missing_email_becomes_guest(tmp_path):
     q = DataQualityReport()
     orders, _, _ = ingest_shopify_orders(write(tmp_path, "o.csv", csv), q)
     order2 = [o for o in orders if o.order_id == "#2"][0]
-    assert order2.customer_id.startswith("guest:")
+    # 004.4.2 (D-053): un invite devient une reference a cle rattachee a sa commande (g1:), plus "guest:#2"
+    assert REF_PATTERN.match(order2.customer_id) and order2.customer_id.startswith("g1:")
     assert q.status_of("customer_identity") is not QualityStatus.RELIABLE
+
+
+def test_shopify_customer_references_never_carry_the_email(tmp_path):
+    identity = CustomerIdentity.ephemeral()
+    q = DataQualityReport()
+    orders, _, _ = ingest_shopify_orders(write(tmp_path, "o.csv", ORDERS_CSV), q, identity)
+    assert all(REF_PATTERN.match(o.customer_id) for o in orders)
+    assert all("@" not in o.customer_id for o in orders)
+    by_id = {o.order_id: o.customer_id for o in orders}
+    assert by_id["#1"] == identity.ref_email("A@X.com ")  # meme normalisation qu'avant: espaces, casse
+    assert not hasattr(orders[0], "customer_email")
 
 
 def test_shopify_invalid_date_row_skipped_not_crash(tmp_path):

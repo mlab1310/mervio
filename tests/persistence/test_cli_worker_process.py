@@ -28,6 +28,7 @@ from mervio.persistence.service import authorize_service
 from mervio.settings import WorkerSettings
 from mervio.workers import runtime as worker_runtime
 
+from .persistence_support import TEST_MASTER_KEY_HEX
 from .worker_support import enqueue_scripted, wait_until
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,8 @@ HEALTH_KEYS = {"version", "state", "updated_at", "started_at", "pid", "worker_id
 FAST = {
     "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.05", "MERVIO_WORKER_POLL_MAX_SECONDS": "0.2",
     "MERVIO_WORKER_RECOVERY_INTERVAL_SECONDS": "1", "MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS": "5",
+    # 004.4.2: cle maitre d'identite factice (obligatoire des que le worker traite des imports)
+    "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
 }
 
 
@@ -175,7 +178,8 @@ def test_a_role_that_is_not_a_service_exits_with_code_2(pg, tmp_path, db):
 def test_an_unreachable_database_exits_with_code_3(pg, tmp_path):
     url = pg.url("worker").replace(f":{pg.port}/", ":1/")
     variables = base_environment(MERVIO_DATABASE_URL=url, MERVIO_WORKER_HEALTH_FILE=tmp_path / "h.json",
-                                 MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS="1")
+                                 MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS="1",
+                                 MERVIO_IDENTITY_MASTER_KEY=TEST_MASTER_KEY_HEX)
     started = time.monotonic()
     result = subprocess.run([sys.executable, "-m", "mervio.cli", "worker"], cwd=ROOT, env=variables,
                             capture_output=True, text=True, timeout=60)

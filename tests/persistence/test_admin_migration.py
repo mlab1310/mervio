@@ -111,7 +111,8 @@ def test_the_revision_changes_no_table_column_privilege_or_policy(database):
     migrate.upgrade(database, "0007_service_identity")
     with psycopg.connect(database) as conn:
         before = catalog(conn)
-    migrate.upgrade(database)
+    # la revision examinee est 0008 seule (0011, 004.4.2, change volontairement le schema)
+    migrate.upgrade(database, "0008_admin_audit")
     with psycopg.connect(database) as conn:
         assert catalog(conn) == before
 

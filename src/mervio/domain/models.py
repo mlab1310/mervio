@@ -51,6 +51,9 @@ class Order:
     remise DEJA deduit de `subtotal`: il est informatif et ne doit jamais etre
     soustrait une seconde fois. Un connecteur dont la source fournit un
     sous-total avant remise doit le convertir a l'ingestion, pas ici.
+
+    Identite (D-053, 004.4.2): `customer_id` est une reference a cle (`c1:`/`g1:`, voir
+    `mervio.identity`), jamais un e-mail. Aucune donnee directe du client n'est portee ici.
     """
 
     order_id: str
@@ -64,7 +67,6 @@ class Order:
     total: float
     financial_status: str
     items: List[OrderItem] = field(default_factory=list)
-    customer_email: Optional[str] = None
     source: str = "shopify"
 
     @property
@@ -86,7 +88,6 @@ class Payment:
     net: Optional[float]
     status: str
     order_id: Optional[str] = None
-    customer_email: Optional[str] = None
     source: str = "stripe"
 
     @property
@@ -124,7 +125,6 @@ class DailyAdPerformance:
 @dataclass
 class Customer:
     customer_id: str
-    email: Optional[str]
     orders_count: int
     revenue: float
     first_order_at: datetime
@@ -146,6 +146,9 @@ class Dataset:
     #: premiere commande par client, calculee sur l'HISTORIQUE COMPLET et
     #: conservee lors des decoupages temporels (indispensable pour le CAC)
     customer_first_order: Dict[str, datetime] = field(default_factory=dict)
+    #: identifiant NON secret de la cle qui a calcule les references client (004.4.2, F-08).
+    #: Pose par `analytics.pipeline.load_dataset`; hors egalite: une provenance, pas une donnee.
+    identity_key_id: Optional[str] = field(default=None, compare=False, repr=False)
 
     # -- derivations ----------------------------------------------------
     def compute_customer_index(self) -> None:
@@ -163,7 +166,6 @@ class Dataset:
             if existing is None:
                 acc[order.customer_id] = Customer(
                     customer_id=order.customer_id,
-                    email=order.customer_email,
                     orders_count=1,
                     revenue=order.net_revenue,
                     first_order_at=order.created_at,
@@ -193,6 +195,7 @@ class Dataset:
             quality=self.quality,
             currency=self.currency,
             customer_first_order=self.customer_first_order,
+            identity_key_id=self.identity_key_id,
         )
 
     def is_empty(self) -> bool:

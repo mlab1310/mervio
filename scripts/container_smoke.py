@@ -64,6 +64,8 @@ WORKER_EXIT_OK, WORKER_EXIT_CONFIG, WORKER_EXIT_SCHEMA = 0, 2, 4
 ADMIN_EXIT_DATABASE, ADMIN_EXIT_NOT_FOUND = 3, 5
 PASSWORD_VARIABLES = ("MERVIO_POSTGRES_PASSWORD", "MERVIO_MIGRATOR_DB_PASSWORD", "MERVIO_APP_DB_PASSWORD",
                       "MERVIO_WORKER_DB_PASSWORD")
+#: cle maitre d'identite du worker (004.4.2): obligatoire des que le worker traite des imports
+IDENTITY_KEY_VARIABLE = "MERVIO_IDENTITY_MASTER_KEY"
 EXPECTED_ADMIN_ACTIONS = ("organization.created", "store.created", "connection.created", "service.authorized",
                           "job.enqueued")
 EXPECTED_WORKER_ACTIONS = ("job.claimed", "import.started", "import.succeeded", "analysis.started",
@@ -91,6 +93,14 @@ class Result:
 def generate_passwords() -> Dict[str, str]:
     """Quatre secrets distincts, compatibles avec le bootstrap ([A-Za-z0-9._~-], 16 a 128)."""
     return {name: secrets.token_hex(24) for name in PASSWORD_VARIABLES}
+
+
+def generate_secrets() -> Dict[str, str]:
+    """Mots de passe + cle maitre d'identite du worker (004.4.2, 32 octets en hexadecimal).
+
+    Tous sont traites en secrets: masques dans les sorties et recherches comme fuites.
+    """
+    return {**generate_passwords(), IDENTITY_KEY_VARIABLE: secrets.token_hex(32)}
 
 
 def free_port() -> int:
@@ -209,7 +219,7 @@ class Smoke:
     keep: bool
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
     log: Callable[[str], None] = print
-    passwords: Dict[str, str] = field(default_factory=generate_passwords)
+    passwords: Dict[str, str] = field(default_factory=generate_secrets)
     project: str = field(default_factory=lambda: f"mervio-smoke-{secrets.token_hex(4)}")
     port: int = field(default_factory=free_port)
     transcript: List[str] = field(default_factory=list)
@@ -382,7 +392,7 @@ class Smoke:
         superuser_url = (f"postgresql://{SUPERUSER}:{self.passwords['MERVIO_POSTGRES_PASSWORD']}"
                          f"@postgres:5432/{DATABASE}")
         result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", HEALTH_TMPFS,
-                           "-e", "MERVIO_DATABASE_URL", self.image, "worker"],
+                           "-e", "MERVIO_DATABASE_URL", "-e", IDENTITY_KEY_VARIABLE, self.image, "worker"],
                           env=dict(self.environment, MERVIO_DATABASE_URL=superuser_url), check=False, timeout=300)
         self.expect(result.returncode == WORKER_EXIT_CONFIG,
                     f"worker superutilisateur: code {result.returncode}, 2 attendu")
@@ -390,6 +400,19 @@ class Smoke:
                     "worker superutilisateur: evenement worker.identity_refused attendu")
         self.expect(self.scalar("SELECT count(*) FROM users WHERE kind = 'service'") == "0",
                     "worker superutilisateur: un principal a ete enregistre")
+        # 004.4.2: sans cle maitre d'identite, le worker (qui traite les imports) refuse de demarrer
+        worker_url = (f"postgresql://{WORKER_ROLE}:{self.passwords['MERVIO_WORKER_DB_PASSWORD']}"
+                      f"@postgres:5432/{DATABASE}")
+        result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", HEALTH_TMPFS,
+                           "-e", "MERVIO_DATABASE_URL", self.image, "worker"],
+                          env=dict(self.environment, MERVIO_DATABASE_URL=worker_url), check=False, timeout=300)
+        self.expect(result.returncode == WORKER_EXIT_CONFIG,
+                    f"worker sans cle d'identite: code {result.returncode}, 2 attendu")
+        self.expect("worker.config_invalid" in result.stdout + result.stderr
+                    and IDENTITY_KEY_VARIABLE in result.stdout + result.stderr,
+                    "worker sans cle d'identite: refus de configuration nommant la variable attendu")
+        self.expect(self.scalar("SELECT count(*) FROM users WHERE kind = 'service'") == "0",
+                    "worker sans cle d'identite: un principal a ete enregistre")
         wrong = secrets.token_hex(24)
         self.redact = Redactor(self.redact.secrets + [wrong])
         result = self.run(["docker", "run", "--rm", "--network", network, "-e", "MERVIO_DATABASE_URL",

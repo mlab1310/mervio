@@ -12,13 +12,13 @@ from mervio.persistence.codec import config_sha256
 from mervio.persistence.errors import NotFound, PermissionDenied
 from mervio.persistence.tenancy import Role, TenantContext, TenantSession, add_member, ensure_user
 
-from .persistence_support import SAMPLE_FILES
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY
 
 
 @pytest.fixture
 def traced(db, tenant_a):
     imported = import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                                   request=SnapshotImportRequest(**SAMPLE_FILES))
+                                   request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY)
     outcome = analyze_snapshot(tenant_a.session, store_id=tenant_a.store_id, snapshot_id=imported.snapshot.id)
     return tenant_a, imported.snapshot, outcome
 

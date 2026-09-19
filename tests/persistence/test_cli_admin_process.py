@@ -32,6 +32,7 @@ from mervio.persistence.database import Database
 from mervio.persistence.tenancy import TenantContext, TenantSession
 from mervio.workers import runtime as worker_runtime
 
+from .persistence_support import TEST_MASTER_KEY_HEX
 from .worker_support import wait_until
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +40,8 @@ OWNER = "demo|owner"
 FAST = {
     "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.05", "MERVIO_WORKER_POLL_MAX_SECONDS": "0.2",
     "MERVIO_WORKER_RECOVERY_INTERVAL_SECONDS": "1", "MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS": "5",
+    # 004.4.2: cle maitre d'identite factice (obligatoire des que le worker traite des imports)
+    "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
 }
 
 

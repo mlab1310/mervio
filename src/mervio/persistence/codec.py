@@ -46,15 +46,18 @@ def config_sha256(config: AnalyticsConfig) -> str:
 # -- empreinte d'import -------------------------------------------------------------------
 
 def inputs_sha256(*, file_hashes: Mapping[str, str], connector: str, schema_version: str,
-                  normalization_version: str, synthetic: bool) -> str:
-    """Empreinte des ENTREES d'un instantane: octets des fichiers + versions de normalisation.
+                  normalization_version: str, synthetic: bool, identity_key_id: str) -> str:
+    """Empreinte des ENTREES d'un instantane: octets des fichiers + versions de normalisation + cle d'identite.
 
-    Memes fichiers, memes versions de connecteur et de normalisation -> meme Dataset
-    (les connecteurs sont deterministes): c'est la cle d'idempotence d'import.
+    Memes fichiers, memes versions de connecteur et de normalisation, meme cle d'identite -> meme
+    Dataset (les connecteurs sont deterministes): c'est la cle d'idempotence d'import. L'identifiant
+    NON secret de la cle d'identite y entre (D-058): une autre cle produit d'autres references
+    client, donc un autre instantane, jamais une reutilisation silencieuse.
     """
     document = {
         "files": dict(sorted(file_hashes.items())), "connector": connector, "schema_version": schema_version,
         "normalization_version": normalization_version, "synthetic": bool(synthetic),
+        "identity_key_id": identity_key_id,
     }
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

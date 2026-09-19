@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from uuid import UUID
 
 import psycopg
@@ -20,11 +20,13 @@ import psycopg
 from ..analytics.pipeline import SourcePaths, analyze_loaded_dataset, load_dataset
 from ..config import AnalyticsConfig
 from ..errors import InsufficientDataError, MervioError
+from ..identity import MasterKey
 from ..logging_config import get_logger
 from ..persistence import analyses, snapshots
 from ..persistence.analyses import AnalysisRunRecord, ReportRecord
 from ..persistence.codec import file_sha256, inputs_sha256
 from ..persistence.errors import ImportRejected
+from ..persistence.identity_keys import ensure_identity_key
 from ..persistence.snapshots import SnapshotRecord, SourceFile
 from ..persistence.stores import fetch_connection, fetch_store
 from ..persistence.tenancy import Permission, TenantSession
@@ -64,12 +66,25 @@ class SnapshotImportResult:
 
 
 def import_csv_snapshot(session: TenantSession, *, store_id: UUID, connection_id: UUID,
-                        request: SnapshotImportRequest) -> SnapshotImportResult:
-    """Valide les fichiers avec les connecteurs reels puis les persiste en instantane scelle."""
+                        request: SnapshotImportRequest, master_key: MasterKey,
+                        on_started: Optional[Callable[[], None]] = None) -> SnapshotImportResult:
+    """Valide les fichiers avec les connecteurs reels puis les persiste en instantane scelle.
+
+    `master_key` (obligatoire): les references client sont calculees avec la cle d'identite de
+    l'organisation (D-053); aucun e-mail n'est persiste. `IdentityKeyUnavailable` si la cle ne
+    peut pas etre utilisee: aucun fichier n'est alors lu.
+
+    Ordre garanti (004.4.2, F-02): autorisation -> cle d'identite disponible et coherente ->
+    `on_started()` (le worker y trace `import.started`) -> premier acces a un fichier. Un refus
+    d'identite survient donc AVANT que l'import soit considere comme commence.
+    """
     # autorisation AVANT toute lecture de fichier
     with session.transaction(Permission.IMPORT_DATA) as conn:
         store = fetch_store(conn, session, store_id)
         fetch_connection(conn, session, store.id, connection_id)
+    identity = ensure_identity_key(session, master_key)
+    if on_started is not None:
+        on_started()
 
     provided = request.provided()
     synthetic = request.is_synthetic
@@ -90,14 +105,14 @@ def import_csv_snapshot(session: TenantSession, *, store_id: UUID, connection_id
     fingerprint = inputs_sha256(
         file_hashes={s.kind: s.sha256 for s in sources}, connector=snapshots.CSV_CONNECTOR,
         schema_version=snapshots.CSV_SCHEMA_VERSION, normalization_version=snapshots.NORMALIZATION_VERSION,
-        synthetic=synthetic,
+        synthetic=synthetic, identity_key_id=identity.key_id,
     )
     existing = snapshots.find_completed_snapshot(session, store.id, fingerprint)
     if existing is not None:
         return SnapshotImportResult("reused", existing, validations)
 
     try:
-        dataset = load_dataset(SourcePaths(**provided))
+        dataset = load_dataset(SourcePaths(**provided), identity)
     except MervioError as exc:
         return rejected("ingestion_failed", f"lecture impossible: {exc}", validations)
     if [SourceFile(kind, *file_sha256(path)) for kind, path in provided.items()] != sources:
@@ -106,7 +121,8 @@ def import_csv_snapshot(session: TenantSession, *, store_id: UUID, connection_id
     try:
         record = snapshots.write_snapshot(
             session, store_id=store.id, connection_id=connection_id, dataset=dataset, sources=sources,
-            inputs_sha256=fingerprint, synthetic=synthetic, synthetic_manifest=request.synthetic_manifest,
+            inputs_sha256=fingerprint, synthetic=synthetic, identity=identity,
+            synthetic_manifest=request.synthetic_manifest,
         )
     except ImportRejected as exc:
         return rejected(exc.code, str(exc), validations)

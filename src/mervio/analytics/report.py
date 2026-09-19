@@ -15,10 +15,13 @@ from .timeseries import rolling_average
 def pseudonymise(customer_id: str) -> str:
     """Identifiant stable et non reversible pour la sortie.
 
-    En interne, l'email sert de cle de jointure entre commandes. Dans un
-    livrable, il n'a rien a faire: un rapport circule par email, se depose sur
-    un Drive et finit dans un ticket de support. Le pseudonyme reste stable
-    d'un rapport a l'autre, ce qui suffit a suivre un client dans le temps.
+    Depuis 004.4.2 (D-053), `customer_id` n'est plus un e-mail: c'est deja une
+    reference a cle (`c1:`/`g1:` + HMAC-SHA256 tronque), calculee avec la cle
+    d'identite de l'organisation (ou une cle CLI explicite/ephemere). Le hachage
+    ci-dessous n'ajoute donc aucune protection cryptographique; il conserve la
+    forme `cust_<12 hex>` du contrat de rapport, sans exposer la reference de
+    jointure stockee en base. Le pseudonyme est stable pour une meme cle; le
+    retrait complet des identifiants client du rapport est prevu en 004.5.
     """
     digest = hashlib.sha256(customer_id.encode("utf-8")).hexdigest()
     return f"cust_{digest[:12]}"

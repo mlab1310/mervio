@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -25,7 +26,7 @@ from mervio.workers.handlers import HandlerRegistry, default_registry
 from mervio.workers.retention import RetentionPolicy
 from mervio.workers.worker import Worker, cancel, enqueue
 
-from .persistence_support import SAMPLE_FILES, analysis_day, engine_files
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY, analysis_day, engine_files
 
 PAST = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
 #: `_meta.generated_at` est la seule valeur non deterministe d'un rapport (precision:
@@ -62,7 +63,7 @@ def documents(buffer) -> list:
 
 
 def worker(tenant, *, registry=None, **kwargs) -> Worker:
-    return Worker(sessions=[tenant.session], registry=registry or default_registry(),
+    return Worker(sessions=[tenant.session], registry=registry or default_registry(identity_master=TEST_MASTER_KEY),
                   worker_id=kwargs.pop("worker_id", "worker-test"), **kwargs)
 
 
@@ -182,16 +183,25 @@ def test_an_analysis_job_produces_the_report_of_the_unchanged_engine(tenant_a):
     assert stored.payload_json == serialize_report(stored.report())
 
 
-def test_a_job_report_is_identical_to_the_direct_004_1_path(tenant_a, tenant_b, synthetic_set, frozen_clock):
-    """Le wrapper de job ne change aucune valeur: memes octets que `analyze_snapshot` appele en direct."""
+def test_a_job_report_is_identical_to_the_direct_004_1_path(tenant_a, synthetic_set, frozen_clock):
+    """Le wrapper de job ne change aucune valeur: memes octets que `analyze_snapshot` appele en direct.
+
+    004.4.2: le chemin direct s'execute dans la MEME organisation (seconde boutique): les references client
+    dependent de la cle d'identite de l'organisation (D-053), identique pour ses deux boutiques.
+    """
     from mervio.application.persisted_analysis import analyze_snapshot
+    from mervio.persistence.stores import create_csv_connection, create_store
 
     files = engine_files(synthetic_set.directory)
     today = analysis_day(synthetic_set.manifest)
     payload = {"sources": files, "synthetic": True}
 
-    direct_snapshot = _import_directly(tenant_b, files)
-    direct = analyze_snapshot(tenant_b.session, store_id=tenant_b.store_id, snapshot_id=direct_snapshot.id,
+    other_store = create_store(tenant_a.session, name="Boutique directe")
+    other = replace(tenant_a, store_id=other_store.id,
+                    connection_id=create_csv_connection(tenant_a.session, store_id=other_store.id,
+                                                        label="Imports directs").id)
+    direct_snapshot = _import_directly(other, files)
+    direct = analyze_snapshot(other.session, store_id=other.store_id, snapshot_id=direct_snapshot.id,
                               today=today)
 
     enqueue(tenant_a.session, job_type=JobType.IMPORT, store_id=tenant_a.store_id,
@@ -201,7 +211,7 @@ def test_a_job_report_is_identical_to_the_direct_004_1_path(tenant_a, tenant_b, 
     analysed = worker(tenant_a).run_once()
 
     by_job = analyses.get_report(tenant_a.session, tenant_a.store_id, uuid.UUID(analysed.job.result["report_id"]))
-    by_hand = analyses.get_report(tenant_b.session, tenant_b.store_id, direct.report.id)
+    by_hand = analyses.get_report(other.session, other.store_id, direct.report.id)
     assert by_job.record.payload_sha256 == by_hand.record.payload_sha256
     assert by_job.payload_json == by_hand.payload_json
 
@@ -209,7 +219,7 @@ def test_a_job_report_is_identical_to_the_direct_004_1_path(tenant_a, tenant_b, 
 def _import_directly(tenant, files):
     from mervio.application.persisted_analysis import SnapshotImportRequest, import_csv_snapshot
     result = import_csv_snapshot(tenant.session, store_id=tenant.store_id, connection_id=tenant.connection_id,
-                                 request=SnapshotImportRequest(**files, synthetic=True))
+                                 request=SnapshotImportRequest(**files, synthetic=True), master_key=TEST_MASTER_KEY)
     assert result.status == "completed", result.error
     return result.snapshot
 

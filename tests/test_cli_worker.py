@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import secrets
 import subprocess
 import sys
 from dataclasses import replace
@@ -223,7 +224,7 @@ def test_the_real_environment_is_read_by_default(tmp_path, monkeypatch, capsys):
 def test_the_health_settings_follow_the_worker_rules():
     environ = {"MERVIO_DATABASE_URL": "postgresql://w@db/mervio", "MERVIO_WORKER_HEALTH_FILE": "/run/h.json",
                "MERVIO_WORKER_POLL_MAX_SECONDS": "20", "MERVIO_WORKER_HEALTH_MAX_AGE_SECONDS": "61",
-               "MERVIO_WORKER_DEGRADED_GRACE_SECONDS": "30"}
+               "MERVIO_WORKER_DEGRADED_GRACE_SECONDS": "30", "MERVIO_IDENTITY_MASTER_KEY": secrets.token_hex(32)}
     worker = WorkerSettings.from_env(environ)
     health = HealthCheckSettings.from_env(environ)
     assert (health.health_file, health.health_max_age_seconds, health.degraded_grace_seconds) == (
@@ -258,16 +259,25 @@ def test_an_invalid_configuration_exits_with_code_2_and_names_only_the_variables
     line = lines[0]
     assert (line["event"], line["level"], line["service"], line["exit_code"]) == (
         "worker.config_invalid", "ERROR", "worker", 2)
+    # 004.4.2: la cle maitre d'identite est obligatoire des que le worker traite des imports (defaut)
     assert {problem["variable"] for problem in line["problems"]} == {
-        "MERVIO_DATABASE_URL", "MERVIO_WORKER_DISPATCH_BATCH", "MERVIO_LOG_FORMAT", "MERVIO_WORKER_HEALTH_FILE"}
+        "MERVIO_DATABASE_URL", "MERVIO_WORKER_DISPATCH_BATCH", "MERVIO_LOG_FORMAT", "MERVIO_WORKER_HEALTH_FILE",
+        "MERVIO_IDENTITY_MASTER_KEY"}
     for leak in (SECRET, "mysql", ORGANIZATION, "svc"):
         assert leak not in raw
 
 
 def test_a_missing_database_url_exits_with_code_2(restore_logging):
-    code, lines, _ = run_refused({})
+    code, lines, _ = run_refused({"MERVIO_IDENTITY_MASTER_KEY": secrets.token_hex(32)})
     assert code == 2
     assert lines[0]["problems"] == [{"variable": "MERVIO_DATABASE_URL", "rule": "obligatoire (aucune base par defaut)"}]
+
+
+def test_a_missing_identity_master_key_exits_with_code_2_when_imports_are_served(restore_logging):
+    code, lines, _ = run_refused({"MERVIO_DATABASE_URL": "postgresql://w@db/mervio"})
+    assert code == 2
+    assert lines[0]["problems"] == [{"variable": "MERVIO_IDENTITY_MASTER_KEY",
+                                     "rule": "obligatoire pour les travaux import (cle maitre d'identite)"}]
 
 
 def test_an_unreadable_secret_file_is_refused_without_its_path(tmp_path, restore_logging):

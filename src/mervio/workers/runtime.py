@@ -42,6 +42,7 @@ from ..persistence.dispatch import Dispatcher
 from ..persistence.errors import SchemaNotReady, UnsafeDatabaseConfiguration
 from ..persistence.retry import database_error_code, retryable_database_error
 from ..persistence.service import ServicePrincipal, service_principal
+from ..identity import MasterKey
 from ..settings import BUSY_HEARTBEAT_SECONDS, WorkerSettings, describe_database_url
 from .handlers import HandlerRegistry, default_registry
 from .lifecycle import HEALTH_STATE, Lifecycle, ProcessState
@@ -83,6 +84,12 @@ def _hard_exit(code: int) -> None:  # pragma: no cover - termine le processus
     os._exit(code)
 
 
+def _identity_master(settings: WorkerSettings) -> Optional[MasterKey]:
+    """Cle maitre d'identite du processus (deja validee par settings); jamais journalisee."""
+    secret = settings.identity_master_key
+    return MasterKey.from_hex(secret.reveal()) if secret is not None else None
+
+
 class WorkerRuntime:
     """Le processus worker, de la configuration validee a l'arret."""
 
@@ -92,7 +99,7 @@ class WorkerRuntime:
                  forced_exit_delay: float = 5.0, jitter: Callable[[float, float], float] = random.uniform,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.settings = settings
-        self.registry = registry or default_registry()
+        self.registry = registry or default_registry(identity_master=_identity_master(settings))
         self.database_factory = database_factory
         self.worker_id = default_worker_id(settings.worker_name)
         self.log = (log or get_event_logger("worker")).bind(worker_id=self.worker_id)

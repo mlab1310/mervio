@@ -15,6 +15,7 @@ from ..errors import InsufficientDataError
 from ..ingestion import ingest_google_ads, ingest_shopify_orders, ingest_shopify_products, ingest_stripe
 from ..logging_config import get_logger
 from ..domain.models import Dataset
+from ..identity import CustomerIdentity
 from ..domain.quality import DataQualityReport, QualityStatus
 from . import kpi as kpi_module
 from .anomaly import Anomaly, detect_anomalies
@@ -53,9 +54,17 @@ SERIES_METRICS = {
 }
 
 
-def load_dataset(paths: SourcePaths) -> Dataset:
+def load_dataset(paths: SourcePaths, identity: Optional[CustomerIdentity] = None) -> Dataset:
+    """Connecteurs -> modele normalise. `identity`: cle des references client (D-053, D-058).
+
+    Sans `identity`, une cle EPHEMERE est tiree pour cet appel: comportement des outils locaux
+    (CLI analytique, scripts, evaluation synthetique). Ce repli ne peut pas atteindre la base:
+    le jeu porte `identity_key_id` et `persistence.snapshots.write_snapshot` n'accepte qu'un jeu
+    calcule avec la cle de l'ORGANISATION de la session (004.4.2, F-08).
+    """
+    identity = identity or CustomerIdentity.ephemeral()
     quality = DataQualityReport()
-    dataset = Dataset(quality=quality)
+    dataset = Dataset(quality=quality, identity_key_id=identity.key_id)
 
     if paths.shopify_products:
         dataset.products = ingest_shopify_products(paths.shopify_products, quality)
@@ -66,7 +75,7 @@ def load_dataset(paths: SourcePaths) -> Dataset:
                           note="export produits Shopify non fourni")
 
     if paths.shopify_orders:
-        orders, refunds, currency = ingest_shopify_orders(paths.shopify_orders, quality)
+        orders, refunds, currency = ingest_shopify_orders(paths.shopify_orders, quality, identity)
         dataset.orders = orders
         dataset.refunds.extend(refunds)
         dataset.currency = currency or UNKNOWN_CURRENCY
@@ -145,8 +154,9 @@ def run_analysis(
     paths: SourcePaths,
     config: Optional[AnalyticsConfig] = None,
     today: Optional[date] = None,
+    identity: Optional[CustomerIdentity] = None,
 ) -> dict:
-    return analyze_loaded_dataset(load_dataset(paths), config, today)
+    return analyze_loaded_dataset(load_dataset(paths, identity), config, today)
 
 
 def analyze_loaded_dataset(

@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -122,12 +123,15 @@ def test_the_event_catalogue_is_consistent():
 
 
 def test_the_worker_configuration_can_be_logged_safely(output):
+    master_key = secrets.token_hex(32)  # cle maitre d'identite factice (004.4.2)
     settings = WorkerSettings.from_env({"MERVIO_DATABASE_URL": f"postgresql://w:{SECRET}@db/mervio",
-                                        "MERVIO_WORKER_HEALTH_FILE": "/var/run/mervio/health.json"})
+                                        "MERVIO_WORKER_HEALTH_FILE": "/var/run/mervio/health.json",
+                                        "MERVIO_IDENTITY_MASTER_KEY": master_key})
     get_event_logger("worker").info("worker.config", **settings.public())
     raw = output.getvalue()
-    assert SECRET not in raw and "/var/run" not in raw
+    assert SECRET not in raw and "/var/run" not in raw and master_key not in raw
     assert documents(output)[0]["database"]["host"] == "db"
+    assert documents(output)[0]["identity_master_configured"] is True
 
 
 # -- absence de secret ----------------------------------------------------------------------

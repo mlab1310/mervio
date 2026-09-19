@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..logging_config import get_logger
 from ..domain.models import Order, OrderItem, Product, Refund
+from ..identity import CustomerIdentity
 from ..domain.quality import DataQualityReport, QualityStatus
 from .base import (
     first_present, is_null, parse_datetime, parse_float, parse_int, read_csv, require_columns, resolve_date_order,
@@ -59,8 +60,15 @@ def ingest_shopify_products(path: str | Path, quality: DataQualityReport) -> Dic
 
 
 def ingest_shopify_orders(
-    path: str | Path, quality: DataQualityReport
+    path: str | Path, quality: DataQualityReport, identity: Optional[CustomerIdentity] = None,
 ) -> Tuple[List[Order], List[Refund], str]:
+    """Commandes et remboursements de l'export Shopify.
+
+    `identity` calcule la reference client (D-053): l'e-mail de l'export est lu ici, transforme
+    en reference a cle, puis oublie; il n'entre jamais dans le modele. Sans `identity` (CLI
+    locale, validation), une cle ephemere est tiree pour cet appel (D-058).
+    """
+    identity = identity or CustomerIdentity.ephemeral()
     rows = read_csv(path, SOURCE, quality)
     require_columns(rows, REQUIRED_ORDER_COLUMNS, SOURCE)
     quality.mark_source("shopify_orders")
@@ -112,7 +120,7 @@ def ingest_shopify_orders(
                 orders_with_total.add(order_id)
             orders[order_id] = Order(
                 order_id=order_id,
-                customer_id=email or f"guest:{order_id}",
+                customer_id=identity.ref_customer(email, order_id),
                 created_at=created_at,
                 currency=order_currency,
                 # Contrat Shopify (D-041): "Subtotal" est deja net des remises de commande.
@@ -124,7 +132,6 @@ def ingest_shopify_orders(
                 tax=parse_float(row.get("Taxes"), source=SOURCE, column="Taxes", row=index, default=0.0) or 0.0,
                 total=total or 0.0,
                 financial_status=(row.get("Financial Status") or "unknown").strip().lower(),
-                customer_email=email,
             )
             seen_items[order_id] = set()
             accepted_rows += 1

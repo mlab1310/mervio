@@ -322,36 +322,55 @@ def test_an_unsafe_image_is_refused(config, facts):
         make(FakeDocker(image_responses(config, facts))).check_image()
 
 
-def test_negative_connections_pass_their_url_through_the_environment_only():
-    docker = FakeDocker([
-        (contains("worker"), 2, "", '{"event": "worker.identity_refused"}\n'),
+#: 004.4.2: le worker SANS cle maitre d'identite est refuse a la configuration, avant toute connexion
+NO_KEY_REFUSAL = ('{"event": "worker.config_invalid", "problems": [{"variable": "MERVIO_IDENTITY_MASTER_KEY", '
+                  '"rule": "obligatoire"}]}\n')
+
+
+def negative_responses(worker_code=2, admin_code=3, no_key_code=2):
+    return [
+        (contains("worker", "MERVIO_IDENTITY_MASTER_KEY"), worker_code, "", '{"event": "worker.identity_refused"}\n'),
+        (contains("worker"), no_key_code, "", NO_KEY_REFUSAL),
         (contains("psql"), 0, "0\n", ""),
-        (contains("admin"), 3, '{"ok": false, "error": {"code": "database_unavailable", "message": "x"}}\n', ""),
-    ])
+        (contains("admin"), admin_code, '{"ok": false, "error": {"code": "database_unavailable", "message": "x"}}\n',
+         ""),
+    ]
+
+
+def test_negative_connections_pass_their_url_through_the_environment_only():
+    docker = FakeDocker(negative_responses())
     smoke = make(docker)
     smoke.refuse_privileged_connections()
     runs = [call for call in docker.calls if call["argv"][:2] == ["docker", "run"]]
-    assert len(runs) == 2
+    assert len(runs) == 3
     for call in runs:
         argv = call["argv"]
         assert argv[argv.index("-e") + 1] == "MERVIO_DATABASE_URL", "nom seul: la valeur vient de l'environnement"
         assert argv[argv.index("--network") + 1] == f"{smoke.project}_backend"
         assert "postgresql://" not in " ".join(argv)
         assert call["env"]["MERVIO_DATABASE_URL"].startswith("postgresql://")
-    superuser, wrong = (call["env"]["MERVIO_DATABASE_URL"] for call in runs)
-    assert superuser.startswith(f"postgresql://{smoke_module.SUPERUSER}:")
-    assert wrong.startswith(f"postgresql://{smoke_module.APP_ROLE}:")
-    assert smoke.redact(wrong) != wrong, "le mauvais mot de passe est aussi masque"
+    superuser, no_key, wrong = runs
+    assert superuser["argv"].count("-e") == 2 and "MERVIO_IDENTITY_MASTER_KEY" in superuser["argv"]
+    assert "MERVIO_IDENTITY_MASTER_KEY" not in no_key["argv"]  # l'absence de cle est le cas teste
+    assert smoke.passwords["MERVIO_IDENTITY_MASTER_KEY"] not in " ".join(superuser["argv"])  # nom seul
+    assert superuser["env"]["MERVIO_DATABASE_URL"].startswith(f"postgresql://{smoke_module.SUPERUSER}:")
+    assert no_key["env"]["MERVIO_DATABASE_URL"].startswith(f"postgresql://{smoke_module.WORKER_ROLE}:")
+    assert wrong["env"]["MERVIO_DATABASE_URL"].startswith(f"postgresql://{smoke_module.APP_ROLE}:")
+    assert smoke.redact(wrong["env"]["MERVIO_DATABASE_URL"]) != wrong["env"]["MERVIO_DATABASE_URL"]
 
 
-@pytest.mark.parametrize("worker_code, admin_code", [(0, 3), (1, 3), (2, 0), (2, 1)])
-def test_negative_connections_must_fail_with_the_expected_code(worker_code, admin_code):
-    docker = FakeDocker([
-        (contains("worker"), worker_code, "", '{"event": "worker.identity_refused"}\n'),
-        (contains("psql"), 0, "0\n", ""),
-        (contains("admin"), admin_code, '{"ok": false, "error": {"code": "database_unavailable", "message": "x"}}\n',
-         ""),
-    ])
+def test_the_generated_secrets_include_a_valid_identity_master_key():
+    import re
+    generated = smoke_module.generate_secrets()
+    assert set(generated) == set(smoke_module.PASSWORD_VARIABLES) | {"MERVIO_IDENTITY_MASTER_KEY"}
+    assert re.fullmatch(r"[0-9a-f]{64}", generated["MERVIO_IDENTITY_MASTER_KEY"])
+    assert smoke_module.generate_secrets()["MERVIO_IDENTITY_MASTER_KEY"] != generated["MERVIO_IDENTITY_MASTER_KEY"]
+
+
+@pytest.mark.parametrize("worker_code, admin_code, no_key_code", [(0, 3, 2), (1, 3, 2), (2, 0, 2), (2, 1, 2),
+                                                                  (2, 3, 0), (2, 3, 1)])
+def test_negative_connections_must_fail_with_the_expected_code(worker_code, admin_code, no_key_code):
+    docker = FakeDocker(negative_responses(worker_code, admin_code, no_key_code))
     with pytest.raises(SmokeFailure):
         make(docker).refuse_privileged_connections()
 
@@ -433,14 +452,12 @@ def test_only_uuids_are_interpolated_in_control_queries():
 
 
 def test_the_negative_worker_mounts_its_health_tmpfs_for_the_image_user():
-    docker = FakeDocker([
-        (contains("worker"), 2, "", '{"event": "worker.identity_refused"}\n'),
-        (contains("psql"), 0, "0\n", ""),
-        (contains("admin"), 3, '{"ok": false, "error": {"code": "database_unavailable", "message": "x"}}\n', ""),
-    ])
+    docker = FakeDocker(negative_responses())
     make(docker).refuse_privileged_connections()
-    worker = [argv for argv in docker.argvs() if argv[:2] == ["docker", "run"] and argv[-1] == "worker"][0]
-    assert worker[worker.index("--tmpfs") + 1] == "/run/mervio:uid=10001,gid=10001,mode=0700"
+    workers = [argv for argv in docker.argvs() if argv[:2] == ["docker", "run"] and argv[-1] == "worker"]
+    assert len(workers) == 2  # superutilisateur, puis sans cle d'identite (004.4.2)
+    for worker in workers:
+        assert worker[worker.index("--tmpfs") + 1] == "/run/mervio:uid=10001,gid=10001,mode=0700"
 
 
 def test_a_failure_prints_the_redacted_docker_health_verdicts():

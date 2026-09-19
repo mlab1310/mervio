@@ -63,6 +63,7 @@ def child(scenario: str, app_url: str, worker_url: str, context: dict) -> dict:
     import logging
     from uuid import UUID
 
+    from mervio.identity import MasterKey
     from mervio.observability.logging import configure
     from mervio.persistence import jobs
     from mervio.persistence.database import Database
@@ -85,8 +86,10 @@ def child(scenario: str, app_url: str, worker_url: str, context: dict) -> dict:
         return {"ok": True}
 
     registry = HandlerRegistry().register(JobType.ANALYSIS, sleeping)
+    master_key_hex = secrets.token_hex(32)  # cle maitre d'identite du banc (004.4.2), jamais ecrite
     settings = WorkerSettings.from_env({
         "MERVIO_DATABASE_URL": worker_url, "MERVIO_WORKER_NAME": f"bench-{scenario}",
+        "MERVIO_IDENTITY_MASTER_KEY": master_key_hex,
         "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "1", "MERVIO_WORKER_POLL_MAX_SECONDS": "5",
     })
     result: dict = {"scenario": scenario}
@@ -167,7 +170,7 @@ def child(scenario: str, app_url: str, worker_url: str, context: dict) -> dict:
                  "google_ads": str(SAMPLE / "google_ads.csv")}
         importing = jobs.enqueue_job(session, job_type=JobType.IMPORT, store_id=UUID(context["store_id"]), payload={
             "store_id": context["store_id"], "connection_id": context["connection_id"], "sources": files})
-        runtime = WorkerRuntime(settings, registry=default_registry())
+        runtime = WorkerRuntime(settings, registry=default_registry(identity_master=MasterKey.from_hex(master_key_hex)))
         started = time.perf_counter()
         thread = start(runtime)
         _wait(lambda: jobs.get_job(session, importing.id).is_terminal)

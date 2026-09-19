@@ -50,7 +50,9 @@ def child(size: int, app_url: str) -> dict:
     from mervio.config import AnalyticsConfig
     from mervio.persistence import analyses, snapshots
     from mervio.persistence.codec import file_sha256, serialize_report
+    from mervio.identity import MasterKey
     from mervio.persistence.database import Database
+    from mervio.persistence.identity_keys import ensure_identity_key
     from mervio.persistence.snapshots import SourceFile
     from mervio.persistence.stores import create_csv_connection, create_store
     from mervio.persistence.tenancy import TenantContext, TenantSession, create_organization, ensure_user
@@ -67,11 +69,13 @@ def child(size: int, app_url: str) -> dict:
     store = create_store(session, name="bench")
     connection = create_csv_connection(session, store_id=store.id, label="bench")
 
-    csv_dataset = _timed("csv_load_dataset", lambda: load_dataset(paths), timings)
+    # 004.4.2 (F-08): cle d'identite de l'organisation (cle maitre tiree pour le banc, jamais ecrite)
+    identity = ensure_identity_key(session, MasterKey(secrets.token_bytes(32)))
+    csv_dataset = _timed("csv_load_dataset", lambda: load_dataset(paths, identity), timings)
     sources = [SourceFile(kind, *file_sha256(path)) for kind, path in files.items()]
     record = _timed("db_write_snapshot", lambda: snapshots.write_snapshot(
         session, store_id=store.id, connection_id=connection.id, dataset=csv_dataset, sources=sources,
-        inputs_sha256=secrets.token_hex(32), synthetic=True, synthetic_manifest=manifest), timings)
+        inputs_sha256=secrets.token_hex(32), synthetic=True, identity=identity, synthetic_manifest=manifest), timings)
     db_dataset = _timed("db_load_dataset", lambda: snapshots.load_dataset(session, store.id, record.id), timings)
     equal = _timed("verify_dataset_equality", lambda: db_dataset == csv_dataset, timings)
     today = analysis_day(manifest)

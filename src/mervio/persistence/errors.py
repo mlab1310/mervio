@@ -83,3 +83,17 @@ class JobLeaseLost(PersistenceError):
 
 class PayloadRejected(PersistenceError):
     """Charge utile de travail refusee (cle sensible, valeur trop grande, forme invalide)."""
+
+
+class IdentityKeyUnavailable(PersistenceError):
+    """Cle d'identite d'organisation inutilisable (D-053): refus explicite, jamais une nouvelle cle en silence.
+
+    `reason`: `master_key_mismatch` (la cle maitre courante n'est pas celle qui a cree l'identite)
+    ou `destroyed` (sel detruit par la purge de l'organisation). Aucune valeur de cle n'est portee.
+    """
+
+    code = "identity_key_unavailable"
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"cle d'identite indisponible ({reason})")

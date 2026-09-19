@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 from uuid import UUID
 
 from ..config import AnalyticsConfig
+from ..identity import MasterKey
 from ..observability.logging import EventLogger
 from ..persistence import audit, jobs
 from ..persistence.audit import Action, ActorType, Outcome, ResourceType
@@ -114,10 +115,26 @@ class HandlerRegistry:
 
 # -- import ---------------------------------------------------------------------------------
 
-def import_handler(context: JobContext) -> Dict[str, Any]:
+def make_import_handler(identity_master: Optional[MasterKey]) -> Handler:
+    """Gestionnaire d'import lie a la cle maitre d'identite du processus (D-053).
+
+    La cle n'entre jamais dans la charge utile, le contexte, l'audit ni les logs. Sans cle, tout
+    import echoue en `identity_key_unavailable` (permanent): aucune reference client n'est calculee
+    avec une cle de substitution. Le processus worker refuse d'ailleurs de demarrer sans elle
+    s'il traite des imports (settings).
+    """
+    def handler(context: JobContext) -> Dict[str, Any]:
+        return import_handler(context, identity_master)
+    return handler
+
+
+def import_handler(context: JobContext, identity_master: Optional[MasterKey] = None) -> Dict[str, Any]:
     """Travail d'import: fichiers CSV -> instantane scelle, via le chemin 004.1."""
     from ..application.persisted_analysis import SnapshotImportRequest, import_csv_snapshot
+    from ..persistence.errors import IdentityKeyUnavailable
 
+    if identity_master is None:  # refuse avant tout: aucun import n'a commence
+        raise PermanentJobError("identity_key_unavailable", "cle maitre d'identite non configuree")
     store_id = context.uuid("store_id")
     connection_id = context.uuid("connection_id")
     sources = context.payload.get("sources")
@@ -132,14 +149,22 @@ def import_handler(context: JobContext) -> Dict[str, Any]:
         synthetic_manifest=context.payload.get("synthetic_manifest"),
         **{kind: str(path) for kind, path in sources.items()},
     )
-    with context.session.transaction(Permission.IMPORT_DATA) as conn:
-        context.audit(conn, Action.IMPORT_STARTED, ResourceType.JOB, context.job.id, outcome=Outcome.STARTED,
-                      metadata={"sources": sorted(sources), "attempt": context.job.attempts})
-    context.log.info("import.started", sources=sorted(sources), attempt=context.job.attempts)
+
+    def started_after_identity() -> None:
+        # 004.4.2 (F-02): appele par import_csv_snapshot APRES l'autorisation et la cle d'identite,
+        # AVANT tout acces fichier. Un refus d'identite ne laisse donc aucun `import.started`.
+        with context.session.transaction(Permission.IMPORT_DATA) as conn:
+            context.audit(conn, Action.IMPORT_STARTED, ResourceType.JOB, context.job.id, outcome=Outcome.STARTED,
+                          metadata={"sources": sorted(sources), "attempt": context.job.attempts})
+        context.log.info("import.started", sources=sorted(sources), attempt=context.job.attempts)
 
     started = time.perf_counter()
     context.checkpoint()
-    result = import_csv_snapshot(context.session, store_id=store_id, connection_id=connection_id, request=request)
+    try:
+        result = import_csv_snapshot(context.session, store_id=store_id, connection_id=connection_id,
+                                     request=request, master_key=identity_master, on_started=started_after_identity)
+    except IdentityKeyUnavailable as exc:
+        raise PermanentJobError(exc.code, f"cle d'identite indisponible ({exc.reason})") from None
     context.checkpoint()
     duration_ms = int((time.perf_counter() - started) * 1000)
 
@@ -269,9 +294,12 @@ def purge_handler(context: JobContext) -> Dict[str, Any]:
     return counts
 
 
-def default_registry() -> HandlerRegistry:
-    """Registre par defaut: un gestionnaire par type declare dans le schema."""
+def default_registry(*, identity_master: Optional[MasterKey] = None) -> HandlerRegistry:
+    """Registre par defaut: un gestionnaire par type declare dans le schema.
+
+    `identity_master`: cle maitre d'identite du processus, liee au gestionnaire d'import.
+    """
     return (HandlerRegistry()
-            .register(JobType.IMPORT, import_handler)
+            .register(JobType.IMPORT, make_import_handler(identity_master))
             .register(JobType.ANALYSIS, analysis_handler)
             .register(JobType.PURGE, purge_handler))

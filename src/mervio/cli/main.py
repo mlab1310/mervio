@@ -18,6 +18,7 @@ from ..application.imports import SOURCE_LABELS, detect_source, validate_file
 from ..application.service import AnalysisRequest, analyze_dataset
 from ..config import ENGINE_VERSION, AnalyticsConfig
 from ..errors import MervioError
+from ..identity import CustomerIdentity, IdentityKeyError
 from ..logging_config import configure_logging
 from ..reporting.writers import write_outputs
 from .admin import add_admin_parser, cmd_admin
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--print-report", action="store_true",
                          help="affiche le rapport lisible dans le terminal")
     analyze.add_argument("--verbose", action="store_true")
+    _add_identity_args(analyze)
 
     validate = sub.add_parser("validate", help="verifie des fichiers sans lancer d'analyse")
     _add_source_args(validate)
@@ -66,6 +68,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_worker_parser(sub)
     add_admin_parser(sub)
     return parser
+
+
+def _add_identity_args(parser: argparse.ArgumentParser) -> None:
+    """Cle des references client (D-058). Par defaut ephemere: pseudonymes non liables d'une
+    execution a l'autre. Une cle explicite rend le rapport reproductible octet pour octet."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--identity-key-file", metavar="FICHIER",
+                       help="cle d'identite explicite (hexadecimal, 32 octets au moins): rapport reproductible")
+    group.add_argument("--ephemeral-identity-key", action="store_true",
+                       help="cle d'identite tiree pour cette execution (comportement par defaut)")
+
+
+def _identity_from_args(args):
+    path = getattr(args, "identity_key_file", None)
+    return CustomerIdentity.from_key_file(path) if path else CustomerIdentity.ephemeral()
 
 
 def _add_source_args(parser: argparse.ArgumentParser) -> None:
@@ -142,12 +159,17 @@ def _run_analysis(args, *, synthetic: bool, label: str) -> int:
         return 2
 
     today = datetime.strptime(args.today, "%Y-%m-%d").date() if getattr(args, "today", None) else date.today()
+    try:
+        identity = _identity_from_args(args)
+    except IdentityKeyError as exc:  # message sans valeur
+        print(f"cle d'identite refusee: {exc}", file=sys.stderr)
+        return 2
     request = AnalysisRequest(
         shopify_orders=sources["shopify_orders"], shopify_products=sources["shopify_products"],
         stripe=sources["stripe"], google_ads=sources["google_ads"],
         config=AnalyticsConfig(grain=getattr(args, "grain", "week"),
                                lookback_periods=getattr(args, "lookback", 12)),
-        today=today, synthetic=synthetic, label=label,
+        today=today, synthetic=synthetic, label=label, identity=identity,
     )
     result = analyze_dataset(request)
     _print_validations(result.validations)

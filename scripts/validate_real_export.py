@@ -48,6 +48,7 @@ from mervio.application.imports import validate_file  # noqa: E402
 from mervio.application.inspector import inspect_file  # noqa: E402
 from mervio.application.service import AnalysisRequest, analyze_dataset  # noqa: E402
 from mervio.config import AnalyticsConfig  # noqa: E402
+from mervio.identity import CustomerIdentity  # noqa: E402
 from mervio.errors import MervioError  # noqa: E402
 from mervio.llm import LLMConfig, MockLLMProvider, build_llm_context, explain_report, serialize_context  # noqa: E402
 from mervio.llm.contract import ContextLimits  # noqa: E402
@@ -630,7 +631,10 @@ def run(sources: Dict[str, Optional[str]], today: Optional[date] = None, grain: 
             # un fichier OPTIONNEL invalide fait rejeter toute l'analyse: constat, pas correction
             result["normalization_error"] = f"{type(exc).__name__}: {getattr(exc, 'source', '')}"
         timings["normalization"] = time.perf_counter() - started
-        request = AnalysisRequest(**{k: v for k, v in sources.items()}, config=config, today=today)
+        # une seule cle d'identite pour l'analyse ET sa reexecution: le controle de determinisme porte sur
+        # le moteur, pas sur la cle ephemere tiree par defaut (D-058)
+        request = AnalysisRequest(**{k: v for k, v in sources.items()}, config=config, today=today,
+                                  identity=CustomerIdentity.ephemeral())
         started = time.perf_counter()
         analysis = analyze_dataset(request)
         timings["validation_normalization_analytics"] = time.perf_counter() - started

@@ -27,7 +27,7 @@ from mervio.persistence.tenancy import (
     Permission, Role, TenantContext, TenantSession, add_member, ensure_user, remove_member,
 )
 
-from .persistence_support import SAMPLE_FILES
+from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY
 from .service_support import PAST, count, enqueue, raw
 
 WORKER_ID = "service-worker-1"
@@ -366,7 +366,7 @@ def test_a_forged_context_writes_nothing(worker_conn, tenant_a, tenant_b, princi
 
 def test_without_a_delegate_the_service_reads_no_business_data(worker_conn, tenant_a, principal, authorized_a):
     import_csv_snapshot(tenant_a.session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                        request=SnapshotImportRequest(**SAMPLE_FILES))
+                        request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY)
     enqueue(tenant_a)
     assert count(worker_conn, "jobs", tenant_a.organization_id) == 1
     assert count(worker_conn, "stores", tenant_a.organization_id) == 1
@@ -540,7 +540,7 @@ def test_the_database_refuses_business_writes_without_a_valid_delegate(db, worke
     session = UncheckedSession(worker_db, TenantContext(tenant_a.organization_id, user_id))
     with pytest.raises((psycopg.errors.InsufficientPrivilege, NotFound)):
         import_csv_snapshot(session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                            request=SnapshotImportRequest(**SAMPLE_FILES))
+                            request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY)
     assert count(worker_db.connection(), "data_snapshots", tenant_a.organization_id, tenant_a.owner_id) == 0
 
 
@@ -549,7 +549,7 @@ def test_the_service_imports_on_behalf_of_an_analyst(db, worker_db, tenant_a, pr
     job = import_job(tenant_a, session=analyst)
     session = delegated_session(ServiceSession(worker_db, tenant_a.organization_id, principal), job)
     result = import_csv_snapshot(session, store_id=tenant_a.store_id, connection_id=tenant_a.connection_id,
-                                 request=SnapshotImportRequest(**SAMPLE_FILES))
+                                 request=SnapshotImportRequest(**SAMPLE_FILES), master_key=TEST_MASTER_KEY)
     assert result.status == "completed"
     assert result.snapshot.created_by == analyst_id
 

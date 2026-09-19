@@ -32,6 +32,7 @@ from mervio.workers.runtime import (
     EXIT_CONFIG, EXIT_DATABASE, EXIT_FORCED, EXIT_OK, EXIT_SCHEMA, WorkerRuntime,
 )
 
+from .persistence_support import TEST_MASTER_KEY_HEX
 from .worker_support import enqueue_scripted, scripted_registry, terminate_backends, wait_until
 
 S = ProcessState
@@ -41,6 +42,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def settings_for(pg, tmp_path, *, kind="worker", database=None, lease=3, renew=0.5, **env) -> WorkerSettings:
     variables = {
         "MERVIO_DATABASE_URL": pg.url(kind, database), "MERVIO_WORKER_NAME": "rt",
+        "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
         "MERVIO_WORKER_HEALTH_FILE": str(tmp_path / "health.json"),
         "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.05", "MERVIO_WORKER_POLL_MAX_SECONDS": "0.2",
         "MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS": "2", "MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS": "5",
@@ -335,6 +337,7 @@ class Process:
         variables.update({
             "PYTHONPATH": f"{ROOT / 'tests'}{os.pathsep}{ROOT / 'src'}",
             "MERVIO_DATABASE_URL": pg.url("worker"), "MERVIO_WORKER_NAME": name,
+            "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
             "MERVIO_WORKER_HEALTH_FILE": str(self.health), "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.05",
             "MERVIO_WORKER_POLL_MAX_SECONDS": "0.2", "MERVIO_WORKER_RECOVERY_INTERVAL_SECONDS": "1",
             "MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS": "10", "MERVIO_TEST_LEASE_SECONDS": "3",

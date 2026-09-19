@@ -65,11 +65,36 @@ openssl rand -hex 24   # à répéter pour chaque variable
 | `MERVIO_APP_DB_PASSWORD` | `mervio_app_user` (membre de `mervio_app`) | `admin` |
 | `MERVIO_WORKER_DB_PASSWORD` | `mervio_worker_svc` (membre de `mervio_app` et `mervio_worker`) | `worker` |
 
+Et une **clé maître d'identité** (004.4.2, D-053), 32 octets en hexadécimal, lue par le seul
+`worker` (obligatoire dès qu'il traite des imports ; sinon il s'arrête avec le code 2) :
+
+```bash
+openssl rand -hex 32   # MERVIO_IDENTITY_MASTER_KEY
+```
+
+| Variable | Rôle | Utilisé par |
+|---|---|---|
+| `MERVIO_IDENTITY_MASTER_KEY` | clé maître d'identité client : jamais en base, jamais journalisée ; les références client en dérivent via le sel de chaque organisation | `worker` |
+
+La perdre bloque les nouveaux imports (refus explicite `identity_key_unavailable`) ; en changer
+aussi, pour les organisations déjà servies. La conserver comme un secret de production.
+
+**Première utilisation : la clé fournie devient la référence de l'organisation (fail-closed).**
+Le premier import d'une organisation inscrit l'empreinte (`master_key_id`) de la clé maître du
+worker qui le traite ; toute autre clé est ensuite refusée pour cette organisation, sans
+substitution silencieuse. Un worker démarré avec une **mauvaise** clé (au format valide) rend donc
+indisponibles les imports des organisations qu'il sert en premier. **Il n'existe aujourd'hui
+aucune procédure de réassignation** (prévue avec la destruction en 004.4.6 et la gestion de clés
+en 004.9) ; ne jamais « réparer » en modifiant `master_key_id` en base. Précautions : générer la
+clé une seule fois, la sauvegarder avant le premier import, donner **la même** clé à tous les
+workers, et vérifier `identity_master_configured` dans l'événement `worker.config` au démarrage.
+Détail : `docs/DECISIONS.md` (D-053, statut 004.4.2).
+
 Facultatif : `MERVIO_POSTGRES_PORT` (port publié sur 127.0.0.1, défaut 55432), `MERVIO_IMAGE`
 (défaut `mervio:local`), `MERVIO_ENV`, `MERVIO_LOG_LEVEL`, `MERVIO_WORKER_NAME`.
 
-Compose **refuse de démarrer** si l'un des quatre mots de passe manque (`${VAR:?}`). Aucun mot
-de passe n'est écrit dans un fichier versionné, ni dans l'image.
+Compose **refuse de démarrer** si l'un des quatre mots de passe ou la clé maître d'identité
+manque (`${VAR:?}`). Aucun secret n'est écrit dans un fichier versionné, ni dans l'image.
 
 Limite assumée (développement) : compose transmet les mots de passe par variables d'environnement
 des conteneurs, visibles par `docker inspect` pour qui contrôle le démon Docker. Pour un
