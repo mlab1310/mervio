@@ -63,7 +63,7 @@ def _rate(count: int, seconds: float) -> float:
     return round(count / seconds, 1) if seconds > 0 else 0.0
 
 
-def child(size: int, app_url: str) -> dict:
+def child(size: int, app_url: str, maintenance_url: str) -> dict:
     from mervio.observability.logging import configure_json_logging
     from mervio.persistence import audit, jobs
     from mervio.persistence.database import Database
@@ -104,7 +104,12 @@ def child(size: int, app_url: str) -> dict:
     timings["bulk_fill"] = {"jobs": max(0, size - ENQUEUE_SAMPLE), "seconds": round(fill_seconds, 3),
                             "jobs_per_second": _rate(max(0, size - ENQUEUE_SAMPLE), fill_seconds)}
 
-    with database.transaction(organization_id=organization_id, user_id=owner) as conn:
+    # statistiques a jour: operation de MAINTENANCE du proprietaire, pas un comportement applicatif.
+    # Sous le role applicatif (non proprietaire), PostgreSQL IGNORE l'ANALYZE ("permission denied to
+    # analyze ..., skipping it"): avant cette correction, toutes les mesures etaient prises SANS
+    # statistiques. Le role applicatif ne recoit aucun privilege supplementaire.
+    import psycopg
+    with psycopg.connect(maintenance_url, autocommit=True) as conn:
         conn.execute("ANALYZE jobs")
         conn.execute("ANALYZE audit_events")
 
@@ -248,9 +253,10 @@ def main() -> int:
     parser.add_argument("--sizes", default="10000,100000")
     parser.add_argument("--child", type=int)
     parser.add_argument("--app-url")
+    parser.add_argument("--maintenance-url")
     args = parser.parse_args()
     if args.child:
-        print(json.dumps(child(args.child, args.app_url)))
+        print(json.dumps(child(args.child, args.app_url, args.maintenance_url)))
         return 0
 
     import psycopg
@@ -293,7 +299,8 @@ def main() -> int:
                 sql.Identifier(app), sql.Literal(password)))
         for size in sizes:
             output = subprocess.run([sys.executable, __file__, "--child", str(size), "--app-url",
-                                     f"postgresql://{app}:{password}@{base}"],
+                                     f"postgresql://{app}:{password}@{base}",
+                                     "--maintenance-url", f"postgresql://{migrator}:{password}@{base}"],
                                     capture_output=True, text=True, check=True)
             results["runs"][str(size)] = json.loads(output.stdout.strip().splitlines()[-1])
             print(size, json.dumps(results["runs"][str(size)]["timings"]["throughput"]), file=sys.stderr)

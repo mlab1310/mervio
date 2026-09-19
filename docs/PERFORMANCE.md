@@ -344,6 +344,13 @@ vu du client.
   couvre 3 000 et 6 000 travaux par organisation, pas cette plage.
 - **Rien n'a été modifié** : c'est une observation à traiter plus tard, pas dans cette mission de mesure.
 
+> **Mise à jour (révision `0012`, D-060)** : cause établie et corrigée. Sous le rôle worker, la politique
+> `jobs_service_dispatch` faisait estimer ~3 travaux par organisation ; `now()` (non leakproof) empêchait
+> toute condition d'index sur l'horloge ; `available_at` manquait à `jobs_ready_idx`. La sonde suit
+> désormais `jobs_ready_idx` à toute profondeur (11 × 1 000 : 363 → 66 blocs) et la prise ne trie plus
+> la file sans statistiques. Les chiffres ci-dessus restent la référence historique de 004.3.9 ; le banc
+> de la file mesurait alors sans statistiques (voir D-060).
+
 **Chiffre historique « ~0,28 ms »**
 - Introuvable dans le dépôt et l'historique Git.
 - **INFÉRÉ** : il correspond au temps d'exécution **serveur** de la sonde pour une organisation (0,27 ms

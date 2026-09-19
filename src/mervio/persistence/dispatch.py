@@ -25,26 +25,38 @@ from .database import Database
 from .service import ServicePrincipal, ServiceSession, _require_connected_principal
 from .stores import _limit
 
-#: Organisations autorisees ayant au moins un travail pret, apres le curseur. La sonde reprend
-#: l'ordre de la prise (`jobs_ready_idx`) et s'arrete au premier travail pret: son cout ne
-#: depend pas de la profondeur de la file de l'organisation.
+#: Organisations autorisees ayant au moins un travail pret, apres le curseur.
+#:
+#: CONTRAT. La sonde est un TEST D'EXISTENCE par organisation: le `j.id` de la sous-requete ne sert
+#: qu'a `IS NOT NULL` et n'est jamais renvoye. Elle ne decide d'aucun ordre de travail:
+#: - ordre des organisations: `sa.organization_id` apres le curseur (tour de role, D-050);
+#: - priorite reelle: `jobs.claim_next_job` (`_CLAIM_SQL`: priority DESC, created_at, id), dans
+#:   l'organisation choisie.
+#: Son `ORDER BY` reprend celui de la prise pour une raison de PERFORMANCE seulement: la sous-requete
+#: suit `jobs_ready_idx` et s'arrete au premier travail disponible. Sous RLS, cela suppose une
+#: estimation correcte de la politique `jobs_service_dispatch` (revision 0012, D-060).
+#: L'horloge est evaluee UNE fois (`(SELECT COALESCE(..., now()))`, meme instant que `now()`: celui
+#: de la transaction): `now()` n'est pas leakproof et, sous RLS, ne peut pas figurer dans une
+#: condition d'index; comparee a un parametre d'InitPlan, `available_at` (derniere cle de
+#: `jobs_ready_idx`) est verifiee dans l'index, sans lecture de table pour les travaux differes.
 _READY_SQL = (
     "SELECT sa.organization_id FROM service_authorizations sa "
     "WHERE sa.service_user_id = %s AND sa.revoked_at IS NULL "
     "  AND (%s::uuid IS NULL OR sa.organization_id > %s::uuid) "
     "  AND (SELECT j.id FROM jobs j WHERE j.organization_id = sa.organization_id AND j.status = 'queued' "
-    "       AND j.available_at <= COALESCE(%s::timestamptz, now()) AND j.attempts < j.max_attempts "
+    "       AND j.available_at <= (SELECT COALESCE(%s::timestamptz, now())) AND j.attempts < j.max_attempts "
     "       ORDER BY j.priority DESC, j.created_at ASC, j.id ASC LIMIT 1) IS NOT NULL "
     "ORDER BY sa.organization_id LIMIT %s"
 )
 
 #: Organisations autorisees ayant au moins un bail expire, apres le curseur (`jobs_lease_idx`).
+#: Horloge evaluee une fois, comme ci-dessus: l'echeance du bail devient une condition d'index.
 _EXPIRED_SQL = (
     "SELECT sa.organization_id FROM service_authorizations sa "
     "WHERE sa.service_user_id = %s AND sa.revoked_at IS NULL "
     "  AND (%s::uuid IS NULL OR sa.organization_id > %s::uuid) "
     "  AND (SELECT j.id FROM jobs j WHERE j.organization_id = sa.organization_id AND j.status = 'running' "
-    "       AND j.lease_expires_at < COALESCE(%s::timestamptz, now()) "
+    "       AND j.lease_expires_at < (SELECT COALESCE(%s::timestamptz, now())) "
     "       ORDER BY j.lease_expires_at ASC LIMIT 1) IS NOT NULL "
     "ORDER BY sa.organization_id LIMIT %s"
 )

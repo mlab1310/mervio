@@ -55,7 +55,7 @@ exécution à l'autre) ; `--identity-key-file FICHIER` (32 octets en hexadécima
 reproductible octet pour octet.
 
 ```bash
-python -m pytest        # suite complète : 2253 tests (avec PostgreSQL : 2253 passés, 0 échec, 0 ignoré ; sans base, les tests PostgreSQL sont ignorés)
+python -m pytest        # suite complète : 2277 tests (avec PostgreSQL : 2277 passés, 0 échec, 0 ignoré ; sans base, les tests PostgreSQL sont ignorés)
 ```
 
 ## Persistance PostgreSQL (optionnelle, Mission 004.1)

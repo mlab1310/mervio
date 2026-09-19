@@ -80,6 +80,11 @@ relu est égal au Dataset CSV et que le rapport relu est identique à l'octet ; 
 
 ## 4. File de travaux — `jobs_benchmark.py` (Mission 004.2)
 
+> **Correction (D-060)** : l'`ANALYZE` de ce banc s'exécutait sous le rôle applicatif, non propriétaire,
+> et PostgreSQL l'ignorait : les résultats antérieurs ont été mesurés **sans statistiques**. Il passe
+> désormais par l'URL de maintenance du propriétaire (`--maintenance-url`, fournie par le processus
+> parent) ; le rôle applicatif ne reçoit aucun privilège supplémentaire.
+
 ```bash
 MERVIO_BENCH_ADMIN_DATABASE_URL=postgresql://mervio_admin@127.0.0.1:55432/postgres \
     .venv/bin/python benchmarks/jobs_benchmark.py --sizes 10000,100000,1000000

@@ -154,11 +154,15 @@ _JOB_COLUMNS_QUALIFIED = ", ".join("jobs." + column.strip() for column in _JOB_C
 #: (`FOR UPDATE SKIP LOCKED`), l'UPDATE transite vers `running`: aucun intervalle
 #: entre les deux, donc aucune prise en double et aucun worker bloque par un autre.
 #: Constante de module: `explain_claim` explique EXACTEMENT ce qui s'execute.
+#: Horloge evaluee UNE fois (`(SELECT COALESCE(..., now()))`, meme instant que `now()`: celui de la
+#: transaction): sous RLS, `now()` (non leakproof) ne peut pas figurer dans une condition d'index;
+#: comparee a un parametre d'InitPlan, `available_at` (derniere cle de `jobs_ready_idx`, revision
+#: 0012) est verifiee dans l'index, sans lecture de table pour les travaux differes (D-060).
 _CLAIM_SQL = (
     "WITH candidate AS ("
     "    SELECT id FROM jobs"
     "    WHERE organization_id = %s AND status = 'queued'"
-    "      AND available_at <= COALESCE(%s::timestamptz, now())"
+    "      AND available_at <= (SELECT COALESCE(%s::timestamptz, now()))"
     "      AND job_type = ANY(%s) AND attempts < max_attempts"
     "      AND (%s::uuid IS NULL OR id = %s::uuid)"
     "    ORDER BY priority DESC, created_at ASC, id ASC"

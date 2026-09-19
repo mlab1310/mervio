@@ -247,9 +247,17 @@ def _probe(worker_db, statement, params):
 
 
 def test_the_dispatch_probe_cost_does_not_grow_with_queue_depth(db, worker_db, principal, tenant_a, owner):
-    """Files profondes (3 000 puis 6 000 travaux par organisation): la sonde suit l'index de prise
-    et s'arrete au premier travail pret; les blocs lus ne doublent pas avec la file."""
+    """Files profondes (3 000 puis 6 000 travaux par organisation): la sonde suit un index ordonne
+    (aucun bitmap, aucun tri de `jobs`) et s'arrete au premier travail disponible; les blocs lus ne
+    croissent pas avec la file.
+
+    Avant la revision 0012, cette assertion portait sur le nom `jobs_ready_idx` et echouait
+    aleatoirement (~2,7 %): sous RLS, le planificateur basculait vers un bitmap sur `jobs_tenant_key`
+    suivi d'un tri. La propriete verifiee est desormais le comportement (voir
+    test_dispatch_probe_plan.py, y compris la stabilite sur des ordres physiques aleatoires)."""
     from mervio.persistence.dispatch import _READY_SQL
+
+    from .test_dispatch_probe_plan import MAX_PROBE_BLOCKS, _index_driven_on, _jobs_blocks, _plan
     others = [make_tenant(db, f"P{i}") for i in range(10)]
     authorize(principal, tenant_a, *others)
     measures = []
@@ -257,8 +265,10 @@ def test_the_dispatch_probe_cost_does_not_grow_with_queue_depth(db, worker_db, p
         for tenant in (tenant_a, *others):
             _fill(owner, tenant, 3000)
         owner.execute("ANALYZE jobs")
-        job_scans, blocks = _probe(worker_db, _READY_SQL, (principal.id, None, None, None, 50))
-        assert job_scans and {node.get("Index Name") for node in job_scans} == {"jobs_ready_idx"}, job_scans
+        plan = _plan(worker_db, _READY_SQL, (principal.id, None, None, None, 50))
+        _index_driven_on(plan)
+        blocks = _jobs_blocks(plan)
+        assert blocks <= MAX_PROBE_BLOCKS, blocks
         measures.append(blocks)
     shallow, deep = measures
     assert deep <= shallow + 20, measures
