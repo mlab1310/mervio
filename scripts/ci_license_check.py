@@ -31,9 +31,20 @@ PERMISSIVE = frozenset({"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PS
 #: Licences acceptees APRES revue, pour une distribution nommee et une raison ecrite.
 #: psycopg: LGPL-3.0, utilise comme bibliotheque dynamique non modifiee; aucune obligation
 #: de publication du code de Mervio (ADR-004.1-001).
+# certifi: MPL-2.0, copyleft PAR FICHIER. Ses obligations de divulgation portent sur les fichiers
+# MPL MODIFIES et DISTRIBUES. Mervio n'a ni modifie ni distribue certifi: c'est une dependance de
+# TEST uniquement (moto -> responses -> requests), absente de requirements-runtime.lock et de
+# l'image conteneur. Accepte apres revue pour cette distribution nommee seulement (D-061) ##.
+# python-dateutil: metadonnee "Dual License" (Apache-2.0 OU BSD-3-Clause), non normalisable sans
+# ambiguite; les deux options sont permissives. Revue par distribution plutot qu'alias douteux.
+# cffi: MIT-0 (MIT sans obligation d'attribution), strictement plus permissive que MIT, deja
+# autorisee. Revue nommee plutot qu'un elargissement de la politique generale.
 REVIEWED: Dict[str, frozenset] = {
     "psycopg": frozenset({"LGPL-3.0-only"}),
     "psycopg-binary": frozenset({"LGPL-3.0-only"}),
+    "certifi": frozenset({"MPL-2.0"}),
+    "python-dateutil": frozenset({"Dual License"}),
+    "cffi": frozenset({"MIT-0"}),
 }
 
 #: Champ `License` libre ou classifieur -> identifiant SPDX, uniquement pour les formes non ambigues.
@@ -43,6 +54,7 @@ ALIASES = {
     "License :: OSI Approved :: MIT License": "MIT",
     "Apache Software License": "Apache-2.0",
     "Apache 2.0": "Apache-2.0",
+    "Apache License 2.0": "Apache-2.0",
     "Apache-2.0": "Apache-2.0",
     "License :: OSI Approved :: Apache Software License": "Apache-2.0",
     "BSD-3-Clause": "BSD-3-Clause",

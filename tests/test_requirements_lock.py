@@ -52,7 +52,7 @@ def applicable(requirement: Requirement, extras=("",)) -> bool:
 def top_level_requirements() -> list:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     declared = list(project["dependencies"])
-    for group in ("dev", "persistence"):
+    for group in ("dev", "persistence", "s3"):
         declared += project["optional-dependencies"][group]
     declared += list(_lines(ROOT / "requirements.txt"))
     return [Requirement(text) for text in declared]

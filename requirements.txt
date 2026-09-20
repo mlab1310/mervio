@@ -7,3 +7,8 @@ pytest>=8.0
 # Persistance PostgreSQL (optionnelle, Mission 004.1; ADR-004.1-001). Equivalent: pip install -e '.[persistence]'
 psycopg[binary]>=3.2,<4
 alembic>=1.13,<2
+
+# Mission 004.4.4 (D-055): pilote ObjectStore compatible S3, extra OPTIONNEL `[s3]`, importe a
+# la demande; `moto` teste ce pilote EN PROCESSUS (aucun compte AWS, aucun reseau).
+boto3>=1.34,<2
+moto>=5,<6

@@ -4,16 +4,38 @@
 # Contraintes de haut niveau: requirements.txt et pyproject.toml. Fermeture transitive et
 # correspondance avec l'environnement installe: tests/test_requirements_lock.py.
 # greenlet: exige par SQLAlchemy sur Linux x86_64/aarch64 (marqueur recopie de SQLAlchemy 2.0.53).
+# boto3 (extra [s3], D-055) et moto (test du pilote S3, en processus): leur fermeture
+# transitive figure ci-dessous. certifi est MPL-2.0, accepte APRES REVUE pour cette
+# distribution nommee seulement (scripts/ci_license_check.py, D-061).
 alembic==1.20.0
+boto3==1.43.98
+botocore==1.43.98
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+cryptography==50.0.1
 greenlet==3.5.6 ; platform_machine == "aarch64" or platform_machine == "ppc64le" or platform_machine == "x86_64" or platform_machine == "amd64" or platform_machine == "AMD64" or platform_machine == "win32" or platform_machine == "WIN32"
+idna==3.20
 iniconfig==2.3.0
+jmespath==1.1.0
 Mako==1.4.1
 MarkupSafe==3.0.3
+moto==5.2.3
 packaging==26.3
 pluggy==1.6.0
 psycopg==3.3.5
 psycopg-binary==3.3.5 ; implementation_name != "pypy"
+pycparser==3.0
 Pygments==2.21.0
 pytest==9.1.1
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+requests==2.34.2
+responses==0.26.3
+s3transfer==0.19.2
+six==1.17.0
 SQLAlchemy==2.0.53
 typing_extensions==4.16.0
+urllib3==2.8.0
+Werkzeug==3.1.8
+xmltodict==1.0.4
