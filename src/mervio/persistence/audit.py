@@ -62,6 +62,8 @@ class Action(str, Enum):
     CONNECTION_CREATED = "connection.created"
     SERVICE_AUTHORIZED = "service.authorized"
     SERVICE_REVOKED = "service.revoked"
+    # 004.4.4 (revision 0013): depot d'un objet brut par un operateur
+    OBJECT_UPLOADED = "object.uploaded"
 
 
 class ResourceType(str, Enum):
@@ -75,6 +77,8 @@ class ResourceType(str, Enum):
     STORE = "store"
     CONNECTION = "connection"
     SERVICE_AUTHORIZATION = "service_authorization"
+    # 004.4.4 (revision 0013)
+    RAW_OBJECT = "raw_object"
 
 
 class Outcome(str, Enum):
