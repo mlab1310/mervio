@@ -19,6 +19,7 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 import uuid
@@ -42,12 +43,16 @@ FAST = {
     "MERVIO_WORKER_RECOVERY_INTERVAL_SECONDS": "1", "MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS": "5",
     # 004.4.2: cle maitre d'identite factice (obligatoire des que le worker traite des imports)
     "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
+    # 004.4.4: meme regle pour le magasin d'objets bruts (D-054); `admin` et le worker partagent
+    # cette racine, exactement comme le volume du compose.
+    "MERVIO_OBJECT_STORE_ROOT": tempfile.mkdtemp(prefix="mervio-admin-objects-"),
 }
 
 
 def environment(**variables):
     env = {key: value for key, value in os.environ.items() if not key.startswith("MERVIO_")}
     env["PYTHONPATH"] = str(ROOT / "src")
+    env["MERVIO_OBJECT_STORE_ROOT"] = FAST["MERVIO_OBJECT_STORE_ROOT"]
     env.update({key: str(value) for key, value in variables.items()})
     return env
 
@@ -150,7 +155,12 @@ def test_the_complete_demonstration_runs_through_the_product_commands(pg, tmp_pa
     store = first["store"]["store"]["id"]
     assert first["store"]["store"]["currency"] == first["dataset"]["currency"] == "EUR"
     assert first["import_job"]["job"]["payload"]["synthetic"] is True
-    assert set(first["import_job"]["job"]["payload"]["sources"].values()) == {"[redacted]"}
+    # 004.4.4: plus de sources, des objets bruts; la vue rendue les masque (fragment de
+    # cle `raw`) et la charge utile ne contient AUCUN chemin (D-054).
+    payload = first["import_job"]["job"]["payload"]
+    assert "sources" not in payload
+    assert payload["raw_objects"] == "[redacted]"
+    assert "/" not in json.dumps({k: v for k, v in payload.items() if k != "synthetic_manifest"})
 
     second = admin.ok("demo", "provision", "--owner", OWNER, "--data-dir", str(data_dir),
                       "--service", service_name)
@@ -201,8 +211,8 @@ def test_the_complete_demonstration_runs_through_the_product_commands(pg, tmp_pa
     assert [(s["service"], s["active"]) for s in state["services"]] == [(service_name, True)]
     trail = admin.ok("audit", "list", "--as", OWNER, "--org", organization, "--limit", "1000")["events"]
     actions = [e["action"] for e in trail]
-    assert actions[:5] == ["organization.created", "store.created", "connection.created", "service.authorized",
-                           "job.enqueued"]
+    assert actions[:9] == ["organization.created", "store.created", "connection.created", "service.authorized",
+                           *("object.uploaded",) * 4, "job.enqueued"]
     for expected in ("job.claimed", "import.started", "import.succeeded", "analysis.started",
                      "analysis.succeeded", "job.succeeded"):
         assert expected in actions, expected

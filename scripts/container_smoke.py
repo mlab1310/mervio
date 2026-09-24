@@ -67,7 +67,8 @@ PASSWORD_VARIABLES = ("MERVIO_POSTGRES_PASSWORD", "MERVIO_MIGRATOR_DB_PASSWORD",
 #: cle maitre d'identite du worker (004.4.2): obligatoire des que le worker traite des imports
 IDENTITY_KEY_VARIABLE = "MERVIO_IDENTITY_MASTER_KEY"
 EXPECTED_ADMIN_ACTIONS = ("organization.created", "store.created", "connection.created", "service.authorized",
-                          "job.enqueued")
+                          # 004.4.4: un depot par source, TOUS avant la mise en file (D-054)
+                          *("object.uploaded",) * 4, "job.enqueued")
 EXPECTED_WORKER_ACTIONS = ("job.claimed", "import.started", "import.succeeded", "analysis.started",
                            "analysis.succeeded", "job.succeeded")
 REDACTED = "[redacted]"

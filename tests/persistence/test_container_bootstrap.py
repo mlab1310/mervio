@@ -25,6 +25,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -48,6 +49,8 @@ FAST = {
     "MERVIO_WORKER_RECOVERY_INTERVAL_SECONDS": "1", "MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS": "5",
     # 004.4.2: cle maitre d'identite factice (obligatoire des que le worker traite des imports)
     "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
+    # 004.4.4: meme regle pour le magasin d'objets bruts (D-054)
+    "MERVIO_OBJECT_STORE_ROOT": tempfile.mkdtemp(prefix="mervio-boot-objects-"),
 }
 
 
@@ -249,7 +252,9 @@ def smoke(boot, monkeypatch, tmp_path):
                                   env=environment, input=input, capture_output=True, text=True, timeout=timeout)
         if rest[:4] == ["run", "--rm", "-T", "admin"]:
             return subprocess.run([sys.executable, "-m", "mervio.cli", "admin", *rest[4:]], cwd=ROOT,
-                                  env=clean_environment(PYTHONPATH=ROOT / "src", MERVIO_DATABASE_URL=boot.url("app")),
+                                  env=clean_environment(
+                                      PYTHONPATH=ROOT / "src", MERVIO_DATABASE_URL=boot.url("app"),
+                                      MERVIO_OBJECT_STORE_ROOT=FAST["MERVIO_OBJECT_STORE_ROOT"]),
                                   input=input, capture_output=True, text=True, timeout=timeout)
         raise AssertionError(f"commande non prevue hors conteneur: {rest}")
 

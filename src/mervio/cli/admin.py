@@ -8,6 +8,7 @@ Couche MINCE: arguments -> `mervio.admin.operations` -> affichage. Aucune regle 
     mervio admin store create|list
     mervio admin connection create
     mervio admin service authorize|revoke|list
+    mervio admin object upload      --store T --kind KIND --file CHEMIN
     mervio admin job enqueue-import|enqueue-analysis|enqueue-purge|list|show|cancel|stats
     mervio admin audit list
     mervio admin demo provision     --owner S --data-dir D [--service ROLE]
@@ -39,6 +40,11 @@ _DATABASE_DRIVERS = ("psycopg", "psycopg_binary", "psycopg_c")
 JOB_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled")
 JOB_TYPES = ("import", "analysis", "purge")
 ASSIGNABLE_ROLES = ("admin", "analyst", "viewer")
+#: Types de source acceptes. Recopies ici VOLONTAIREMENT: la CLI reste importable sans l'extra
+#: `persistence` (barriere verifiee par tests/test_persistence_boundaries.py). Definition
+#: canonique: `mervio.persistence.raw_objects.SOURCE_KINDS` et la contrainte de la revision 0013.
+SOURCE_KINDS = ("shopify_orders", "shopify_products", "stripe", "google_ads")
+
 EPILOG = ("Codes de sortie: 0 succes, 1 erreur interne, 2 usage ou configuration invalide, "
           "3 base injoignable, 4 schema non migre, 5 introuvable, 6 refuse, 7 conflit. "
           "Connexion: MERVIO_DATABASE_URL ou MERVIO_DATABASE_URL_FILE (role applicatif).")
@@ -134,13 +140,22 @@ def add_admin_parser(sub) -> None:
     parser = leaf(services, "list", "service_list", "autorisations de l'organisation", [scoped])
     parser.add_argument("--include-revoked", action="store_true", dest="include_revoked")
 
+    objects = group("object", "objets bruts (magasin d'objets, jamais de chemin pour le worker)")
+    parser = leaf(objects, "upload", "object_upload",
+                  "depose un fichier LOCAL dans le magasin et renvoie son identifiant", [scoped])
+    parser.add_argument("--store", required=True, type=_uuid, metavar="UUID")
+    parser.add_argument("--kind", required=True, choices=SOURCE_KINDS, help="type de source")
+    parser.add_argument("--file", required=True, metavar="CHEMIN",
+                        help="fichier lu LOCALEMENT; il n'entre ni en base, ni dans un travail")
+
     job_group = group("job", "travaux (file PostgreSQL)")
     parser = leaf(job_group, "enqueue-import", "job_import", "met en file un import CSV", [scoped, idempotent])
     parser.add_argument("--store", required=True, type=_uuid, metavar="UUID")
     parser.add_argument("--connection", required=True, type=_uuid, metavar="UUID")
     for option, dest in (("--shopify-orders", "shopify_orders"), ("--shopify-products", "shopify_products"),
                          ("--stripe", "stripe"), ("--google-ads", "google_ads")):
-        parser.add_argument(option, dest=dest, metavar="CHEMIN", help="chemin ABSOLU lu par le worker")
+        parser.add_argument(option, dest=dest, type=_uuid, metavar="UUID",
+                            help="identifiant d'objet brut (mervio admin object upload)")
     parser.add_argument("--synthetic", action="store_true", help="donnees synthetiques (demonstration)")
     parser = leaf(job_group, "enqueue-analysis", "job_analysis", "met en file une analyse d'instantane",
                   [scoped, idempotent])
@@ -185,6 +200,7 @@ def add_admin_parser(sub) -> None:
 # =============================================================================================
 
 def _sources(args) -> Dict[str, Any]:
+    """Un identifiant d'OBJET BRUT par source (004.4.4): plus jamais un chemin (D-054)."""
     return {kind: getattr(args, kind) for kind in ("shopify_orders", "shopify_products", "stripe", "google_ads")
             if getattr(args, kind) is not None}
 
@@ -208,9 +224,13 @@ HANDLERS: Dict[str, Callable[[Any, Any, Any], Dict[str, Any]]] = {
                                                             service_name=a.service),
     "service_list": lambda ops, db, a: ops.list_service_authorizations(db, actor=a.actor, organization=a.org,
                                                                        include_revoked=a.include_revoked),
+    "object_upload": lambda ops, db, a: ops.upload_object(
+        db, actor=a.actor, organization=a.org, store=a.store, kind=a.kind, file=a.file,
+        object_store_settings=a.object_store_settings),
     "job_import": lambda ops, db, a: ops.enqueue_import(
-        db, actor=a.actor, organization=a.org, store=a.store, connection=a.connection, sources=_sources(a),
-        synthetic=a.synthetic, priority=a.priority, idempotency_key=a.idempotency_key),
+        db, actor=a.actor, organization=a.org, store=a.store, connection=a.connection,
+        raw_objects_by_kind=_sources(a), synthetic=a.synthetic, priority=a.priority,
+        idempotency_key=a.idempotency_key),
     "job_analysis": lambda ops, db, a: ops.enqueue_analysis(
         db, actor=a.actor, organization=a.org, store=a.store, snapshot=a.snapshot, from_import=a.from_import,
         grain=a.grain, as_of=a.as_of, label=a.label, priority=a.priority, idempotency_key=a.idempotency_key),
@@ -224,6 +244,7 @@ HANDLERS: Dict[str, Callable[[Any, Any, Any], Dict[str, Any]]] = {
     "audit_list": lambda ops, db, a: ops.list_audit_events(db, actor=a.actor, organization=a.org,
                                                            action=a.action, limit=a.limit),
     "demo_provision": lambda ops, db, a: ops.demo_provision(db, owner=a.owner, data_dir=a.data_dir,
+                                                        object_store_settings=a.object_store_settings,
                                                             service_name=a.service),
 }
 
@@ -245,6 +266,9 @@ def cmd_admin(args, *, environ=None, stdout=None, database_factory=None) -> int:
         # noms de variables et regles seulement, jamais une valeur
         problems = ", ".join(f"{name} ({rule})" for name, rule in error.problems)
         return _fail(ConfigurationRefused(f"configuration invalide: {problems}"), as_json, stdout)
+
+    # le magasin d'objets accompagne les arguments: la couche CLI reste MINCE, aucune regle ici
+    args.object_store_settings = settings.object_store
 
     factory = database_factory or operations.connect
     database = None

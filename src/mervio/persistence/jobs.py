@@ -32,6 +32,7 @@ cours sans jeton valide, y compris en SQL brut.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -94,8 +95,44 @@ FORBIDDEN_PAYLOAD_KEY_FRAGMENTS = (
     "password", "passwd", "secret", "token", "credential", "authorization",
     "api_key", "apikey", "private_key", "cookie", "access_key",
 )
+#: 004.4.4 (D-054): le worker ne recoit JAMAIS de chemin. Ces fragments de cle sont refuses,
+#: en plus de la detection de VALEUR ci-dessous. `sources` etait la cle historique des chemins.
+FORBIDDEN_PATH_KEY_FRAGMENTS = ("path", "filename", "filepath", "pathname", "dirname", "directory")
+#: Noms de cle refuses a l'identique (fragments trop courts pour etre cherches en sous-chaine:
+#: "file" apparait dans "profile", "dir" dans "redirect").
+#:
+#: `files` en est volontairement ABSENT: le manifeste synthetique versionne (`synthetic_manifest`)
+#: porte une entree `files` qui associe un NOM de fichier a son empreinte et a son nombre de
+#: lignes -- aucune localisation. La protection de fond reste la detection de VALEUR ci-dessous,
+#: qui refuse un chemin quelle que soit la cle qui le porte.
+FORBIDDEN_PATH_KEY_NAMES = frozenset({"file", "dir", "sources", "source_path"})
 MAX_PAYLOAD_VALUE_LENGTH = 4096
 MAX_PAYLOAD_BYTES = 16384
+
+#: Lecteur de disque Windows (`C:\...`), refuse comme un chemin absolu POSIX.
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def looks_like_a_path(value: str) -> bool:
+    """Une valeur de charge utile designe-t-elle un emplacement de fichier? (D-054)
+
+    Refuse ce qu'un `open()` pourrait resoudre: chemin absolu POSIX, chemin relatif au foyer,
+    lecteur Windows, chemin UNC, schema `file:`, et tout segment de remontee `..`.
+
+    N'refuse PAS une valeur qui contient seulement un `/` (un libelle comme "Q1/2026" reste
+    legitime): la frontiere reelle est que le worker ne resout plus aucune valeur en fichier,
+    ce controle n'est qu'une defense en profondeur.
+    """
+    text = value.strip()
+    if not text:
+        return False
+    if text.startswith(("/", "~/", "\\")) or text == "~":
+        return True
+    if text.lower().startswith("file:"):
+        return True
+    if _WINDOWS_DRIVE.match(text):
+        return True
+    return any(part == ".." for part in re.split(r"[\\/]", text))
 
 
 @dataclass(frozen=True)
@@ -200,8 +237,28 @@ def backoff_seconds(attempts: int, *, base: int = BACKOFF_BASE_SECONDS, cap: int
 
 # -- charge utile --------------------------------------------------------------------------
 
+def _reject_paths(key: str, value: Any) -> None:
+    """Refuse recursivement toute CLE et toute VALEUR de chemin (D-054), listes comprises."""
+    lowered = str(key).lower()
+    if lowered in FORBIDDEN_PATH_KEY_NAMES or any(f in lowered for f in FORBIDDEN_PATH_KEY_FRAGMENTS):
+        raise PayloadRejected(f"cle de chemin interdite dans une charge utile: {key}")
+    if isinstance(value, str) and looks_like_a_path(value):
+        # la valeur elle-meme n'est jamais citee: elle pourrait porter une donnee locale
+        raise PayloadRejected(f"valeur de chemin interdite dans une charge utile: {key}")
+    if isinstance(value, Mapping):
+        for nested_key, nested in value.items():
+            _reject_paths(nested_key, nested)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_paths(key, item)
+
+
 def validate_payload(payload: Mapping[str, Any]) -> dict:
-    """Refuse une charge utile qui porterait un secret ou le contenu d'une source."""
+    """Refuse une charge utile qui porterait un secret, un chemin, ou le contenu d'une source.
+
+    Depuis 004.4.4 (D-054), un import ne transporte que des identifiants d'objets bruts: aucun
+    chemin fourni par l'appelant ne peut donc survivre jusqu'au worker.
+    """
     if not isinstance(payload, Mapping):
         raise PayloadRejected("la charge utile d'un travail est un objet")
     document = dict(payload)
@@ -211,6 +268,7 @@ def validate_payload(payload: Mapping[str, Any]) -> dict:
             raise PayloadRejected(f"cle de charge utile interdite: {key}")
         if isinstance(value, str) and len(value) > MAX_PAYLOAD_VALUE_LENGTH:
             raise PayloadRejected(f"valeur trop grande pour {key}: une charge utile localise, ne transporte pas")
+        _reject_paths(key, value)
         if isinstance(value, Mapping):
             validate_payload(value)
     if len(json.dumps(document, default=str).encode("utf-8")) > MAX_PAYLOAD_BYTES:

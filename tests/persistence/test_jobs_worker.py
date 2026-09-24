@@ -26,7 +26,9 @@ from mervio.workers.handlers import HandlerRegistry, default_registry
 from mervio.workers.retention import RetentionPolicy
 from mervio.workers.worker import Worker, cancel, enqueue
 
-from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY, analysis_day, engine_files
+from .persistence_support import (
+    SAMPLE_FILES, TEST_MASTER_KEY, TEST_OBJECT_STORE, analysis_day, deposit_sources, engine_files,
+)
 
 PAST = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
 #: `_meta.generated_at` est la seule valeur non deterministe d'un rapport (precision:
@@ -63,13 +65,16 @@ def documents(buffer) -> list:
 
 
 def worker(tenant, *, registry=None, **kwargs) -> Worker:
-    return Worker(sessions=[tenant.session], registry=registry or default_registry(identity_master=TEST_MASTER_KEY),
+    return Worker(sessions=[tenant.session],
+                  registry=registry or default_registry(identity_master=TEST_MASTER_KEY,
+                                                        object_store=TEST_OBJECT_STORE),
                   worker_id=kwargs.pop("worker_id", "worker-test"), **kwargs)
 
 
 def import_payload(tenant, files=None) -> dict:
+    """Charge utile 004.4.4: des identifiants d'objets bruts, JAMAIS un chemin (D-054)."""
     return {"store_id": str(tenant.store_id), "connection_id": str(tenant.connection_id),
-            "sources": dict(files or SAMPLE_FILES)}
+            "raw_objects": deposit_sources(tenant, files)}
 
 
 def enqueue_import(tenant, files=None, **kwargs):
@@ -147,11 +152,23 @@ def test_an_invalid_source_fails_the_import_permanently(tenant_a, tmp_path):
     assert outcome.error_code == "validation_failed"
 
 
-def test_a_missing_file_fails_the_import_without_retrying(tenant_a, tmp_path):
-    enqueue_import(tenant_a, {"shopify_orders": str(tmp_path / "absent.csv")})
+def test_an_object_whose_bytes_are_gone_fails_the_import_without_retrying(tenant_a):
+    """004.4.4: un fichier local absent est refuse a l'UPLOAD; cote worker, l'equivalent est un
+    objet dont la ligne existe mais dont les octets ont disparu du magasin."""
+    from mervio.persistence.raw_objects import record_object
+    from mervio.storage import build_object_key
+
+    orphan = record_object(tenant_a.session, store_id=tenant_a.store_id,
+                           object_key=build_object_key(tenant_a.organization_id, tenant_a.store_id),
+                           sha256="0" * 64, byte_size=0, source_kind="shopify_orders",
+                           retain_until=datetime(2099, 1, 1, tzinfo=timezone.utc))
+    enqueue(tenant_a.session, job_type=JobType.IMPORT, store_id=tenant_a.store_id,
+            payload={"store_id": str(tenant_a.store_id), "connection_id": str(tenant_a.connection_id),
+                     "raw_objects": {"shopify_orders": str(orphan.id)}})
     outcome = worker(tenant_a).run_once()
     assert outcome.job.status == JobStatus.FAILED.value
-    assert outcome.job.attempts == 1
+    assert outcome.error_code == "object_missing"
+    assert outcome.job.attempts == 1  # aucune reprise: les octets ne reviendront pas
 
 
 def test_an_import_payload_without_a_source_is_a_permanent_failure(tenant_a):
@@ -164,7 +181,7 @@ def test_an_import_payload_without_a_source_is_a_permanent_failure(tenant_a):
 def test_an_unknown_source_kind_is_refused(tenant_a):
     enqueue(tenant_a.session, job_type=JobType.IMPORT, store_id=tenant_a.store_id,
             payload={"store_id": str(tenant_a.store_id), "connection_id": str(tenant_a.connection_id),
-                     "sources": {"amazon_orders": "/tmp/x.csv"}})
+                     "raw_objects": {"amazon_orders": str(uuid.uuid4())}})
     outcome = worker(tenant_a).run_once()
     assert outcome.error_code == "payload_invalid"
 
@@ -194,7 +211,7 @@ def test_a_job_report_is_identical_to_the_direct_004_1_path(tenant_a, synthetic_
 
     files = engine_files(synthetic_set.directory)
     today = analysis_day(synthetic_set.manifest)
-    payload = {"sources": files, "synthetic": True}
+    payload = {"synthetic": True}
 
     other_store = create_store(tenant_a.session, name="Boutique directe")
     other = replace(tenant_a, store_id=other_store.id,
@@ -205,7 +222,7 @@ def test_a_job_report_is_identical_to_the_direct_004_1_path(tenant_a, synthetic_
                               today=today)
 
     enqueue(tenant_a.session, job_type=JobType.IMPORT, store_id=tenant_a.store_id,
-            payload={**import_payload(tenant_a), **payload})
+            payload={**import_payload(tenant_a, files), **payload})
     imported = worker(tenant_a).run_once()
     enqueue_analysis(tenant_a, imported.job.result["snapshot_id"], as_of_date=today.isoformat())
     analysed = worker(tenant_a).run_once()

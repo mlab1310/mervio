@@ -12,8 +12,26 @@ from .base import (
 from .filesystem import FilesystemObjectStore
 from .memory import MemoryObjectStore
 
+
+def build_object_store(settings) -> ObjectStore:
+    """Construit le pilote decrit par `ObjectStoreSettings` (004.4.4).
+
+    `boto3` n'est importe QUE si le pilote `s3` est demande (D-055): l'extra reste optionnel.
+    """
+    if settings is None:
+        raise ObjectStoreError("magasin d'objets non configure")
+    if settings.driver == "filesystem":
+        return FilesystemObjectStore(settings.root)
+    if settings.driver == "memory":
+        return MemoryObjectStore()
+    if settings.driver == "s3":
+        from .s3 import S3ObjectStore  # import a la demande
+        return S3ObjectStore(settings.bucket, endpoint_url=settings.endpoint_url,
+                             region_name=settings.region)
+    raise ObjectStoreError(f"pilote de magasin d'objets inconnu: {settings.driver}")
+
 __all__ = [
     "CHUNK_SIZE", "OBJECT_KEY_PATTERN", "FilesystemObjectStore", "MemoryObjectStore",
     "ObjectKeyInvalid", "ObjectNotFound", "ObjectStore", "ObjectStoreError", "PutResult",
-    "build_object_key", "validate_key",
+    "build_object_key", "build_object_store", "validate_key",
 ]

@@ -19,7 +19,7 @@ from mervio.persistence.tenancy import Role, TenantContext, TenantSession, add_m
 from mervio.workers.handlers import HandlerRegistry, analysis_handler
 from mervio.workers.worker import enqueue
 
-from .persistence_support import SAMPLE_FILES
+from .persistence_support import SAMPLE_FILES, TEST_OBJECT_STORE, deposit_sources
 from .service_support import raw
 from .worker_support import DispatchedWorker, actions, enqueue_scripted, scripted_registry
 
@@ -59,7 +59,8 @@ def test_import_then_analysis_run_as_the_service_on_behalf_of_the_analyst(db, te
     analyst_id, analyst = member(db, tenant_a, Role.ANALYST, "analyst")
     worker = workers("e2e", registry=scripted_registry(with_defaults=True), lease_seconds=30, renew_seconds=5)
     importing = enqueue(analyst, job_type=JobType.IMPORT, store_id=tenant_a.store_id, payload={
-        "store_id": str(tenant_a.store_id), "connection_id": str(tenant_a.connection_id), "sources": SAMPLE_FILES})
+        "store_id": str(tenant_a.store_id), "connection_id": str(tenant_a.connection_id),
+        "raw_objects": deposit_sources(tenant_a)})
     imported = worker.worker.run_once()
     assert imported.succeeded and imported.result["status"] == "completed"
     snapshot = snapshots.get_snapshot(tenant_a.session, tenant_a.store_id, uuid.UUID(imported.result["snapshot_id"]))

@@ -106,6 +106,23 @@ def fetch_object(conn, object_id: UUID) -> RawObject:
     return RawObject(*row)
 
 
+def find_available_object(session: TenantSession, store_id: UUID, source_kind: str,
+                          sha256: str) -> Optional[RawObject]:
+    """Objet DISPONIBLE de meme boutique, meme type et memes octets, s'il en existe un.
+
+    Sert au provisionnement rejouable (`demo provision`): redeposer les memes octets ne doit pas
+    creer un second objet, sinon un rejeu changerait la demande derriere une cle d'idempotence
+    inchangee. Un depot EXPLICITE (`object upload`) reste, lui, toujours un nouvel objet.
+    """
+    with session.transaction(Permission.READ) as conn:
+        row = conn.execute(
+            f"SELECT {_COLUMNS} FROM raw_objects WHERE organization_id = %s AND store_id = %s "
+            f"AND source_kind = %s AND sha256 = %s AND state = %s ORDER BY created_at LIMIT 1",
+            (session.organization_id, _uuid(store_id, "store"), source_kind, sha256, STATE_AVAILABLE),
+        ).fetchone()
+    return RawObject(*row) if row is not None else None
+
+
 def get_object(session: TenantSession, object_id: UUID) -> RawObject:
     """`fetch_object` avec sa propre transaction (usage CLI et tests)."""
     with session.transaction(Permission.READ) as conn:
@@ -123,4 +140,5 @@ def list_objects(session: TenantSession, store_id: UUID, *, limit: int = 100) ->
 
 
 __all__ = ["ORIGIN_CSV_UPLOAD", "SOURCE_KINDS", "STATE_AVAILABLE", "RawObject", "fetch_object",
+           "find_available_object",
            "get_object", "list_objects", "record_object"]

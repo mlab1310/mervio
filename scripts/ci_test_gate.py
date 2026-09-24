@@ -72,6 +72,12 @@ REQUIRED_MODULES = (
     # 004.3.9: outillage des benchmarks (statistiques, schema, isolation, execution reelle a petite echelle)
     "tests.test_benchmark_harness",
     "tests.persistence.test_benchmark_suite",
+    # 004.4.4: frontiere d'import sans chemin et magasin d'objets (D-054, D-055)
+    "tests.test_object_store_contract",
+    "tests.test_object_store_traversal",
+    "tests.persistence.test_raw_objects",
+    "tests.persistence.test_migration_0013",
+    "tests.persistence.test_import_boundary",
     # les gardes elles-memes: si elles ne s'executent plus, la porte ne prouve plus rien
     "tests.test_pytest_guard",
     "tests.test_requirements_lock",

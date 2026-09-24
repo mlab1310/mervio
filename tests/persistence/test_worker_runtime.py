@@ -43,6 +43,7 @@ def settings_for(pg, tmp_path, *, kind="worker", database=None, lease=3, renew=0
     variables = {
         "MERVIO_DATABASE_URL": pg.url(kind, database), "MERVIO_WORKER_NAME": "rt",
         "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
+        "MERVIO_OBJECT_STORE_ROOT": str(tmp_path / "objects"),
         "MERVIO_WORKER_HEALTH_FILE": str(tmp_path / "health.json"),
         "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.05", "MERVIO_WORKER_POLL_MAX_SECONDS": "0.2",
         "MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS": "2", "MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS": "5",
@@ -338,6 +339,7 @@ class Process:
             "PYTHONPATH": f"{ROOT / 'tests'}{os.pathsep}{ROOT / 'src'}",
             "MERVIO_DATABASE_URL": pg.url("worker"), "MERVIO_WORKER_NAME": name,
             "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
+            "MERVIO_OBJECT_STORE_ROOT": str(tmp_path / "objects"),
             "MERVIO_WORKER_HEALTH_FILE": str(self.health), "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.05",
             "MERVIO_WORKER_POLL_MAX_SECONDS": "0.2", "MERVIO_WORKER_RECOVERY_INTERVAL_SECONDS": "1",
             "MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS": "10", "MERVIO_TEST_LEASE_SECONDS": "3",

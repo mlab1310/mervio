@@ -31,6 +31,11 @@ Bibliotheque standard uniquement: ce module n'importe ni pilote de base ni persi
     MERVIO_WORKER_DEGRADED_GRACE_SECONDS      120           1 a 86400
     MERVIO_LOG_LEVEL                          INFO          DEBUG | INFO | WARNING | ERROR
     MERVIO_LOG_FORMAT                         json          json | text (text refuse en production)
+    MERVIO_OBJECT_STORE                       filesystem    filesystem | memory | s3
+    MERVIO_OBJECT_STORE_ROOT                  -             chemin absolu; OBLIGATOIRE si filesystem
+    MERVIO_S3_BUCKET                          -             OBLIGATOIRE si s3
+    MERVIO_S3_ENDPOINT_URL                    -             surcharge d'endpoint (tests, fournisseur tiers)
+    MERVIO_S3_REGION                          -             region S3
     MERVIO_IDENTITY_MASTER_KEY (ou ..._FILE)  -             hexadecimal, 32 octets au moins; OBLIGATOIRE si le
                                                             worker traite des imports (cle maitre d'identite, D-053)
 
@@ -102,6 +107,29 @@ def describe_database_url(url: str) -> Dict[str, Any]:
             "database": unquote(parts.path.lstrip("/")), "role": unquote(parts.username or "")}
 
 
+#: Pilotes de magasin d'objets (D-055). `memory` ne survit pas au processus: tests seulement.
+OBJECT_STORE_DRIVERS = ("filesystem", "memory", "s3")
+
+
+@dataclass(frozen=True)
+class ObjectStoreSettings:
+    """Ou vivent les objets bruts (004.4.4, D-055). Aucun identifiant de fournisseur ici.
+
+    Les identifiants S3 viennent de la chaine native de boto3 (environnement, role d'instance):
+    Mervio ne porte JAMAIS de secret de fournisseur dans ses reglages.
+    """
+
+    driver: str
+    root: Optional[Path] = None
+    bucket: Optional[str] = None
+    endpoint_url: Optional[str] = None
+    region: Optional[str] = None
+
+    def public(self) -> Dict[str, Any]:
+        """Resume publiable: le pilote, jamais la racine ni le bucket."""
+        return {"object_store": self.driver}
+
+
 @dataclass(frozen=True)
 class WorkerSettings:
     environment: str
@@ -125,6 +153,8 @@ class WorkerSettings:
     log_format: str
     #: cle maitre d'identite (hexadecimal); jamais affichee, jamais en base (D-053)
     identity_master_key: Optional[Secret] = field(default=None, repr=False)
+    #: magasin d'objets bruts (004.4.4); obligatoire des que le worker traite des imports
+    object_store: Optional[ObjectStoreSettings] = None
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None, *,
@@ -158,6 +188,7 @@ class WorkerSettings:
             "log_level": logging.getLevelName(self.log_level),
             "log_format": self.log_format,
             "identity_master_configured": self.identity_master_key is not None,
+            **(self.object_store.public() if self.object_store else {"object_store": None}),
         }
 
 
@@ -187,6 +218,8 @@ class AdminSettings:
     """
 
     database_url: Secret = field(repr=False)
+    #: magasin d'objets: `mervio admin object upload` y depose les octets (004.4.4)
+    object_store: Optional[ObjectStoreSettings] = None
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "AdminSettings":
@@ -302,6 +335,29 @@ class _Reader:
             return None
         return Secret(direct)
 
+    def object_store(self, *, required: bool) -> Optional[ObjectStoreSettings]:
+        """Magasin d'objets (004.4.4). `required`: le processus depose ou lit des objets."""
+        driver = self.choice("MERVIO_OBJECT_STORE", "filesystem", OBJECT_STORE_DRIVERS)
+        root_value = self.raw("MERVIO_OBJECT_STORE_ROOT")
+        bucket = self.raw("MERVIO_S3_BUCKET")
+        if driver == "filesystem":
+            if not root_value:
+                if required:
+                    self.fail("MERVIO_OBJECT_STORE_ROOT", "obligatoire pour le pilote filesystem")
+                return None
+            root = Path(root_value)
+            if not root.is_absolute():
+                self.fail("MERVIO_OBJECT_STORE_ROOT", "chemin absolu attendu")
+                return None
+            return ObjectStoreSettings("filesystem", root=root)
+        if driver == "s3":
+            if not bucket:
+                self.fail("MERVIO_S3_BUCKET", "obligatoire pour le pilote s3")
+                return None
+            return ObjectStoreSettings("s3", bucket=bucket, endpoint_url=self.raw("MERVIO_S3_ENDPOINT_URL"),
+                                       region=self.raw("MERVIO_S3_REGION"))
+        return ObjectStoreSettings("memory")
+
     def worker_name(self) -> str:
         value = self.raw("MERVIO_WORKER_NAME")
         if value is None:
@@ -360,9 +416,12 @@ class _Reader:
 
     def admin(self) -> "AdminSettings":
         database_url = self.database_url()
+        # `mervio admin object upload` depose des octets: le magasin est facultatif tant qu'aucune
+        # commande d'objet n'est utilisee, et la commande echoue clairement s'il manque.
+        object_store = self.object_store(required=False)
         if self.problems:
             raise SettingsError(self.problems)
-        return AdminSettings(database_url=database_url)
+        return AdminSettings(database_url=database_url, object_store=object_store)
 
     def settings(self) -> WorkerSettings:
         environment = self.choice("MERVIO_ENV", "development", ENVIRONMENTS)
@@ -370,6 +429,9 @@ class _Reader:
         worker_name = self.worker_name()
         job_types = self.job_types()
         identity_master_key = self.identity_master_key(required="import" in job_types)
+        # meme regle que la cle maitre: un worker qui traite des imports DOIT savoir ou lire
+        # les objets bruts, sinon il ne pourra honorer aucun travail d'import (D-054).
+        object_store = self.object_store(required="import" in job_types)
         poll_interval, poll_max = self.poll()
         dispatch_batch = self.number("MERVIO_WORKER_DISPATCH_BATCH", 50, 1, 1000)
         lease = self.number("MERVIO_JOB_LEASE_SECONDS", 300, 30, 86400)
@@ -399,9 +461,10 @@ class _Reader:
             shutdown_grace_seconds=grace, startup_timeout_seconds=startup, backoff_base_seconds=backoff_base,
             backoff_cap_seconds=backoff_cap, health_file=health_file, health_max_age_seconds=health_max_age,
             degraded_grace_seconds=degraded_grace, log_level=log_level, log_format=log_format,
-            identity_master_key=identity_master_key,
+            identity_master_key=identity_master_key, object_store=object_store,
         )
 
 
-__all__ = ["ENVIRONMENTS", "JOB_TYPES", "LOG_FORMATS", "AdminSettings", "HealthCheckSettings", "Secret",
+__all__ = ["ENVIRONMENTS", "JOB_TYPES", "LOG_FORMATS", "OBJECT_STORE_DRIVERS", "AdminSettings",
+           "HealthCheckSettings", "ObjectStoreSettings", "Secret",
            "SettingsError", "WorkerSettings", "describe_database_url"]

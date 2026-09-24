@@ -41,7 +41,10 @@ from mervio.persistence.tenancy import Role, TenantContext, TenantSession, add_m
 from mervio.workers.handlers import default_registry
 from mervio.workers.worker import enqueue
 
-from .persistence_support import SAMPLE_FILES, TEST_MASTER_KEY, TEST_MASTER_KEY_HEX, org_identity
+from .persistence_support import (
+    SAMPLE_FILES, TEST_MASTER_KEY, TEST_MASTER_KEY_HEX, TEST_OBJECT_STORE, deposit_sources,
+    org_identity,
+)
 from .service_support import raw
 from .worker_support import DispatchedWorker
 
@@ -501,13 +504,14 @@ def json_logs():
 
 def _import_job(session, tenant):
     return enqueue(session, job_type=JobType.IMPORT, store_id=tenant.store_id, payload={
-        "store_id": str(tenant.store_id), "connection_id": str(tenant.connection_id), "sources": SAMPLE_FILES})
+        "store_id": str(tenant.store_id), "connection_id": str(tenant.connection_id),
+        "raw_objects": deposit_sources(tenant)})
 
 
 def test_a_dispatched_import_and_analysis_persist_no_email_and_no_key(pg, db, owner, tenant_a, principal, json_logs):
     authorize_service(tenant_a.session, principal.id)
     worker = DispatchedWorker(pg, principal, worker_id="pii", lease_seconds=30, renew_seconds=5,
-                              registry=default_registry(identity_master=TEST_MASTER_KEY))
+                              registry=default_registry(identity_master=TEST_MASTER_KEY, object_store=TEST_OBJECT_STORE))
     try:
         _import_job(tenant_a.session, tenant_a)
         imported = worker.worker.run_once()
@@ -569,7 +573,7 @@ def test_a_worker_without_a_usable_identity_key_refuses_imports_without_starting
     if case == "destroyed_key":
         with raw(owner, tenant_a.organization_id) as conn:
             conn.execute(f"UPDATE {KEYS} SET salt = NULL, destroyed_at = now()")
-    job, outcome = _run_import(pg, principal, tenant_a, case, default_registry(identity_master=master))
+    job, outcome = _run_import(pg, principal, tenant_a, case, default_registry(identity_master=master, object_store=TEST_OBJECT_STORE))
     assert (outcome.job.id, outcome.outcome, outcome.error_code) == (job.id, "failed", "identity_key_unavailable")
     trail = _job_audit(owner, tenant_a, job.id)
     assert [action for action, _, _ in trail] == ["job.enqueued", "job.claimed", "job.failed"], trail
@@ -580,7 +584,7 @@ def test_a_worker_without_a_usable_identity_key_refuses_imports_without_starting
 def test_a_worker_with_a_usable_identity_key_starts_the_import(pg, db, owner, tenant_a, principal):
     """Temoin: cle utilisable -> `import.started` puis `import.succeeded`, dans cet ordre."""
     authorize_service(tenant_a.session, principal.id)
-    job, outcome = _run_import(pg, principal, tenant_a, "valid", default_registry(identity_master=TEST_MASTER_KEY))
+    job, outcome = _run_import(pg, principal, tenant_a, "valid", default_registry(identity_master=TEST_MASTER_KEY, object_store=TEST_OBJECT_STORE))
     assert outcome.succeeded, outcome.error_code
     actions = [action for action, _, _ in _job_audit(owner, tenant_a, job.id)]
     assert actions[:3] == ["job.enqueued", "job.claimed", "import.started"]
@@ -593,7 +597,8 @@ def test_the_worker_settings_log_no_key(json_logs):
     from mervio.observability.logging import get_event_logger
     from mervio.settings import WorkerSettings
     settings = WorkerSettings.from_env({"MERVIO_DATABASE_URL": "postgresql://w@db/mervio",
-                                        "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX})
+                                        "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
+                                        "MERVIO_OBJECT_STORE_ROOT": "/var/lib/mervio/objects"})
     get_event_logger("worker").info("worker.config", **settings.public())
     assert TEST_MASTER_KEY_HEX not in json_logs.getvalue() + repr(settings)
     assert json.loads(json_logs.getvalue().splitlines()[-1])["identity_master_configured"] is True

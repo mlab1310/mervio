@@ -70,12 +70,17 @@ services:
       MERVIO_WORKER_NAME: ${MERVIO_WORKER_NAME:-compose-worker}
       # cle maitre d'identite (004.4.2, D-053): hors base, jamais journalisee; obligatoire pour les imports
       MERVIO_IDENTITY_MASTER_KEY: ${MERVIO_IDENTITY_MASTER_KEY:?definir MERVIO_IDENTITY_MASTER_KEY dans .env}
+      # 004.4.4: ou lire les objets bruts; obligatoire des que le worker traite des imports
+      MERVIO_OBJECT_STORE_ROOT: /var/lib/mervio/objects
       MERVIO_WORKER_HEALTH_FILE: /run/mervio/worker-health.json
       MERVIO_LOG_FORMAT: json
       MERVIO_LOG_LEVEL: ${MERVIO_LOG_LEVEL:-INFO}
     volumes:
       # fichiers d'import deposes par `admin`: le worker les LIT seulement
       - mervio_data:/var/lib/mervio/data:ro
+      # 004.4.4: magasin d'objets bruts, partage avec `admin`. Monte en LECTURE SEULE: le worker
+      # resout un raw_object_id sous RLS puis lit des octets, il n'en depose jamais (D-054).
+      - mervio_objects:/var/lib/mervio/objects:ro
     tmpfs:
       # proprietaire explicite: runc donne au tmpfs le MODE du repertoire de l'image (0750) mais pas
       # son proprietaire (root); sans uid/gid, l'utilisateur 10001 ne pourrait pas ecrire sa sante
@@ -139,9 +144,13 @@ services:
     environment:
       # role applicatif: membre de mervio_app seulement; `Database` refuse superutilisateur et BYPASSRLS
       MERVIO_DATABASE_URL: postgresql://mervio_app_user:${MERVIO_APP_DB_PASSWORD:?definir MERVIO_APP_DB_PASSWORD dans .env}@postgres:5432/mervio
+      # 004.4.4: `mervio admin object upload` depose les octets ici
+      MERVIO_OBJECT_STORE_ROOT: /var/lib/mervio/objects
     volumes:
-      # `demo provision --data-dir /var/lib/mervio/data/...` ecrit ici, le worker y lit
+      # `demo provision --data-dir /var/lib/mervio/data/...` ecrit les CSV synthetiques ici; ils
+      # sont ensuite DEPOSES dans le magasin, et c'est le magasin que le worker lit.
       - mervio_data:/var/lib/mervio/data
+      - mervio_objects:/var/lib/mervio/objects
     read_only: true
     tmpfs:
       - /tmp
@@ -166,3 +175,5 @@ networks:
 volumes:
   mervio_pgdata:
   mervio_data:
+  # 004.4.4: objets bruts; `admin` y ecrit, le worker y lit seulement
+  mervio_objects:

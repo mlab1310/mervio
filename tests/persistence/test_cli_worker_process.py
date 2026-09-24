@@ -16,6 +16,7 @@ import logging
 import os
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -34,11 +35,15 @@ from .worker_support import enqueue_scripted, wait_until
 ROOT = Path(__file__).resolve().parents[2]
 HEALTH_KEYS = {"version", "state", "updated_at", "started_at", "pid", "worker_id", "jobs_processed",
                "last_database_ok_at", "degraded_since"}
+#: racine de magasin d'objets des sous-processus: hors du depot, jetable (004.4.4)
+OBJECT_ROOT = tempfile.mkdtemp(prefix="mervio-test-objects-")
 FAST = {
     "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.05", "MERVIO_WORKER_POLL_MAX_SECONDS": "0.2",
     "MERVIO_WORKER_RECOVERY_INTERVAL_SECONDS": "1", "MERVIO_WORKER_STARTUP_TIMEOUT_SECONDS": "5",
     # 004.4.2: cle maitre d'identite factice (obligatoire des que le worker traite des imports)
     "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
+    # 004.4.4: meme regle pour le magasin d'objets bruts (D-054)
+    "MERVIO_OBJECT_STORE_ROOT": OBJECT_ROOT,
 }
 
 
@@ -51,6 +56,7 @@ def authorized(tenant_a, principal):
 def base_environment(**env):
     variables = {key: value for key, value in os.environ.items() if not key.startswith("MERVIO_")}
     variables["PYTHONPATH"] = f"{ROOT / 'tests'}{os.pathsep}{ROOT / 'src'}"
+    variables.setdefault("MERVIO_OBJECT_STORE_ROOT", OBJECT_ROOT)
     variables.update({key: str(value) for key, value in env.items()})
     return variables
 

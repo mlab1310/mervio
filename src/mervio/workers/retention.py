@@ -35,6 +35,8 @@ DEFAULT_SUCCEEDED_JOBS_DAYS = 7
 DEFAULT_FAILED_JOBS_DAYS = 30
 DEFAULT_CANCELLED_JOBS_DAYS = 7
 DEFAULT_AUDIT_EVENTS_DAYS = 365
+#: 004.4.4: objets bruts, 30 jours par defaut (roadmap 004.4 item 6)
+DEFAULT_RAW_OBJECTS_DAYS = 30
 DEFAULT_BATCH_LIMIT = 1000
 
 
@@ -46,11 +48,16 @@ class RetentionPolicy:
     failed_jobs_days: int = DEFAULT_FAILED_JOBS_DAYS
     cancelled_jobs_days: int = DEFAULT_CANCELLED_JOBS_DAYS
     audit_events_days: int = DEFAULT_AUDIT_EVENTS_DAYS
+    #: 004.4.4: duree de conservation des objets bruts. METADONNEE SEULE en 004.4.4: elle est
+    #: inscrite dans `raw_objects.retain_until`, mais AUCUNE expiration n'est executee ici
+    #: (ramassage et purge: 004.9). Valeur du roadmap 004.4 item 6 (30 jours, marquee a valider).
+    raw_objects_days: int = DEFAULT_RAW_OBJECTS_DAYS
     #: lignes supprimees par appel et par categorie (une purge se repete sans dommage)
     batch_limit: int = DEFAULT_BATCH_LIMIT
 
     def __post_init__(self) -> None:
-        for name in ("succeeded_jobs_days", "failed_jobs_days", "cancelled_jobs_days", "audit_events_days"):
+        for name in ("succeeded_jobs_days", "failed_jobs_days", "cancelled_jobs_days", "audit_events_days",
+                     "raw_objects_days"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 1:
                 raise ValueError(f"{name}: nombre de jours entier positif attendu")
@@ -65,8 +72,8 @@ class RetentionPolicy:
     def from_document(cls, document: Mapping[str, Any]) -> "RetentionPolicy":
         known = {f: document[f] for f in
                  ("succeeded_jobs_days", "failed_jobs_days", "cancelled_jobs_days", "audit_events_days",
-                  "batch_limit") if f in document}
-        unknown = set(document) - {"succeeded_jobs_days", "failed_jobs_days", "cancelled_jobs_days",
+                  "raw_objects_days", "batch_limit") if f in document}
+        unknown = set(document) - {"raw_objects_days", "succeeded_jobs_days", "failed_jobs_days", "cancelled_jobs_days",
                                    "audit_events_days", "batch_limit"}
         if unknown:
             raise ValueError("cle de retention inconnue: " + ", ".join(sorted(unknown)))

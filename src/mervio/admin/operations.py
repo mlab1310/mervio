@@ -28,7 +28,7 @@ import tempfile
 import unicodedata
 import uuid
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, TypeVar
 from uuid import UUID
@@ -36,7 +36,7 @@ from uuid import UUID
 from ..application.workspace import is_sample_path
 from ..observability.logging import get_event_logger, scrub
 from ..observability.redaction import redact_text
-from ..persistence import audit, jobs, service, snapshots, stores, tenancy
+from ..persistence import audit, jobs, raw_objects, service, snapshots, stores, tenancy
 from ..persistence.audit import Action, ActorType, Outcome, ResourceType
 from ..persistence.database import Database
 from ..persistence.errors import (
@@ -46,9 +46,11 @@ from ..persistence.errors import (
 from ..persistence.jobs import JobRecord, JobStatus, JobType
 from ..persistence.retry import database_error_code, database_failure_kind
 from ..persistence.tenancy import Permission, Role, TenantContext, TenantSession
+from ..storage import ObjectStoreError, build_object_key, build_object_store
 from ..synthetic import GeneratorConfig, generate_dataset
 from ..synthetic.evaluation import analysis_day
 from ..workers import worker as job_commands
+from ..workers.retention import RetentionPolicy
 from .errors import (
     AdminError, ConfigurationRefused, Conflict, DatabaseUnavailable, Forbidden, InvalidInput, NotFoundError,
     SchemaMissing,
@@ -190,6 +192,29 @@ def validate_source_path(value: Any, field: str) -> str:
     if not os.path.isabs(value) or os.path.normpath(value) != value or ".." in Path(value).parts:
         raise InvalidInput(f"{field}: chemin absolu et normalise attendu (sans '..')")
     return value
+
+
+def validate_source_kind(value: Any) -> str:
+    """Type de source d'un objet brut. Domaine ferme, identique a `snapshot_sources`."""
+    if not isinstance(value, str) or value not in SOURCE_KINDS:
+        raise InvalidInput("type de source attendu parmi: " + ", ".join(SOURCE_KINDS))
+    return value
+
+
+def validate_local_source(value: Any) -> Path:
+    """Fichier LOCAL lu par la CLI (004.4.4, D-054).
+
+    Ce chemin ne quitte jamais ce processus: il n'entre ni en base, ni dans une charge utile,
+    ni dans l'audit, ni dans un log. Les messages d'erreur ne le citent pas non plus.
+    """
+    if not isinstance(value, str) or not value or len(value) > MAX_PATH_LENGTH:
+        raise InvalidInput("fichier source attendu")
+    if "\x00" in value or any(unicodedata.category(char) in _FORBIDDEN_CATEGORIES for char in value):
+        raise InvalidInput("fichier source: caractere de controle refuse")
+    path = Path(value).expanduser()
+    if not path.is_file():
+        raise InvalidInput("fichier source introuvable ou illisible")
+    return path
 
 
 def validate_idempotency_key(value: Any) -> Optional[str]:
@@ -557,28 +582,93 @@ def _enqueue(session: TenantSession, job_type: JobType, payload: Dict[str, Any],
                                correlation_id=correlation_id, log=get_event_logger("admin"))
     # un rejeu de cle d'idempotence renvoie le travail existant, avec SA correlation
     status = "created" if job.correlation_id == correlation_id else "existing"
+    if status == "existing" and dict(job.payload or {}) != dict(payload):
+        # 004.4.4: la meme cle avec une AUTRE demande (autre objet brut, autre instantane) ne doit
+        # jamais renvoyer en silence un travail qui pointe ailleurs. Meme arbitrage que
+        # `create_store`: identite identique + contenu different = conflit, jamais reutilisation.
+        raise Conflict("cle d'idempotence deja utilisee avec une autre demande",
+                       code="idempotency_payload_mismatch")
     return {"status": status, "job": render_job(job, detailed=True)}
 
 
+def upload_object(database: Database, *, actor: Any, organization: Any, store: Any, kind: Any,
+                  file: Any, object_store_settings: Any = None,
+                  retention: Optional[RetentionPolicy] = None) -> Dict[str, Any]:
+    """Depose un fichier local dans le magasin d'objets et le rend LISIBLE (004.4.4, D-054).
+
+    Ordre impose: octets d'abord, ligne ensuite. Un echec entre les deux laisse des octets
+    orphelins SANS ligne, donc illisibles -- risque residuel explicitement accepte par D-054,
+    ramassage reporte a 004.9. Aucune compensation n'est tentee ici.
+
+    La cle est generee COTE SERVEUR a partir du contexte de session: l'appelant n'en controle
+    aucun segment, et le nom du fichier local n'est conserve nulle part.
+    """
+    store_id = validate_uuid(store, "store")
+    source_kind = validate_source_kind(kind)
+    path = validate_local_source(file)
+    try:
+        object_store = build_object_store(object_store_settings)
+    except ObjectStoreError:
+        raise ConfigurationRefused("magasin d'objets non configure (MERVIO_OBJECT_STORE_ROOT)",
+                                   code="object_store_unconfigured") from None
+    session = _session(database, actor, organization)
+    _require(session, Permission.IMPORT_DATA)
+    with session.transaction(Permission.IMPORT_DATA) as conn:
+        stores.fetch_store(conn, session, store_id)  # appartenance reelle, sinon NotFound
+
+    key = build_object_key(session.organization_id, store_id)
+    with path.open("rb") as handle:  # lecture locale EN FLUX, memoire bornee
+        written = object_store.put(key, handle)
+
+    policy = retention or RetentionPolicy()
+    retain_until = datetime.now(timezone.utc) + timedelta(days=policy.raw_objects_days)
+    correlation_id = uuid.uuid4()
+    trace = _tracer(session, correlation_id, Action.OBJECT_UPLOADED, ResourceType.RAW_OBJECT,
+                    store_id=store_id,
+                    metadata={"source_kind": source_kind, "sha256": written.sha256,
+                              "byte_size": written.byte_size})
+    recorded = raw_objects.record_object(
+        session, store_id=store_id, object_key=key, sha256=written.sha256,
+        byte_size=written.byte_size, source_kind=source_kind, retain_until=retain_until, hook=trace)
+    return {"status": "created", "object": recorded.public()}
+
+
 def enqueue_import(database: Database, *, actor: Any, organization: Any, store: Any, connection: Any,
-                   sources: Mapping[str, Any], synthetic: bool = False, priority: Any = 0,
+                   raw_objects_by_kind: Mapping[str, Any], synthetic: bool = False, priority: Any = 0,
                    idempotency_key: Any = None) -> Dict[str, Any]:
+    """Met en file un import par identifiants d'objets bruts, UN PAR SOURCE (roadmap 004.6 l. 588).
+
+    AUCUN chemin n'entre dans la charge utile (D-054): `validate_payload` les refuserait de toute
+    facon. Un objet d'un autre tenant ou inexistant donne la MEME `NotFound`, sans oracle.
+    """
     store_id = validate_uuid(store, "store")
     connection_id = validate_uuid(connection, "connection")
     priority, idempotency_key = validate_priority(priority), validate_idempotency_key(idempotency_key)
-    files = {kind: validate_source_path(path, kind) for kind, path in (sources or {}).items() if path is not None}
-    if not files:
-        raise InvalidInput("au moins une source attendue")
-    unknown = sorted(set(files) - set(SOURCE_KINDS))
+    wanted = {kind: value for kind, value in (raw_objects_by_kind or {}).items() if value is not None}
+    if not wanted:
+        raise InvalidInput("au moins un objet brut attendu")
+    unknown = sorted(set(wanted) - set(SOURCE_KINDS))
     if unknown:
         raise InvalidInput("source inconnue: " + ", ".join(unknown))
+    identifiers = {kind: validate_uuid(value, kind) for kind, value in wanted.items()}
+
     session = _session(database, actor, organization)
     _require(session, jobs.ENQUEUE_PERMISSION[JobType.IMPORT])
     target = stores.get_connection(session, store_id, connection_id)
     if target.status != "active":
         raise Conflict("connexion revoquee: aucun import possible", code="connection_revoked")
+    for kind, object_id in sorted(identifiers.items()):
+        recorded = raw_objects.get_object(session, object_id)  # NotFound: autre tenant OU inexistant
+        if recorded.store_id != store_id:
+            raise NotFoundError("raw_object introuvable")
+        if recorded.source_kind != kind:
+            raise InvalidInput(f"objet brut de type {recorded.source_kind}, attendu {kind}")
+        if not recorded.available:
+            raise Conflict("objet brut indisponible", code="object_unavailable")
+
     payload = {"store_id": str(store_id), "connection_id": str(connection_id),
-               "sources": {kind: files[kind] for kind in sorted(files)}, "synthetic": bool(synthetic)}
+               "raw_objects": {kind: str(identifiers[kind]) for kind in sorted(identifiers)},
+               "synthetic": bool(synthetic)}
     return _enqueue(session, JobType.IMPORT, payload, store_id=store_id, priority=priority,
                     idempotency_key=idempotency_key)
 
@@ -695,7 +785,22 @@ def list_audit_events(database: Database, *, actor: Any, organization: Any, acti
 # Demonstration
 # =============================================================================================
 
-def demo_provision(database: Database, *, owner: Any, data_dir: Any, service_name: Any = None) -> Dict[str, Any]:
+def _demo_object(database, owner, organization_id, store_id, kind, path, sha256, store_settings) -> str:
+    """Objet brut de la demonstration, REJOUABLE: memes octets = meme objet.
+
+    Sans cela, un rejeu deposerait un nouvel objet et la meme cle d'idempotence designerait une
+    demande differente, ce que `_enqueue` refuse desormais (conflit).
+    """
+    session = _session(database, owner, organization_id)
+    existing = raw_objects.find_available_object(session, validate_uuid(store_id, "store"), kind, sha256)
+    if existing is not None:
+        return str(existing.id)
+    return upload_object(database, actor=owner, organization=organization_id, store=store_id, kind=kind,
+                         file=str(path), object_store_settings=store_settings)["object"]["id"]
+
+
+def demo_provision(database: Database, *, owner: Any, data_dir: Any, service_name: Any = None,
+                   object_store_settings: Any = None) -> Dict[str, Any]:
     """Organisation de demonstration SYNTHETIQUE, prete pour le worker. Rejouable a l'identique.
 
     Identite, organisation, boutique, connexion CSV, jeu synthetique deterministe, autorisation du
@@ -721,9 +826,14 @@ def demo_provision(database: Database, *, owner: Any, data_dir: Any, service_nam
     fingerprint = hashlib.sha256(json.dumps(
         {kind: manifest["files"][name]["sha256"] for kind, name in DEMO_FILES.items()},
         sort_keys=True).encode("utf-8")).hexdigest()
+    # 004.4.4: la demonstration emprunte le MEME parcours que l'operateur, upload puis mise en
+    # file. Aucun chemin n'atteint le worker, pas meme ici.
+    uploaded = {kind: _demo_object(database, owner, organization_id, store_id, kind,
+                                   directory / name, manifest["files"][name]["sha256"],
+                                   object_store_settings)
+                for kind, name in sorted(DEMO_FILES.items())}
     job = enqueue_import(database, actor=owner, organization=organization_id, store=store_id,
-                         connection=connection["connection"]["id"],
-                         sources={kind: str(directory / name) for kind, name in DEMO_FILES.items()},
+                         connection=connection["connection"]["id"], raw_objects_by_kind=uploaded,
                          synthetic=True, idempotency_key=f"demo-import-{fingerprint[:32]}")
     return {
         "synthetic": True,
@@ -812,6 +922,7 @@ def _sha256(path: Path) -> str:
 
 __all__ = [
     "ASSIGNABLE_ROLES", "SOURCE_KINDS", "add_member", "authorize_service", "cancel_job", "connect",
+    "upload_object", "validate_local_source", "validate_source_kind",
     "create_connection",
     "create_organization", "create_store", "demo_provision", "enqueue_analysis", "enqueue_import", "enqueue_purge",
     "ensure_user", "guarded", "job_statistics", "list_audit_events", "list_jobs", "list_members",

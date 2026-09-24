@@ -98,9 +98,34 @@ def test_a_payload_never_carries_the_content_of_a_source():
         validate_payload({"sources": "a" * 5000})
 
 
-def test_a_payload_locating_files_is_accepted():
-    payload = {"store_id": "s", "sources": {"shopify_orders": "/tmp/orders.csv"}}
+def test_a_payload_carrying_a_path_is_refused():
+    """004.4.4 (D-054): le worker ne recoit JAMAIS de chemin. L'inverse etait vrai avant.
+
+    Ce test portait exactement l'assertion contraire jusqu'a 004.4.4: une charge utile
+    "localisant des fichiers" etait acceptee. C'est ce que la mission ferme (G-02 / SEC-01).
+    """
+    for payload in ({"store_id": "s", "sources": {"shopify_orders": "/tmp/orders.csv"}},
+                    {"meta": {"source": "/tmp/x.csv"}},
+                    {"note": "/etc/passwd"},
+                    {"path": "anything"},
+                    {"candidates": ["fine", "../../etc/passwd"]},
+                    {"windows": "C:\\data\\x.csv"},
+                    {"home": "~/secrets.csv"},
+                    {"scheme": "file:///etc/passwd"}):
+        with pytest.raises(PayloadRejected):
+            validate_payload(payload)
+
+
+def test_a_payload_locating_raw_objects_is_accepted():
+    """La forme 004.4.4: des identifiants, jamais un emplacement."""
+    payload = {"store_id": "s", "raw_objects": {"shopify_orders": "9f1c4e2a-0000-4000-8000-000000000001"},
+               "synthetic": False}
     assert validate_payload(payload) == payload
+
+
+def test_a_label_that_merely_contains_a_slash_stays_legitimate():
+    """La detection vise un EMPLACEMENT, pas toute barre oblique: un libelle reste libre."""
+    assert validate_payload({"label": "Q1/2026"}) == {"label": "Q1/2026"}
 
 
 def test_a_payload_is_an_object():

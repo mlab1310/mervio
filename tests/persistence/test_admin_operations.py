@@ -38,14 +38,17 @@ OWNER_B, OUTSIDER = "op|b-owner", "op|outsider"
 class Admin:
     """`mervio admin ... --json` en processus, sur le role de connexion choisi."""
 
-    def __init__(self, pg):
+    def __init__(self, pg, object_root):
         self.pg = pg
+        #: racine du magasin d'objets de ce test (004.4.4): `object upload` y depose les octets
+        self.object_root = object_root
         self.outputs = []
 
     def __call__(self, *argv, kind="app", database=None, url=None):
         args = build_parser().parse_args(["admin", *argv, "--json"])
         out = io.StringIO()
-        environ = {"MERVIO_DATABASE_URL": url or self.pg.url(kind, database)}
+        environ = {"MERVIO_DATABASE_URL": url or self.pg.url(kind, database),
+                   "MERVIO_OBJECT_STORE_ROOT": str(self.object_root)}
         code = cli_admin.cmd_admin(args, environ=environ, stdout=out)
         self.outputs.append(out.getvalue())
         document = json.loads(out.getvalue())
@@ -59,8 +62,8 @@ class Admin:
 
 
 @pytest.fixture
-def admin(db, pg):
-    runner = Admin(pg)
+def admin(db, pg, tmp_path):
+    runner = Admin(pg, tmp_path / "objects")
     yield runner
     published = "".join(runner.outputs)
     for secret in pg.passwords.values():
@@ -80,7 +83,7 @@ def count(conn, sql, *params):
 
 
 @pytest.fixture
-def world(admin):
+def world(admin, tmp_path):
     """Organisation A (proprietaire, admin, analyste, lecteur), organisation B, un humain exterieur."""
     for subject in (OWNER_A, ADMIN_A, ANALYST_A, VIEWER_A, OWNER_B, OUTSIDER):
         admin.ok("user", "ensure", "--subject", subject)
@@ -95,7 +98,12 @@ def world(admin):
                       "--label", "CSV A")["connection"]["id"]
     conn_b = admin.ok("connection", "create", "--as", OWNER_B, "--org", org_b, "--store", store_b,
                       "--label", "CSV B")["connection"]["id"]
-    return {"a": org_a, "b": org_b, "store_a": store_a, "store_b": store_b, "conn_a": conn_a, "conn_b": conn_b}
+    source = tmp_path / "orders.csv"
+    source.write_text(SAMPLE_CSV, encoding="utf-8")
+    object_a = admin.ok("object", "upload", "--as", ANALYST_A, "--org", org_a, "--store", store_a,
+                        "--kind", "shopify_orders", "--file", str(source))["object"]["id"]
+    return {"a": org_a, "b": org_b, "store_a": store_a, "store_b": store_b, "conn_a": conn_a,
+            "conn_b": conn_b, "object_a": object_a}
 
 
 def user_id(evidence, subject):
@@ -110,9 +118,15 @@ def events(evidence, organization, action=None):
     return rows
 
 
-def import_args(world, *extra, as_=ANALYST_A, org=None, path="/srv/mervio/orders.csv"):
+#: CSV minimal accepte par le connecteur Shopify: seul le PARCOURS est teste ici.
+SAMPLE_CSV = ("Name,Created at,Lineitem quantity,Lineitem name,Lineitem price,Total\n"
+              "#1001,2026-01-05 10:00:00 +0000,1,Widget,10.00,10.00\n")
+
+
+def import_args(world, *extra, as_=ANALYST_A, org=None, raw_object=None):
+    """004.4.4: la mise en file designe un OBJET BRUT, plus jamais un chemin (D-054)."""
     return ("job", "enqueue-import", "--as", as_, "--org", org or world["a"], "--store", world["store_a"],
-            "--connection", world["conn_a"], "--shopify-orders", path, *extra)
+            "--connection", world["conn_a"], "--shopify-orders", raw_object or world["object_a"], *extra)
 
 
 # =============================================================================================
@@ -466,33 +480,76 @@ def test_an_authorization_in_one_organization_grants_nothing_in_another(admin, w
 # Travaux
 # =============================================================================================
 
-def test_enqueue_import_is_audited_idempotent_and_hides_paths(admin, world, evidence):
-    path = "/home/client-secret-name/exports/orders.csv"
-    created = admin.ok(*import_args(world, "--idempotency-key", "import-1", "--priority", "5", path=path))
-    replay = admin.ok(*import_args(world, "--idempotency-key", "import-1", path=path))
+def test_enqueue_import_is_audited_idempotent_and_carries_no_path(admin, world, evidence):
+    """004.4.4: le chemin n'est plus REDIGE a l'affichage, il n'existe plus du tout (D-054).
+
+    Avant cette mission, la charge utile portait le vrai chemin en base et ne le masquait qu'au
+    rendu. Desormais elle ne transporte que des identifiants d'objets bruts.
+    """
+    created = admin.ok(*import_args(world, "--idempotency-key", "import-1", "--priority", "5"))
+    replay = admin.ok(*import_args(world, "--idempotency-key", "import-1"))
     assert created["status"] == "created" and replay["status"] == "existing"
     assert replay["job"]["id"] == created["job"]["id"]
     job = created["job"]
     assert (job["job_type"], job["status"], job["priority"], job["store_id"]) == (
         "import", "queued", 5, world["store_a"])
-    assert job["payload"]["sources"] == {"shopify_orders": "[redacted]"}
+    # `raw_objects` tombe sous le fragment de cle `raw` de `redaction.py`: la vue rendue le
+    # masque (defense en profondeur, conservatrice), la charge persistee reste verifiable.
+    assert job["payload"]["raw_objects"] == "[redacted]"
+    assert "sources" not in job["payload"]
     assert job["enqueued_by"] == str(user_id(evidence, ANALYST_A))
-    assert "client-secret-name" not in json.dumps(admin.ok("job", "show", "--as", VIEWER_A, "--org", world["a"],
-                                                           "--job", job["id"]))
+
     stored = evidence.execute("SELECT payload FROM jobs WHERE id = %s", (job["id"],)).fetchone()[0]
-    assert stored["sources"] == {"shopify_orders": path}  # le worker, lui, recoit le vrai chemin
+    assert stored["raw_objects"] == {"shopify_orders": world["object_a"]}
+    # la preuve centrale: AUCUNE valeur de la charge utile persistee ne ressemble a un chemin
+    assert "/" not in json.dumps(stored), stored
     assert count(evidence, "SELECT count(*) FROM jobs") == 1
     enqueued = events(evidence, world["a"], "job.enqueued")
     assert len(enqueued) == 1
     assert enqueued[0][1:5] == ("user", user_id(evidence, ANALYST_A), None, "job")
 
 
-@pytest.mark.parametrize("path", ["relative/orders.csv", "/srv/../etc/passwd", "/srv/./orders.csv",
-                                  "/srv//orders.csv", "/srv/orders.csv\x00.txt", "~/orders.csv",
-                                  "/" + "a" * 1100])
-def test_enqueue_import_refuses_hostile_paths(admin, world, evidence, path):
-    code, error = admin(*import_args(world, path=path))
+def test_an_upload_is_audited_without_the_local_filename(admin, world, evidence, tmp_path):
+    """L'audit d'un depot porte l'empreinte et la taille, jamais le nom du fichier local."""
+    source = tmp_path / "client-secret-name-orders.csv"
+    source.write_text(SAMPLE_CSV, encoding="utf-8")
+    uploaded = admin.ok("object", "upload", "--as", ANALYST_A, "--org", world["a"],
+                        "--store", world["store_a"], "--kind", "stripe", "--file", str(source))
+    assert uploaded["status"] == "created"
+    assert set(uploaded["object"]) == {"id", "store_id", "source_kind", "origin", "sha256",
+                                       "byte_size", "state", "retain_until", "created_at"}
+    assert uploaded["object"]["state"] == "available"
+    assert uploaded["object"]["origin"] == "csv_upload"
+    traced = events(evidence, world["a"], "object.uploaded")
+    assert len(traced) == 2  # celui de `world` (shopify_orders) et celui-ci (stripe)
+    metadata = json.dumps([row[7] for row in traced])
+    assert "client-secret-name" not in metadata and "/" not in metadata, metadata
+    assert uploaded["object"]["sha256"] in metadata
+
+
+@pytest.mark.parametrize("path", ["/srv/../etc/passwd", "/srv/./orders.csv", "/srv//orders.csv",
+                                  "/srv/orders.csv\x00.txt", "/" + "a" * 1100, "relative/orders.csv",
+                                  "~/orders.csv"])
+def test_a_hostile_local_path_is_refused_at_upload(admin, world, evidence, path):
+    """Le chemin local est refuse la ou il est encore lu: au depot. Il n'atteint jamais un travail."""
+    before = count(evidence, "SELECT count(*) FROM raw_objects")
+    code, error = admin("object", "upload", "--as", ANALYST_A, "--org", world["a"],
+                        "--store", world["store_a"], "--kind", "shopify_orders", "--file", path)
     assert (code, error["code"]) == (admin_errors.EXIT_USAGE, "invalid_input")
+    assert path not in json.dumps(error), error  # le chemin refuse n'est pas renvoye
+    assert count(evidence, "SELECT count(*) FROM raw_objects") == before
+    assert count(evidence, "SELECT count(*) FROM jobs") == 0
+
+
+@pytest.mark.parametrize("value", ["/srv/mervio/orders.csv", "relative/orders.csv", "not-a-uuid"])
+def test_a_path_can_never_be_passed_as_a_raw_object(admin, world, evidence, value):
+    """Meme en visant le drapeau de source, un chemin n'est pas un identifiant d'objet.
+
+    L'analyseur d'arguments le refuse AVANT toute logique: sortie 2, aucun travail cree.
+    """
+    with pytest.raises(SystemExit) as exit_code:
+        admin(*import_args(world, raw_object=value))
+    assert exit_code.value.code == admin_errors.EXIT_USAGE
     assert count(evidence, "SELECT count(*) FROM jobs") == 0
 
 
@@ -504,7 +561,7 @@ def test_enqueue_import_needs_a_source_and_the_right_role(admin, world, evidence
     assert (code, error) == (admin_errors.EXIT_DENIED,
                              {"code": "forbidden", "message": "role viewer insuffisant pour import_data"})
     code, error = admin("job", "enqueue-import", "--as", ANALYST_A, "--org", world["a"], "--store", world["store_a"],
-                        "--connection", world["conn_b"], "--stripe", "/srv/stripe.csv")
+                        "--connection", world["conn_b"], "--shopify-orders", world["object_a"])
     assert (code, error["message"]) == (admin_errors.EXIT_NOT_FOUND, "connection introuvable")
     assert count(evidence, "SELECT count(*) FROM jobs") == 0
 
@@ -569,7 +626,7 @@ def test_audit_list_is_for_admins_and_scoped_to_the_organization(admin, world, e
     listed = admin.ok("audit", "list", "--as", ADMIN_A, "--org", world["a"], "--limit", "1000")["events"]
     assert [e["action"] for e in listed] == [
         "organization.created", "member.added", "member.added", "member.added", "store.created",
-        "connection.created", "job.enqueued"]
+        "connection.created", "object.uploaded", "job.enqueued"]
     assert all(e["actor_type"] == "user" and e["on_behalf_of"] is None for e in listed)
     ids_b = {str(r[0]) for r in evidence.execute("SELECT id FROM audit_events WHERE organization_id = %s",
                                                  (world["b"],))}
@@ -585,7 +642,7 @@ def test_every_admin_event_names_the_real_actor(admin, world, evidence):
     rows = evidence.execute("SELECT action, actor_type, actor_id, on_behalf_of FROM audit_events "
                             "WHERE organization_id = %s", (world["a"],)).fetchall()
     expected = {"organization.created": OWNER_A, "member.added": OWNER_A, "store.created": ADMIN_A,
-                "connection.created": ADMIN_A}
+                "connection.created": ADMIN_A, "object.uploaded": ANALYST_A}
     assert {action for action, *_ in rows} == set(expected)
     for action, actor_type, actor_id, on_behalf_of in rows:
         assert (actor_type, actor_id, on_behalf_of) == ("user", user_id(evidence, expected[action]), None)
@@ -672,11 +729,25 @@ def test_a_database_without_the_admin_audit_vocabulary_is_reported_as_unmigrated
         pg.drop_database(name)
 
 
-def test_job_records_are_rendered_without_paths_or_emails(world, db, evidence):
-    """Defense en profondeur: meme une charge utile ecrite hors CLI ne ressort pas en clair."""
+def test_a_payload_carrying_a_path_can_no_longer_be_enqueued_at_all(world, db, evidence):
+    """004.4.4: la defense a remonte d'un cran.
+
+    Auparavant une charge utile ecrite hors CLI pouvait porter un chemin, seulement REDIGE a
+    l'affichage. Desormais elle est refusee a la mise en file (D-054): rien n'est ecrit.
+    """
+    from mervio.persistence.errors import PayloadRejected
     from mervio.persistence.tenancy import TenantContext, TenantSession
     session = TenantSession(db, TenantContext(uuid.UUID(world["a"]), user_id(evidence, ANALYST_A)))
-    job = jobs.enqueue_job(session, job_type="analysis", payload={"note": "/Users/alice/x.csv",
-                                                                  "mail": "alice@example.com"})
+    with pytest.raises(PayloadRejected):
+        jobs.enqueue_job(session, job_type="analysis",
+                         payload={"note": "/Users/alice/x.csv", "mail": "alice@example.com"})
+    assert count(evidence, "SELECT count(*) FROM jobs") == 0
+
+
+def test_job_records_are_rendered_without_emails(world, db, evidence):
+    """Ce qui reste autorise dans une charge utile ne ressort toujours pas en clair."""
+    from mervio.persistence.tenancy import TenantContext, TenantSession
+    session = TenantSession(db, TenantContext(uuid.UUID(world["a"]), user_id(evidence, ANALYST_A)))
+    job = jobs.enqueue_job(session, job_type="analysis", payload={"mail": "alice@example.com"})
     rendered = operations.render_job(job, detailed=True)
-    assert rendered["payload"] == {"note": "[redacted]", "mail": "[redacted-email]"}
+    assert rendered["payload"] == {"mail": "[redacted-email]"}

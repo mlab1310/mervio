@@ -21,10 +21,13 @@ PASSWORD = "Sup3r-S3cret-Pa55"
 URL = f"postgresql://mervio_worker:{PASSWORD}@db.internal:6543/mervio"
 #: cle maitre d'identite FACTICE, tiree a l'execution (jamais de cle litterale dans le depot)
 MASTER_KEY = secrets.token_hex(32)
+#: racine du magasin d'objets (004.4.4): obligatoire des que le worker traite des imports
+OBJECT_ROOT = "/var/lib/mervio/objects"
 
 
 def load(**variables):
-    environ = {"MERVIO_DATABASE_URL": URL, "MERVIO_IDENTITY_MASTER_KEY": MASTER_KEY}
+    environ = {"MERVIO_DATABASE_URL": URL, "MERVIO_IDENTITY_MASTER_KEY": MASTER_KEY,
+               "MERVIO_OBJECT_STORE_ROOT": OBJECT_ROOT}
     environ.update({k: v for k, v in variables.items() if v is not None})
     for key in [k for k, v in variables.items() if v is None]:
         environ.pop(key, None)
@@ -249,7 +252,8 @@ def test_an_explicit_worker_name_must_be_safe(name):
 
 
 def test_the_default_worker_name_is_a_sanitized_hostname():
-    environ = {"MERVIO_DATABASE_URL": URL, "MERVIO_IDENTITY_MASTER_KEY": MASTER_KEY}
+    environ = {"MERVIO_DATABASE_URL": URL, "MERVIO_IDENTITY_MASTER_KEY": MASTER_KEY,
+               "MERVIO_OBJECT_STORE_ROOT": OBJECT_ROOT}
     settings = WorkerSettings.from_env(environ, hostname=lambda: "pod name/ü" + "x" * 50)
     assert settings.worker_name == ("pod-name--" + "x" * 30)
     assert WorkerSettings.from_env(environ, hostname=lambda: "").worker_name == "worker"
@@ -270,6 +274,7 @@ def test_every_problem_is_reported_at_once():
 def test_the_real_environment_is_read_by_default(monkeypatch):
     monkeypatch.setenv("MERVIO_DATABASE_URL", URL)
     monkeypatch.setenv("MERVIO_IDENTITY_MASTER_KEY", MASTER_KEY)
+    monkeypatch.setenv("MERVIO_OBJECT_STORE_ROOT", OBJECT_ROOT)
     monkeypatch.setenv("MERVIO_WORKER_DISPATCH_BATCH", "7")
     assert WorkerSettings.from_env().dispatch_batch == 7
 

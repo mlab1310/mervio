@@ -465,7 +465,8 @@ def test_the_worker_is_hardened_and_healthchecked():
     assert "ports" not in worker and "expose" not in worker
     assert worker["networks"] == ["backend"]
     assert worker["tmpfs"] == ["/run/mervio:uid=10001,gid=10001,mode=0700", "/tmp"]
-    assert worker["volumes"] == ["mervio_data:/var/lib/mervio/data:ro"]
+    assert worker["volumes"] == ["mervio_data:/var/lib/mervio/data:ro",
+                                 "mervio_objects:/var/lib/mervio/objects:ro"]
     assert "entrypoint" not in worker and "command" not in worker, "l'image lance `mervio worker`"
     assert "user" not in worker, "l'utilisateur non-root de l'image n'est jamais remplace"
     grace = int(worker["stop_grace_period"].rstrip("s"))
@@ -500,7 +501,8 @@ def test_admin_uses_the_application_role_and_the_shared_data_volume():
     assert admin["entrypoint"] == ["mervio", "admin"]
     assert admin["healthcheck"] == {"disable": True}
     assert admin["environment"]["MERVIO_DATABASE_URL"].startswith("postgresql://mervio_app_user:")
-    assert admin["volumes"] == ["mervio_data:/var/lib/mervio/data"]
+    assert admin["volumes"] == ["mervio_data:/var/lib/mervio/data",
+                                "mervio_objects:/var/lib/mervio/objects"]
     for name in ("migrate", "admin"):
         service = SERVICES[name]
         assert service["read_only"] is True and service["cap_drop"] == ["ALL"], name
@@ -518,7 +520,7 @@ def test_no_mervio_service_connects_as_the_superuser():
 def test_the_backend_network_is_internal():
     assert COMPOSE_DOC["networks"] == {"backend": {"internal": True}, "edge": {}}
     assert SERVICES["postgres"]["networks"] == ["backend", "edge"]
-    assert set(COMPOSE_DOC["volumes"]) == {"mervio_pgdata", "mervio_data"}
+    assert set(COMPOSE_DOC["volumes"]) == {"mervio_pgdata", "mervio_data", "mervio_objects"}
 
 
 def test_compose_bootstrap_and_smoke_agree_on_names():

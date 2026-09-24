@@ -18,8 +18,12 @@ Un travail rejoue apres un crash renvoie donc `reused` et le meme identifiant.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Dict, Mapping, Optional
 from uuid import UUID
@@ -27,9 +31,12 @@ from uuid import UUID
 from ..config import AnalyticsConfig
 from ..identity import MasterKey
 from ..observability.logging import EventLogger
-from ..persistence import audit, jobs
+from ..storage import CHUNK_SIZE, ObjectNotFound
+from ..persistence import audit, jobs, raw_objects
 from ..persistence.audit import Action, ActorType, Outcome, ResourceType
+from ..persistence.codec import file_sha256
 from ..persistence.jobs import JobRecord, JobType
+from ..persistence.raw_objects import SOURCE_KINDS
 from ..persistence.tenancy import Permission, TenantSession
 from .errors import PermanentJobError, RetryableJobError
 from .retention import RetentionPolicy
@@ -115,56 +122,113 @@ class HandlerRegistry:
 
 # -- import ---------------------------------------------------------------------------------
 
-def make_import_handler(identity_master: Optional[MasterKey]) -> Handler:
-    """Gestionnaire d'import lie a la cle maitre d'identite du processus (D-053).
+def make_import_handler(identity_master: Optional[MasterKey],
+                        object_store: Optional[object] = None) -> Handler:
+    """Gestionnaire d'import lie a la cle maitre d'identite et au magasin d'objets du processus.
 
     La cle n'entre jamais dans la charge utile, le contexte, l'audit ni les logs. Sans cle, tout
     import echoue en `identity_key_unavailable` (permanent): aucune reference client n'est calculee
     avec une cle de substitution. Le processus worker refuse d'ailleurs de demarrer sans elle
-    s'il traite des imports (settings).
+    ni sans magasin s'il traite des imports (settings).
     """
     def handler(context: JobContext) -> Dict[str, Any]:
-        return import_handler(context, identity_master)
+        return import_handler(context, identity_master, object_store)
     return handler
 
 
-def import_handler(context: JobContext, identity_master: Optional[MasterKey] = None) -> Dict[str, Any]:
-    """Travail d'import: fichiers CSV -> instantane scelle, via le chemin 004.1."""
+def _materialize(context: JobContext, object_store, recorded, directory: Path) -> Path:
+    """Ecrit les octets de l'objet dans un fichier TEMPORAIRE detenu par le worker (D-061, Q1).
+
+    Le chemin obtenu n'est PAS un chemin d'appelant: il est fabrique ici, apres resolution sous
+    RLS, et n'apparait ni dans la charge utile, ni dans l'audit, ni dans les logs, ni dans une
+    erreur publiee. Memoire bornee: copie par blocs.
+
+    Integrite N1 (D-061): les octets materialises doivent etre ceux que LA BASE declare. Une
+    divergence est definitive -- `raw_objects.sha256` est fige a l'insertion (aucun UPDATE
+    accorde) et les octets d'un objet ne changent pas -- et AUCUN parseur n'est appele.
+    """
+    target = directory / recorded.source_kind
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as sink, object_store.open(recorded.object_key) as source:
+            shutil.copyfileobj(source, sink, CHUNK_SIZE)
+    except ObjectNotFound:
+        raise PermanentJobError("object_missing", "objet brut absent du magasin") from None
+    digest, size = file_sha256(target)
+    if digest != recorded.sha256 or size != recorded.byte_size:
+        raise PermanentJobError("object_checksum_mismatch",
+                                "les octets de l'objet ne correspondent pas a ceux declares")
+    return target
+
+
+def import_handler(context: JobContext, identity_master: Optional[MasterKey] = None,
+                   object_store: Optional[object] = None) -> Dict[str, Any]:
+    """Travail d'import: objets bruts -> instantane scelle, via le chemin 004.1 INCHANGE.
+
+    Ordre garanti (F-02, non regresse): la cle d'identite est resolue AVANT toute lecture
+    d'octet. Un refus d'identite ne laisse donc ni `import.started`, ni objet ouvert, ni
+    fichier temporaire.
+    """
     from ..application.persisted_analysis import SnapshotImportRequest, import_csv_snapshot
     from ..persistence.errors import IdentityKeyUnavailable
+    from ..persistence.identity_keys import ensure_identity_key
 
     if identity_master is None:  # refuse avant tout: aucun import n'a commence
         raise PermanentJobError("identity_key_unavailable", "cle maitre d'identite non configuree")
+    if object_store is None:
+        raise PermanentJobError("object_store_unavailable", "magasin d'objets non configure")
     store_id = context.uuid("store_id")
     connection_id = context.uuid("connection_id")
-    sources = context.payload.get("sources")
-    if not isinstance(sources, Mapping) or not sources:
-        raise PermanentJobError("payload_incomplete", "charge utile sans source")
-    unknown = set(sources) - {"shopify_orders", "shopify_products", "stripe", "google_ads"}
+    requested = context.payload.get("raw_objects")
+    if not isinstance(requested, Mapping) or not requested:
+        raise PermanentJobError("payload_incomplete", "charge utile sans objet brut")
+    unknown = set(requested) - set(SOURCE_KINDS)
     if unknown:
         raise PermanentJobError("payload_invalid", "source inconnue: " + ", ".join(sorted(unknown)))
 
-    request = SnapshotImportRequest(
-        synthetic=bool(context.payload.get("synthetic", False)),
-        synthetic_manifest=context.payload.get("synthetic_manifest"),
-        **{kind: str(path) for kind, path in sources.items()},
-    )
+    # F-02: identite AVANT le moindre octet. Un refus laisse le magasin intact.
+    try:
+        ensure_identity_key(context.session, identity_master)
+    except IdentityKeyUnavailable as exc:
+        raise PermanentJobError(exc.code, f"cle d'identite indisponible ({exc.reason})") from None
 
     def started_after_identity() -> None:
-        # 004.4.2 (F-02): appele par import_csv_snapshot APRES l'autorisation et la cle d'identite,
-        # AVANT tout acces fichier. Un refus d'identite ne laisse donc aucun `import.started`.
+        # 004.4.2 (F-02): appele par import_csv_snapshot APRES l'autorisation et la cle d'identite.
         with context.session.transaction(Permission.IMPORT_DATA) as conn:
             context.audit(conn, Action.IMPORT_STARTED, ResourceType.JOB, context.job.id, outcome=Outcome.STARTED,
-                          metadata={"sources": sorted(sources), "attempt": context.job.attempts})
-        context.log.info("import.started", sources=sorted(sources), attempt=context.job.attempts)
+                          metadata={"sources": sorted(requested), "attempt": context.job.attempts})
+        context.log.info("import.started", sources=sorted(requested), attempt=context.job.attempts)
 
     started = time.perf_counter()
     context.checkpoint()
+    # repertoire temporaire du worker: 0700, supprime en `finally`, y compris sur bail perdu
+    directory = Path(tempfile.mkdtemp(prefix="mervio-objects-"))
     try:
-        result = import_csv_snapshot(context.session, store_id=store_id, connection_id=connection_id,
-                                     request=request, master_key=identity_master, on_started=started_after_identity)
-    except IdentityKeyUnavailable as exc:
-        raise PermanentJobError(exc.code, f"cle d'identite indisponible ({exc.reason})") from None
+        with context.session.transaction(Permission.READ) as conn:
+            # resolution SOUS RLS: un objet d'un autre tenant est INVISIBLE, donc introuvable
+            resolved = {kind: raw_objects.fetch_object(conn, UUID(str(value)))
+                        for kind, value in sorted(requested.items())}
+        files = {}
+        for kind, recorded in resolved.items():
+            if recorded.source_kind != kind:
+                raise PermanentJobError("payload_invalid", f"objet de type {recorded.source_kind} pour {kind}")
+            if not recorded.available:
+                raise PermanentJobError("object_unavailable", "objet brut indisponible")
+            files[kind] = str(_materialize(context, object_store, recorded, directory))
+            context.checkpoint()
+
+        request = SnapshotImportRequest(
+            synthetic=bool(context.payload.get("synthetic", False)),
+            synthetic_manifest=context.payload.get("synthetic_manifest"), **files,
+        )
+        try:
+            result = import_csv_snapshot(context.session, store_id=store_id, connection_id=connection_id,
+                                         request=request, master_key=identity_master,
+                                         on_started=started_after_identity)
+        except IdentityKeyUnavailable as exc:
+            raise PermanentJobError(exc.code, f"cle d'identite indisponible ({exc.reason})") from None
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)  # jamais de residu, meme sur echec
     context.checkpoint()
     duration_ms = int((time.perf_counter() - started) * 1000)
 
@@ -294,12 +358,14 @@ def purge_handler(context: JobContext) -> Dict[str, Any]:
     return counts
 
 
-def default_registry(*, identity_master: Optional[MasterKey] = None) -> HandlerRegistry:
+def default_registry(*, identity_master: Optional[MasterKey] = None,
+                     object_store: Optional[object] = None) -> HandlerRegistry:
     """Registre par defaut: un gestionnaire par type declare dans le schema.
 
     `identity_master`: cle maitre d'identite du processus, liee au gestionnaire d'import.
+    `object_store`: magasin d'objets bruts, d'ou le worker lit les octets (004.4.4).
     """
     return (HandlerRegistry()
-            .register(JobType.IMPORT, make_import_handler(identity_master))
+            .register(JobType.IMPORT, make_import_handler(identity_master, object_store))
             .register(JobType.ANALYSIS, analysis_handler)
             .register(JobType.PURGE, purge_handler))

@@ -90,6 +90,14 @@ def _identity_master(settings: WorkerSettings) -> Optional[MasterKey]:
     return MasterKey.from_hex(secret.reveal()) if secret is not None else None
 
 
+def _object_store(settings: WorkerSettings):
+    """Magasin d'objets bruts du processus (004.4.4), ou None s'il n'y a pas d'import a servir."""
+    if settings.object_store is None:
+        return None
+    from ..storage import build_object_store
+    return build_object_store(settings.object_store)
+
+
 class WorkerRuntime:
     """Le processus worker, de la configuration validee a l'arret."""
 
@@ -99,7 +107,8 @@ class WorkerRuntime:
                  forced_exit_delay: float = 5.0, jitter: Callable[[float, float], float] = random.uniform,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.settings = settings
-        self.registry = registry or default_registry(identity_master=_identity_master(settings))
+        self.registry = registry or default_registry(identity_master=_identity_master(settings),
+                                                     object_store=_object_store(settings))
         self.database_factory = database_factory
         self.worker_id = default_worker_id(settings.worker_name)
         self.log = (log or get_event_logger("worker")).bind(worker_id=self.worker_id)

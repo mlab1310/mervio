@@ -126,8 +126,42 @@ def _manifest(directory: Path) -> dict:
     return json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
 
 
-def _sources(directory: Path) -> Dict[str, str]:
+#: racine du magasin d'objets du banc: hors du depot, jetable (004.4.4)
+OBJECT_ROOT = Path(tempfile.mkdtemp(prefix="mervio-bench-objects-"))
+
+
+def _object_store():
+    from mervio.storage import FilesystemObjectStore
+    return FilesystemObjectStore(OBJECT_ROOT)
+
+
+def _source_paths(directory: Path) -> Dict[str, str]:
+    """Chemins LOCAUX, pour un appel DIRECT a `import_csv_snapshot` dans le processus du banc.
+
+    Aucun de ces chemins n'entre dans une charge utile de travail: c'est le meme cas que la CLI
+    analytique locale, explicitement autorise par D-054.
+    """
     return {kind: str(directory / name) for kind, name in SOURCES.items()}
+
+
+def _sources(session, store_id, directory: Path) -> Dict[str, str]:
+    """Depose chaque source et renvoie `{kind: raw_object_id}`: le worker ne recoit plus de chemin."""
+    from datetime import datetime, timezone
+
+    from mervio.persistence.raw_objects import record_object
+    from mervio.storage import build_object_key
+
+    store = _object_store()
+    identifiers = {}
+    for kind, name in SOURCES.items():
+        key = build_object_key(session.organization_id, store_id)
+        with open(directory / name, "rb") as handle:
+            written = store.put(key, handle)
+        recorded = record_object(session, store_id=store_id, object_key=key, sha256=written.sha256,
+                                 byte_size=written.byte_size, source_kind=kind,
+                                 retain_until=datetime(2099, 1, 1, tzinfo=timezone.utc))
+        identifiers[kind] = str(recorded.id)
+    return identifiers
 
 
 def _table_sizes(conn) -> Dict[str, float]:
@@ -390,6 +424,8 @@ class WorkerProcess:
             # attente de file courte et explicite: la latence de sondage est rapportee a part
             "MERVIO_WORKER_POLL_INTERVAL_SECONDS": "0.1", "MERVIO_WORKER_POLL_MAX_SECONDS": "1",
             "MERVIO_IDENTITY_MASTER_KEY": TEST_MASTER_KEY_HEX,
+            # 004.4.4: le worker lit les objets bruts ici; le banc y depose avant de mettre en file
+            "MERVIO_OBJECT_STORE_ROOT": str(OBJECT_ROOT),
         })
         environment.update(extra or {})
         self._log = open(self.log_path, "w", encoding="utf-8")
@@ -503,7 +539,8 @@ def worker_chain(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 store, connection = _store(session, f"perf-chain-{repetition}")
                 chain_started = time.perf_counter()
                 importing = enqueue(session, job_type=JobType.IMPORT, store_id=store.id, payload={
-                    "store_id": str(store.id), "connection_id": str(connection.id), "sources": _sources(directory),
+                    "store_id": str(store.id), "connection_id": str(connection.id),
+                    "raw_objects": _sources(session, store.id, directory),
                     "synthetic": True, "synthetic_manifest": manifest})
                 imported, import_seen = _wait_job(session, importing.id, float(payload["job_timeout"]))
                 if imported.status != "succeeded":
@@ -613,7 +650,7 @@ def lease(payload: Mapping[str, Any]) -> Dict[str, Any]:
             result = import_csv_snapshot(
                 context.session, store_id=uuid.UUID(pair["store_id"]), connection_id=uuid.UUID(pair["connection_id"]),
                 request=SnapshotImportRequest(synthetic=True, synthetic_manifest=manifest,
-                                              **_sources(directory)), master_key=TEST_MASTER_KEY)
+                                              **_source_paths(directory)), master_key=TEST_MASTER_KEY)
             count += result.status == "completed"
         return {"imports": count}
 
@@ -675,7 +712,8 @@ def concurrency(payload: Mapping[str, Any]) -> Dict[str, Any]:
         try:
             setup.wait_ready()
             importing = enqueue(session, job_type=JobType.IMPORT, store_id=store.id, payload={
-                "store_id": str(store.id), "connection_id": str(connection.id), "sources": _sources(directory),
+                "store_id": str(store.id), "connection_id": str(connection.id),
+                    "raw_objects": _sources(session, store.id, directory),
                 "synthetic": True, "synthetic_manifest": manifest})
             imported, _ = _wait_job(session, importing.id, float(payload["job_timeout"]))
         finally:

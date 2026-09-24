@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
 from mervio.identity import MasterKey
+from mervio.storage import MemoryObjectStore
 
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / "data" / "sample"
 SAMPLE_FILES = {"shopify_orders": str(SAMPLE_DIR / "shopify_orders.csv"),
@@ -65,3 +66,32 @@ def make_tenant(database, name: str, *, currency: str | None = None) -> Tenant:
     store = create_store(session, name=f"Boutique {name}", currency=currency)
     connection = create_csv_connection(session, store_id=store.id, label=f"Imports CSV {name}")
     return Tenant(organization_id, owner_id, store.id, connection.id, session)
+
+
+# -- objets bruts (Mission 004.4.4) -----------------------------------------------------------
+
+#: Magasin partage par les tests EN PROCESSUS: l'assistant de depot et le registre du worker
+#: doivent voir les memes octets. Les cles sont des `uuid4`: aucune collision entre tests.
+TEST_OBJECT_STORE = MemoryObjectStore()
+#: Echeance de retention des objets de test: metadonnee seule en 004.4.4 (aucune expiration).
+TEST_RETAIN_UNTIL = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+
+def deposit_object(tenant, kind: str, path, *, store=None) -> str:
+    """Depose UN fichier local dans le magasin et renvoie son `raw_object_id` (parcours D-054)."""
+    from mervio.persistence.raw_objects import record_object
+    from mervio.storage import build_object_key
+    target = store if store is not None else TEST_OBJECT_STORE
+    key = build_object_key(tenant.organization_id, tenant.store_id)
+    with open(path, "rb") as handle:
+        written = target.put(key, handle)
+    recorded = record_object(tenant.session, store_id=tenant.store_id, object_key=key,
+                             sha256=written.sha256, byte_size=written.byte_size,
+                             source_kind=kind, retain_until=TEST_RETAIN_UNTIL)
+    return str(recorded.id)
+
+
+def deposit_sources(tenant, files=None, *, store=None) -> dict:
+    """Depose chaque source et renvoie `{kind: raw_object_id}` pour une charge utile d'import."""
+    return {kind: deposit_object(tenant, kind, path, store=store)
+            for kind, path in (files or SAMPLE_FILES).items()}
