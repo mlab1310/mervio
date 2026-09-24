@@ -25,6 +25,11 @@ src/mervio/
   domain/
     models.py          modèle normalisé, indépendant des sources
     quality.py         statuts, incidents et comptages de lignes
+  storage/             magasin d'objets bruts (004.4.4, D-055)
+    base.py            contrat `ObjectStore` (put/open), clés, erreurs
+    memory.py          pilote mémoire (tests)
+    filesystem.py      pilote confiné à une racine configurée
+    s3.py              pilote S3 (`boto3`, extra `[s3]`, importé à la demande)
   ingestion/
     base.py            parsing tolérant (FR/US, devises, fuseaux)
     shopify.py         commandes + produits (coûts)
@@ -73,6 +78,10 @@ llm/ ──► rapport (dict) ; réutilise application/sensitive et ingestion/ba
 
 Une couche ne dépend jamais d'une couche au-dessus d'elle. `cli/` est
 remplaçable par `api/` sans toucher à rien d'autre.
+
+`storage/` ne dépend d'aucune autre couche et n'en connaît aucune : il reçoit une clé opaque et
+rend des octets. Il n'est **pas** une frontière de sécurité — la ligne `raw_objects` sous RLS
+l'est (D-054). C'est ce qui permet de prouver les trois pilotes par une seule suite de contrat.
 
 ## Règles structurantes
 

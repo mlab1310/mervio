@@ -32,7 +32,8 @@ n'appartient à aucune organisation : elle n'est pas auditée.
 | `store list` | viewer | lecture |
 | `connection create ... --store ID --label L` | admin | oui (libellé actif) |
 | `service authorize\|revoke ... --service ROLE` / `service list` | owner | authorize oui ; revoke sans autorisation active → 5 |
-| `job enqueue-import ... --store --connection --shopify-orders P ...` | analyst | avec `--idempotency-key` |
+| `object upload ... --store ID --kind K --file CHEMIN` | analyst | non (chaque dépôt crée un objet) |
+| `job enqueue-import ... --store --connection --shopify-orders UUID ...` | analyst | avec `--idempotency-key` |
 | `job enqueue-analysis ... --store (--snapshot ID \| --from-import JOB)` | analyst | avec `--idempotency-key` |
 | `job enqueue-purge` | owner | avec `--idempotency-key` |
 | `job list\|show\|stats` / `job cancel --job ID` | viewer / analyst | lecture / non |
@@ -75,3 +76,27 @@ mervio admin audit list --as 'demo|me' --org <org>
 répertoire vide ou déjà démo ; il ne réécrit jamais un fichier intact (un worker peut le lire) et
 remplace un fichier altéré par renommage atomique. Il refuse `data/sample/` et tout répertoire non
 vide étranger. Le scénario complet est exécuté par `tests/persistence/test_cli_admin_process.py`.
+
+## Objets bruts et frontière d'import (004.4.4, D-054)
+
+Le worker ne reçoit **jamais** de chemin de fichier. Un import se fait en deux temps :
+
+```bash
+# 1. déposer chaque source; le fichier est lu LOCALEMENT, la clé est générée côté serveur
+mervio admin object upload --as S --org ORG --store ST --kind shopify_orders --file ./orders.csv
+# -> {"status": "created", "object": {"id": "...", "sha256": "...", "state": "available", ...}}
+
+# 2. mettre en file avec les identifiants obtenus, un par source
+mervio admin job enqueue-import --as S --org ORG --store ST --connection CX \
+    --shopify-orders UUID [--stripe UUID] [--google-ads UUID] [--idempotency-key CLE]
+```
+
+- le chemin local s'arrête à l'upload : ni en base, ni en charge utile, ni en audit, ni en log ;
+- le nom du fichier n'est conservé **nulle part** (il peut porter une donnée personnelle) ;
+- `--kind` nomme la source ; `origin` est fixé côté serveur (`csv_upload`), jamais par l'appelant ;
+- rejouer une `--idempotency-key` avec **d'autres** objets est un conflit (code 7), jamais un
+  travail réutilisé en silence ;
+- `MERVIO_OBJECT_STORE_ROOT` (chemin absolu) désigne le magasin ; `admin` y écrit, le worker y lit.
+
+La CLI analytique locale (`python -m mervio.analytics`) garde ses chemins : elle ne passe ni par
+la file ni par le worker.

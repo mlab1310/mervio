@@ -12,7 +12,9 @@ postgres (17.11, digest de la CI)  ◄── réseau interne `backend` ──┐
 mervio worker   (up)          rôle mervio_worker_svc ─────────────┤
 python -m mervio.persistence  (ops) rôle mervio_migrator ─────────┤
 mervio admin    (ops)         rôle mervio_app_user ───────────────┘
-        └─ volume mervio_data : admin écrit, worker lit (lecture seule)
+        ├─ volume mervio_data    : CSV locaux ; admin écrit, worker lit (lecture seule)
+        └─ volume mervio_objects : objets bruts (004.4.4) ; admin dépose, worker lit
+                                   en LECTURE SEULE (il ne dépose jamais, D-054)
 ```
 
 ## 1. Prérequis
@@ -75,6 +77,7 @@ openssl rand -hex 32   # MERVIO_IDENTITY_MASTER_KEY
 | Variable | Rôle | Utilisé par |
 |---|---|---|
 | `MERVIO_IDENTITY_MASTER_KEY` | clé maître d'identité client : jamais en base, jamais journalisée ; les références client en dérivent via le sel de chaque organisation | `worker` |
+| `MERVIO_OBJECT_STORE_ROOT` | racine du magasin d'objets bruts (004.4.4, D-054) : `admin` y dépose, le worker y lit. Obligatoire dès que le worker traite des imports ; compose la fixe à `/var/lib/mervio/objects` | `worker`, `admin` |
 
 La perdre bloque les nouveaux imports (refus explicite `identity_key_unavailable`) ; en changer
 aussi, pour les organisations déjà servies. La conserver comme un secret de production.

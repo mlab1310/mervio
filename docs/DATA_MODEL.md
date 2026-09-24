@@ -23,6 +23,16 @@ La clé est celle de l'organisation (chemin SaaS, `mervio.persistence.identity_k
 explicite / éphémère (CLI locale, `--identity-key-file`). L'e-mail est lu par le connecteur Shopify,
 transformé, puis oublié ; `Order`, `Payment` et `Customer` ne portent plus aucun e-mail.
 
+**Objets bruts (004.4.4, D-054)** : `raw_objects` porte les octets déposés avant import —
+organisation, boutique, clé d'objet générée côté serveur (`org/<org>/store/<store>/raw/<uuid>`),
+`sha256`, `byte_size`, `source_kind`, `origin` (`csv_upload`), `state`, `retain_until`, `purged_at`.
+C'est **cette ligne, sous RLS**, qui porte la frontière de tenant : ni la clé, ni le magasin. Un
+objet d'une autre organisation est donc introuvable, exactement comme un objet qui n'a jamais
+existé. Aucun nom de fichier n'y figure. En 004.4.4 la ligne naît `available` et n'en bouge plus :
+la base n'accorde ni `UPDATE` ni `DELETE`, donc `sha256` est figé dès l'insertion. Le domaine
+complet `pending → available → purging → purged` est fixé par la contrainte, mais les transitions
+relèvent de 004.4.5 (D-056).
+
 ## Définitions qui engagent les chiffres
 
 **CA avant ajustements** (D-048, anciennement « CA net ») = `Order.subtotal` (D-041).

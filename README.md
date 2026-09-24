@@ -55,7 +55,7 @@ exécution à l'autre) ; `--identity-key-file FICHIER` (32 octets en hexadécima
 reproductible octet pour octet.
 
 ```bash
-python -m pytest        # suite complète : 2277 tests (avec PostgreSQL : 2277 passés, 0 échec, 0 ignoré ; sans base, les tests PostgreSQL sont ignorés)
+python -m pytest        # suite complète : 2450 tests (avec PostgreSQL : 2450 passés, 0 échec, 0 ignoré ; sans base, les tests PostgreSQL sont ignorés)
 ```
 
 ## Persistance PostgreSQL (optionnelle, Mission 004.1)
@@ -218,5 +218,6 @@ volontaires (date invalide, doublons, remboursement négatif, coûts manquants).
 | `docs/MISSION_004_2_DECISIONS.md` | arbitrages de la file et de l'audit (ADR-004.2-001 à 006) |
 | `docs/ADMIN_CLI.md` | administration opérateur (`mervio admin`) |
 | `docs/CONTAINER.md` | image, compose, bootstrap PostgreSQL, smoke test conteneurisé |
+| `docs/RETENTION_POLICY_V0.md` | durées de conservation v0 ⚖️ (métadonnées ; expiration et ramassage en 004.9) |
 | `docs/PERFORMANCE.md` | mesures reproductibles : moteur, persistance, file, worker réel, concurrence, mémoire (004.3.9) |
 | `docs/ROADMAP.md` / `docs/TODO.md` | suite |
