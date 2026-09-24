@@ -298,3 +298,47 @@ def test_the_demo_dataset_is_reused_intact_and_repaired_atomically(tmp_path):
     assert orders.stat().st_ino != before["shopify_orders.csv"][0]
     assert not [p for p in directory.iterdir() if p.name.startswith(".mervio-demo-")]
     assert operations._is_demo_directory(directory)  # noqa: SLF001
+
+
+# -- chemin local d'un depot d'objet ---------------------------------------------------------
+
+#: Formes hostiles jugees SANS toucher au systeme de fichiers (004.4.4, D-054). Aucune ne cite un
+#: fichier systeme: la regle porte sur la forme, elle n'a pas besoin d'une cible pour trancher.
+HOSTILE_LOCAL_SOURCES = ["/data/../etc/passwd", "/data/./orders.csv", "/data//orders.csv",
+                         "/data/orders.csv\x00.txt", "/" + "a" * (operations.MAX_PATH_LENGTH + 1),
+                         "relative/orders.csv", "~/orders.csv", "", None, 7]
+
+
+@pytest.mark.parametrize("hostile", HOSTILE_LOCAL_SOURCES)
+def test_a_hostile_local_source_is_refused_without_consulting_the_filesystem(hostile, monkeypatch):
+    """Le refus est DETERMINISTE: meme verdict sur tout hote, meme systeme de fichiers absent."""
+    monkeypatch.setattr(Path, "is_file", lambda self: pytest.fail("le systeme de fichiers a ete consulte"))
+    with pytest.raises(admin_errors.InvalidInput) as refusal:
+        operations.validate_local_source(hostile)
+    if isinstance(hostile, str) and hostile:
+        assert hostile not in str(refusal.value)  # le chemin refuse n'est jamais cite
+
+
+def test_a_local_source_is_judged_on_its_form_not_on_what_its_target_resolves_to(tmp_path):
+    """`existant/../cible` designe un fichier REEL et reste refuse (004.4.4, CI #13).
+
+    C'est le cas que `is_file()` seul ne peut pas attraper: il n'echouait que la ou le prefixe
+    manquait, donc selon l'hote (`/srv` absent sur macOS, present sur Linux).
+    """
+    orders = tmp_path / "orders.csv"
+    orders.write_bytes(b"order_id,total\n1,10\n")
+    (tmp_path / "sub").mkdir()
+    assert operations.validate_local_source(str(orders)) == orders  # forme canonique: acceptee
+
+    for hostile in (f"{tmp_path}/sub/../orders.csv", f"{tmp_path}/./orders.csv", f"{tmp_path}//orders.csv"):
+        assert Path(hostile).is_file(), hostile  # la cible existe bel et bien
+        with pytest.raises(admin_errors.InvalidInput):
+            operations.validate_local_source(hostile)
+
+
+def test_a_local_source_that_is_well_formed_but_absent_is_still_refused(tmp_path):
+    """La forme ne suffit pas: le fichier doit exister et etre lisible."""
+    with pytest.raises(admin_errors.InvalidInput):
+        operations.validate_local_source(str(tmp_path / "absent.csv"))
+    with pytest.raises(admin_errors.InvalidInput):
+        operations.validate_local_source(str(tmp_path))  # un repertoire n'est pas un fichier

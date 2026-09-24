@@ -700,6 +700,16 @@ def test_the_smoke_negative_worker_uses_the_same_tmpfs_as_compose():
     assert '"--tmpfs", HEALTH_TMPFS' in smoke and '"--tmpfs", "/run/mervio"' not in smoke
 
 
+def test_the_smoke_negative_worker_uses_the_same_object_store_root_as_compose():
+    """004.4.4: une seule racine, celle du compose. Un ecart rejouerait l'echec docker de CI #13."""
+    smoke = SMOKE.read_text(encoding="utf-8")
+    root = SERVICES["worker"]["environment"]["MERVIO_OBJECT_STORE_ROOT"]
+    assert SERVICES["admin"]["environment"]["MERVIO_OBJECT_STORE_ROOT"] == root
+    assert f'OBJECT_STORE_ROOT = "{root}"' in smoke
+    assert 'OBJECT_STORE_VARIABLE = f"MERVIO_OBJECT_STORE_ROOT={OBJECT_STORE_ROOT}"' in smoke
+    assert smoke.count('"-e", OBJECT_STORE_VARIABLE') == 2  # les deux workers ad-hoc, pas l'admin
+
+
 def test_each_role_uses_the_password_its_bootstrap_role_was_created_with():
     environment = SERVICES["postgres"]["environment"]
     created = {}

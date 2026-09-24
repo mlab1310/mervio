@@ -14,6 +14,7 @@ import io
 import json
 import threading
 import uuid
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -537,6 +538,28 @@ def test_a_hostile_local_path_is_refused_at_upload(admin, world, evidence, path)
                         "--store", world["store_a"], "--kind", "shopify_orders", "--file", path)
     assert (code, error["code"]) == (admin_errors.EXIT_USAGE, "invalid_input")
     assert path not in json.dumps(error), error  # le chemin refuse n'est pas renvoye
+    assert count(evidence, "SELECT count(*) FROM raw_objects") == before
+    assert count(evidence, "SELECT count(*) FROM jobs") == 0
+
+
+def test_a_hostile_path_is_refused_even_when_its_target_really_exists(admin, world, evidence, tmp_path):
+    """La FORME decide, jamais l'existence de la cible (004.4.4, CI #13).
+
+    `existant/../cible` designe un fichier reel: `is_file()` l'accepte. Le refus ne peut donc pas
+    venir de lui, sinon `..` ne serait refuse que la ou son prefixe manque -- vert sur un hote sans
+    `/srv`, rouge sur Linux. Aucun fichier systeme ici: la cible est creee par le test.
+    """
+    source = tmp_path / "orders.csv"
+    source.write_bytes(b"order_id,total\n1,10\n")
+    (tmp_path / "sub").mkdir()
+    hostile = f"{tmp_path}/sub/../orders.csv"
+    assert Path(hostile).is_file(), "la cible doit exister: c'est tout l'interet du cas"
+
+    before = count(evidence, "SELECT count(*) FROM raw_objects")
+    code, error = admin("object", "upload", "--as", ANALYST_A, "--org", world["a"],
+                        "--store", world["store_a"], "--kind", "shopify_orders", "--file", hostile)
+    assert (code, error["code"]) == (admin_errors.EXIT_USAGE, "invalid_input")
+    assert hostile not in json.dumps(error), error
     assert count(evidence, "SELECT count(*) FROM raw_objects") == before
     assert count(evidence, "SELECT count(*) FROM jobs") == 0
 

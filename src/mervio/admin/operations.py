@@ -206,12 +206,13 @@ def validate_local_source(value: Any) -> Path:
 
     Ce chemin ne quitte jamais ce processus: il n'entre ni en base, ni dans une charge utile,
     ni dans l'audit, ni dans un log. Les messages d'erreur ne le citent pas non plus.
+
+    La FORME est jugee avant le systeme de fichiers, par la meme regle que les chemins du worker:
+    absolue, normalisee, sans `..`. Sans elle, `existant/../cible` designe `cible`, que `is_file()`
+    accepte alors -- `..` ne serait refuse que la ou le prefixe n'existe pas, donc selon l'hote et
+    non selon la regle. `expanduser()` n'est pas applique: `~` n'est pas un chemin absolu.
     """
-    if not isinstance(value, str) or not value or len(value) > MAX_PATH_LENGTH:
-        raise InvalidInput("fichier source attendu")
-    if "\x00" in value or any(unicodedata.category(char) in _FORBIDDEN_CATEGORIES for char in value):
-        raise InvalidInput("fichier source: caractere de controle refuse")
-    path = Path(value).expanduser()
+    path = Path(validate_source_path(value, "fichier source"))
     if not path.is_file():
         raise InvalidInput("fichier source introuvable ou illisible")
     return path

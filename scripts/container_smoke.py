@@ -59,6 +59,12 @@ INTRUDER = "smoke|intruder"
 IMAGE_UID = 10001
 #: Meme montage que le service worker du compose (proprietaire explicite, voir docker-compose.yml).
 HEALTH_TMPFS = f"/run/mervio:uid={IMAGE_UID},gid={IMAGE_UID},mode=0700"
+#: Meme racine que le service worker du compose (004.4.4): obligatoire des que le worker traite des
+#: imports, donc AUSSI pour les conteneurs ad-hoc de cette verification. Sans elle, ils meurent en
+#: `worker.config_invalid` avant le controle qu'on veut eprouver. Le volume n'est pas monte ici: le
+#: pilote ne touche au systeme de fichiers qu'au premier objet, jamais a la construction.
+OBJECT_STORE_ROOT = "/var/lib/mervio/objects"
+OBJECT_STORE_VARIABLE = f"MERVIO_OBJECT_STORE_ROOT={OBJECT_STORE_ROOT}"
 #: Codes des commandes du produit (workers.runtime, admin.errors).
 WORKER_EXIT_OK, WORKER_EXIT_CONFIG, WORKER_EXIT_SCHEMA = 0, 2, 4
 ADMIN_EXIT_DATABASE, ADMIN_EXIT_NOT_FOUND = 3, 5
@@ -388,12 +394,14 @@ class Smoke:
 
     def refuse_privileged_connections(self) -> None:
         self.step("worker: refus d'un superutilisateur; admin: refus d'un mauvais mot de passe")
-        # `docker run -e NOM` lit la valeur dans l'environnement du client: jamais dans argv
+        # `docker run -e NOM` lit la valeur dans l'environnement du client: aucun SECRET dans argv.
+        # Une racine de magasin n'en est pas un, elle y figure en clair comme le montage du tmpfs.
         network = f"{self.project}_backend"
         superuser_url = (f"postgresql://{SUPERUSER}:{self.passwords['MERVIO_POSTGRES_PASSWORD']}"
                          f"@postgres:5432/{DATABASE}")
         result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", HEALTH_TMPFS,
-                           "-e", "MERVIO_DATABASE_URL", "-e", IDENTITY_KEY_VARIABLE, self.image, "worker"],
+                           "-e", "MERVIO_DATABASE_URL", "-e", IDENTITY_KEY_VARIABLE,
+                           "-e", OBJECT_STORE_VARIABLE, self.image, "worker"],
                           env=dict(self.environment, MERVIO_DATABASE_URL=superuser_url), check=False, timeout=300)
         self.expect(result.returncode == WORKER_EXIT_CONFIG,
                     f"worker superutilisateur: code {result.returncode}, 2 attendu")
@@ -405,7 +413,7 @@ class Smoke:
         worker_url = (f"postgresql://{WORKER_ROLE}:{self.passwords['MERVIO_WORKER_DB_PASSWORD']}"
                       f"@postgres:5432/{DATABASE}")
         result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", HEALTH_TMPFS,
-                           "-e", "MERVIO_DATABASE_URL", self.image, "worker"],
+                           "-e", "MERVIO_DATABASE_URL", "-e", OBJECT_STORE_VARIABLE, self.image, "worker"],
                           env=dict(self.environment, MERVIO_DATABASE_URL=worker_url), check=False, timeout=300)
         self.expect(result.returncode == WORKER_EXIT_CONFIG,
                     f"worker sans cle d'identite: code {result.returncode}, 2 attendu")

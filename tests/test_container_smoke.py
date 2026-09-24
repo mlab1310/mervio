@@ -350,7 +350,7 @@ def test_negative_connections_pass_their_url_through_the_environment_only():
         assert "postgresql://" not in " ".join(argv)
         assert call["env"]["MERVIO_DATABASE_URL"].startswith("postgresql://")
     superuser, no_key, wrong = runs
-    assert superuser["argv"].count("-e") == 2 and "MERVIO_IDENTITY_MASTER_KEY" in superuser["argv"]
+    assert superuser["argv"].count("-e") == 3 and "MERVIO_IDENTITY_MASTER_KEY" in superuser["argv"]
     assert "MERVIO_IDENTITY_MASTER_KEY" not in no_key["argv"]  # l'absence de cle est le cas teste
     assert smoke.passwords["MERVIO_IDENTITY_MASTER_KEY"] not in " ".join(superuser["argv"])  # nom seul
     assert superuser["env"]["MERVIO_DATABASE_URL"].startswith(f"postgresql://{smoke_module.SUPERUSER}:")
@@ -460,6 +460,21 @@ def test_the_negative_worker_mounts_its_health_tmpfs_for_the_image_user():
         assert worker[worker.index("--tmpfs") + 1] == "/run/mervio:uid=10001,gid=10001,mode=0700"
 
 
+def test_the_negative_workers_get_the_object_store_the_compose_worker_gets():
+    """004.4.4: sans cette racine, ils meurent en `worker.config_invalid` AVANT le controle vise.
+
+    C'est l'echec du job `docker` de CI #13: le contrat du magasin est obligatoire des que le
+    worker traite des imports, et `JOB_TYPES` le contient par defaut. Ces conteneurs ad-hoc ne
+    passent pas par le compose: la variable doit donc leur etre donnee explicitement.
+    """
+    docker = FakeDocker(negative_responses())
+    make(docker).refuse_privileged_connections()
+    workers = [argv for argv in docker.argvs() if argv[:2] == ["docker", "run"] and argv[-1] == "worker"]
+    assert len(workers) == 2  # superutilisateur, puis sans cle d'identite (004.4.2)
+    for worker in workers:
+        assert f"MERVIO_OBJECT_STORE_ROOT={smoke_module.OBJECT_STORE_ROOT}" in worker
+
+
 def test_a_failure_prints_the_redacted_docker_health_verdicts():
     holder = {}
 
@@ -488,3 +503,36 @@ def test_a_failure_prints_the_redacted_docker_health_verdicts():
     assert "reason=missing" in report
     assert smoke.passwords["MERVIO_WORKER_DB_PASSWORD"] not in report
     assert docker.argvs()[-1][-5:] == ["down", "--volumes", "--remove-orphans", "--timeout", "60"]
+
+
+def test_the_negative_worker_environment_really_satisfies_the_worker_contract():
+    """L'argv ne suffit pas a prouver: on rejoue `WorkerSettings.from_env` sur ce que voit le conteneur.
+
+    C'est l'invariant qui avait rompu en CI #13. Les tests d'argv ci-dessus verifient une FORME; ici
+    le produit lui-meme juge l'environnement, donc un futur reglage obligatoire casserait ce test
+    plutot que le job `docker` de la CI.
+    """
+    from mervio.settings import SettingsError, WorkerSettings
+
+    docker = FakeDocker(negative_responses())
+    smoke = make(docker)
+    smoke.refuse_privileged_connections()
+    call = next(c for c in docker.calls if c["argv"][:2] == ["docker", "run"] and c["argv"][-1] == "worker")
+
+    # ce que le conteneur voit: `-e NOM` (valeur heritee du client) ou `-e NOM=VALEUR`, plus l'ENV
+    # de l'image (Dockerfile), qui ne porte que le fichier de sante.
+    environ = {"MERVIO_WORKER_HEALTH_FILE": "/run/mervio/worker-health.json"}
+    argv = call["argv"]
+    for index, token in enumerate(argv):
+        if token == "-e":
+            name, separator, value = argv[index + 1].partition("=")
+            environ[name] = value if separator else call["env"][name]
+    assert environ["MERVIO_OBJECT_STORE_ROOT"] == smoke_module.OBJECT_STORE_ROOT
+
+    settings = WorkerSettings.from_env(environ)
+    assert "import" in settings.job_types and settings.object_store is not None
+
+    without = {name: value for name, value in environ.items() if name != "MERVIO_OBJECT_STORE_ROOT"}
+    with pytest.raises(SettingsError) as refusal:  # sinon le refus precede le controle d'identite
+        WorkerSettings.from_env(without)
+    assert [name for name, _ in refusal.value.problems] == ["MERVIO_OBJECT_STORE_ROOT"]
