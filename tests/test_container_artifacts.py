@@ -669,6 +669,44 @@ def test_every_tmpfs_of_a_mervio_service_is_writable_by_the_image_user():
                 assert (options.get("uid"), options.get("gid")) == ("10001", "10001"), entry
 
 
+#: Services batis sur l'image Mervio: eux seuls tournent sous l'utilisateur 10001. `postgres`
+#: porte l'image amont, avec son propre utilisateur, et ne suit donc pas cette regle.
+IMAGE_SERVICES = ("worker", "migrate", "admin")
+
+
+def named_volume_mounts() -> list:
+    """(service, volume, chemin) de chaque volume NOMME monte par un service de l'image."""
+    declared = set(COMPOSE_DOC["volumes"])
+    return [(name, entry.split(":")[0], entry.split(":")[1])
+            for name in IMAGE_SERVICES
+            for entry in SERVICES[name].get("volumes", [])
+            if entry.split(":")[0] in declared]
+
+
+def test_every_named_volume_of_a_mervio_service_is_prepared_for_the_image_user():
+    """La racine d'un volume nomme herite du repertoire DE L'IMAGE (CI #14).
+
+    Docker donne au point de montage le proprietaire et le mode du repertoire homonyme de
+    l'image. Absent de celle-ci, il le cree `root:root`: l'utilisateur 10001 n'y ecrit plus rien.
+    C'est ce qui est arrive a `mervio_objects` -- `mkdir .../objects/org` en EACCES, donc tout
+    depot d'objet impossible en conteneur; `mervio_data` ne marchait que parce que le Dockerfile
+    le creait, lui. L'asymetrie etait invisible: le montage etait verifie, sa viabilite non.
+
+    Les montages sont PARCOURUS depuis le compose: tout volume nomme ajoute plus tard passe par
+    la meme regle sans qu'aucun nom ne soit inscrit ici. La propriete est exigee y compris pour
+    un montage `:ro`: elle appartient au volume, pas au montage, et le service qui y ecrit en
+    depend. Test statique: il lit les fichiers versionnes, il ne construit aucune image.
+    """
+    image_dirs = image_directories()
+    mounts = named_volume_mounts()
+    assert mounts, "aucun volume nomme parcouru: la regle ne serait pas eprouvee"
+    for service, volume, path in mounts:
+        assert path in image_dirs, f"{service}: {volume} monte sur {path}, absent du Dockerfile"
+        owner, group, mode = image_dirs[path]
+        assert (owner, group) == ("10001", "10001"), (service, volume, path, owner, group)
+        assert writable_by("10001", "10001", image_dirs[path]), (service, volume, path, mode)
+
+
 def test_the_worker_can_write_the_scratch_it_materializes_objects_into():
     """004.4.4: l'import materialise l'objet resolu dans un temporaire (D-061, Q1).
 

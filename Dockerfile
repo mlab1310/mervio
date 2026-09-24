@@ -50,7 +50,7 @@ LABEL org.opencontainers.image.title="mervio" \
 RUN groupadd --system --gid 10001 mervio \
     && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/mervio --no-create-home \
         --shell /usr/sbin/nologin mervio \
-    && install -d -o 10001 -g 10001 -m 0750 /var/lib/mervio /var/lib/mervio/data /run/mervio
+    && install -d -o 10001 -g 10001 -m 0750 /var/lib/mervio /var/lib/mervio/data /var/lib/mervio/objects /run/mervio
 
 COPY --from=build /opt/venv /opt/venv
 
