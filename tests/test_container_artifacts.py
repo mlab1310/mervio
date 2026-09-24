@@ -669,6 +669,23 @@ def test_every_tmpfs_of_a_mervio_service_is_writable_by_the_image_user():
                 assert (options.get("uid"), options.get("gid")) == ("10001", "10001"), entry
 
 
+def test_the_worker_can_write_the_scratch_it_materializes_objects_into():
+    """004.4.4: l'import materialise l'objet resolu dans un temporaire (D-061, Q1).
+
+    `tempfile.mkdtemp()` honore TMPDIR puis `/tmp`. Le conteneur worker est `read_only`, donc
+    `/tmp` est le SEUL emplacement inscriptible: si son tmpfs n'appartenait pas a l'utilisateur de
+    l'image, aucun import ne pourrait aboutir. La regle de runc modelisee ici est celle qui avait
+    reellement casse la CI en ec7ce24; elle est appliquee au montage exact du compose.
+    """
+    worker = SERVICES["worker"]
+    assert worker.get("read_only") is True, "seul un tmpfs est inscriptible"
+    scratch = [entry for entry in worker["tmpfs"] if tmpfs_mount(entry)[0] == "/tmp"]
+    assert scratch == ["/tmp"], worker["tmpfs"]
+    assert writable_by("10001", "10001", runc_tmpfs_root(scratch[0], image_directories()))
+    # et la racine des objets est montee en LECTURE SEULE: le worker n'y ecrit jamais (D-054)
+    assert "mervio_objects:/var/lib/mervio/objects:ro" in worker["volumes"]
+
+
 def test_the_health_file_lives_on_the_worker_tmpfs_and_is_private():
     health = Path(SERVICES["worker"]["environment"]["MERVIO_WORKER_HEALTH_FILE"])
     [entry] = [e for e in SERVICES["worker"]["tmpfs"] if tmpfs_mount(e)[0] == str(health.parent)]
