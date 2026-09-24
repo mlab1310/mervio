@@ -393,6 +393,80 @@ L'API Shopify définit le sous-total comme postérieur aux remises ; l'aide de l
 
 **Arbitrage post-implémentation (24/09/2026) — lien symbolique local au dépôt :** `mervio admin object upload --file` accepte un chemin dont la **forme** est canonique (absolue, normalisée, sans `..`) même lorsqu'il désigne un lien symbolique ; `is_file()` suit le lien. Ce comportement, antérieur au correctif de la traversée de chemin, est **conservé en l'état**. Il porte exclusivement sur la **sélection d'un fichier local par l'opérateur**, lue par la CLI sous l'identité de cet opérateur, qui peut de toute façon nommer directement n'importe lequel de ses propres fichiers : refuser le lien ne lui retirerait aucun accès. Ce n'est **pas** une brèche du confinement `ObjectStore` côté serveur (Q4) : celui-ci porte sur la **clé** d'objet, générée côté serveur, et refuse explicitement un lien symbolique sur la cible sous la racine — deux mécanismes distincts, sur deux frontières distinctes. La frontière import/travail reste entière : `validate_payload` refuse toute clé **et** toute valeur de chemin, récursivement et à travers les listes, et le worker ne reçoit qu'un `raw_object_id` résolu sous `TenantSession` — aucune référence de fichier local ne franchit cette frontière, lien symbolique compris. **Dette future assumée :** si une politique plus stricte sur les liens locaux est souhaitée (refus explicite, ou résolution puis confinement à une racine d'upload configurée), elle relève d'une décision ultérieure ; elle n'est ni requise ni bloquante pour 004.4.4.
 
+## D-062 — Désignation du client à effacer : résolution locale au worker, hors file (004.4.5)
+**Contexte :** 004.4.5 implémente l'effacement client (D-056) au moyen des fonctions privilégiées de D-052. Depuis 004.4.2, aucune donnée directe n'est persistée : la référence client est un HMAC à clé d'organisation (`c1:` + 128 bits, D-053, `src/mervio/identity.py`). L'opérateur, lui, reçoit une demande d'effacement qui désigne un client par son **e-mail**. Il manque donc le chaînon `identité → customer_ref`, sans lequel aucune demande d'effacement ne peut être mise en file. Ce chaînon n'a été arbitré ni par D-052, ni par D-053, ni par D-056.
+**Problème :** **qui** calcule ce HMAC, et **où**, sans introduire de PII dans la file, l'audit ou les logs, et sans élargir la frontière des secrets établie par D-053. La difficulté n'est pas cryptographique — la dérivation existe et est testée — mais une question de **placement** : la seule chose qui manque est un endroit autorisé où l'e-mail et la clé maître se rencontrent.
+**Contraintes tenues :** aucune PII dans `jobs.payload` ; aucune PII dans `audit_events` ; aucune PII dans les logs ; aucune clé maître dans `admin` ; aucune clé d'organisation dérivée exportée ; D-053 intacte ; aucun contournement de RLS ; D-052 respectée ; aucun artefact permanent portant une identité client ; aucun nouveau service ; aucune nouvelle frontière réseau ; aucun oracle de résolution exposé comme API.
+
+**Options examinées** (lettres de l'analyse d'architecture de 004.4.5) :
+- **A** — `admin` détient temporairement `MERVIO_IDENTITY_MASTER_KEY` et résout lui-même.
+- **C** — composant de résolution dédié, avec sa propre identité et sa propre surface.
+- **D** — CLI analytique avec clé d'organisation exportée.
+- **E** — sous-commande du worker, hors file.
+- **E′** — E augmentée d'un événement d'audit de résolution.
+
+**Décision : E.** Résolution **locale au conteneur worker, hors file**. Un opérateur habilité fournit l'identité du client au processus worker **par stdin** ; le worker rend le `customer_ref` canonique sur stdout et rien d'autre.
+
+**Point essentiel — aucune capacité nouvelle.** Le worker **détient déjà** la clé maître (`docker-compose.yml`, service `worker` ; `settings.py`, obligatoire dès que le type de travail `import` est servi) et **dérive déjà** la clé d'organisation à chaque import. E ne lui accorde donc **aucune capacité cryptographique nouvelle** : elle rend seulement **explicite, locale et privilégiée** une opération que le worker peut déjà techniquement effectuer. C'est la raison pour laquelle E n'élargit aucune frontière : il n'y a rien à élargir.
+
+**Mécanisme détaillé.** La sous-commande :
+1. reçoit l'identité **uniquement par stdin**, et la garde **en mémoire seulement** ;
+2. récupère le sel de l'organisation par les mécanismes RLS existants (`TenantSession`, autorisation de service) ;
+3. utilise le `MERVIO_IDENTITY_MASTER_KEY` que le processus détient déjà ;
+4. dérive la clé d'organisation selon D-053, en mémoire ;
+5. calcule le `customer_ref` canonique (`c1:`, e-mail normalisé — espaces retirés, minuscules) ;
+6. écrit **uniquement** `c1:<32 hex>` sur stdout ;
+7. ne persiste **aucune** donnée ;
+8. ne crée **aucun** travail ;
+9. ne modifie **aucune** donnée métier ;
+10. n'écrit **aucun** événement d'audit de résolution.
+
+L'opérateur enchaîne ensuite avec la mise en file ordinaire de l'effacement, qui ne transporte qu'une référence : `mervio admin job enqueue-redact --customer-ref c1:…`.
+
+**stdin, jamais argv.** L'identité **doit** passer par stdin. Aucune variante `--email`, `--customer-email` ni `--identity` n'est proposée, pas même en option : un argument de ligne de commande est lisible par `ps`, conservé par l'historique du shell, capturé par les traces de commande et par les outils d'observation. La contrainte est architecturale, pas ergonomique ; elle ne se négocie pas à l'implémentation.
+
+**Sortie.** Un seul `customer_ref` sur stdout. Ne sont **jamais** affichés : l'e-mail, l'identité fournie, la clé maître, le sel, la clé dérivée.
+
+**Flux de PII.** L'identité entre par stdin, vit en mémoire le temps d'un HMAC, et sort transformée en référence non réversible. Elle ne touche ni le disque, ni la base, ni la file, ni l'audit, ni les logs. Le seul artefact produit est le `customer_ref`, qui est précisément ce que la base contient déjà.
+
+**Frontière des secrets.** Inchangée. La clé maître reste dans le seul processus qui la détenait déjà ; `admin` ne la voit à aucun moment ; aucune clé dérivée ne franchit la frontière du processus.
+
+**Implications RLS.** La lecture du sel passe par `TenantSession` : la résolution n'est possible que pour une organisation sur laquelle le service worker est **effectivement autorisé** (`service_authorizations`, D-050). Une organisation non autorisée est indiscernable d'une organisation inexistante, comme partout ailleurs. Aucun contournement, aucune élévation, aucun `SECURITY DEFINER` ajouté.
+
+**Implications D-052.** Aucune. D-052 régit l'**exécution** de l'effacement — fonction privilégiée, travail `running`, `attempts` concordants, demandeur ayant **encore** le rang `admin` ou plus. La résolution n'est pas cette opération : elle ne touche aucune ligne et ne s'exécute pas dans un travail. La règle « l'objet de l'opération est lu dans la charge du travail, jamais dans un paramètre » est **renforcée** par E : la charge ne contient qu'un `customer_ref`, calculé hors de la file.
+
+**Implications D-053.** Aucune modification. La dérivation, le domaine de séparation et le refus en cas de discordance d'empreinte de clé maître restent exactement ceux de 004.4.2. **Précision contraignante pour l'implémentation :** `ensure_identity_key` **crée** la ligne de sel à la première utilisation et exige `IMPORT_DATA` ; la résolution ne doit donc **pas** l'employer telle quelle. Elle est **strictement en lecture** : une organisation sans ligne de sel n'a jamais produit de `customer_ref`, donc n'a rien à effacer — la commande **refuse**, elle ne crée pas de sel. Un sel détruit (D-051) refuse de même.
+
+**Implications D-056.** E fournit l'entrée que D-056 supposait disponible sans dire d'où elle venait : l'effacement porte sur un `customer_ref`, et la destruction des objets bruts porteurs d'identité reste inchangée.
+
+**Implications D-061.** Aucune. La frontière d'import sans chemin n'est pas touchée : `validate_payload` continue de refuser toute clé et toute valeur de chemin ; un `customer_ref` n'est pas un chemin. La résolution ne lit aucun octet d'objet brut.
+
+**Parcours opérateur.**
+```
+echo '<identité>' | <worker> resolve-customer-ref --org <org>   →  stdout : c1:<32 hex>
+mervio admin job enqueue-redact --as <humain> --org <org> --customer-ref c1:<32 hex>
+```
+La première commande s'exécute avec l'identité du worker, dans son conteneur ; la seconde avec l'identité de l'humain habilité, sous les contrôles de rang de D-052.
+
+**Modes d'échec.** Sel absent → refus (rien à effacer) ; sel détruit → refus ; clé maître absente ou discordante → refus (`identity_key_unavailable`, D-053, F-03) ; organisation non autorisée pour le service → introuvable ; stdin vide ou identité mal formée → refus. Dans tous les cas, le message ne porte aucune valeur (D-016).
+
+**Limitation connue — la résolution elle-même n'est pas auditée par le produit.** E′ n'est **pas** adoptée à ce stade : l'exercice d'une capacité de ré-identification ne laisse aucune trace applicative. Ce choix garde la décision minimale et évite d'introduire une écriture en base hors du chemin privilégié de 004.4.5. La trace existante est celle du conteneur et du système, pas celle du produit. Corollaire assumé : le contrôle de rang de D-052 s'applique à la **mise en file** de l'effacement, pas à la résolution, qui est gouvernée par l'accès au conteneur worker. Si un modèle réglementaire l'exige, l'audit de la ré-identification fera l'objet d'une décision ultérieure ; cette exigence n'est **pas** postulée ici.
+
+**Limitation `g1:`.** `g1:` n'est **pas** une référence client : c'est le HMAC d'un **identifiant de commande** (`guest_order:`), un client par commande, pour les commandes sans e-mail. Une identité client ne permet donc pas de retrouver un `g1:`, et la présente résolution ne prétend pas le faire. Le périmètre n'est **pas** étendu pour traiter `g1:` ; l'effacement d'un client connu seulement par des commandes invitées reste hors de portée de ce chaînon.
+
+**Justification.** E est la seule option qui fournit le chaînon manquant sans rien élargir : pas de secret déplacé (contre A), pas de composant à concevoir, déployer et autoriser (contre C), pas de clé dérivée exportée (contre D), pas d'écriture en base hors chemin privilégié (contre E′).
+**Rejetées :**
+- **A — clé maître temporairement dans `admin`** : déplace `MERVIO_IDENTITY_MASTER_KEY` vers un processus qui ne l'a jamais détenue, donc **élargit la frontière de confiance** à l'outil opérateur, dont la surface (arguments, sortie JSON, terminal) est la plus exposée. « Temporairement » n'est pas une propriété vérifiable.
+- **C — composant de résolution dédié** : **différée**, non condamnée. Nouveau composant, nouvelle identité de service, nouvelle surface à autoriser et à exploiter, pour une opération rare et manuelle. Coût disproportionné au besoin de 004.4.5 ; à réexaminer si la résolution devient un service produit (004.12).
+- **D — CLI analytique avec clé d'organisation exportée** : **inadmissible**. Exporter une clé dérivée viole frontalement D-053, dont toute la valeur tient à ce que la clé d'organisation ne vive qu'en mémoire ; une clé exportée est une clé qui survit à son usage et qui rend le sel destructible sans effet.
+- **E′ — E + audit de résolution** : **pas maintenant**. Introduirait une écriture en base hors du chemin privilégié de 004.4.5 et une action d'audit nouvelle, sur la foi d'une exigence réglementaire qui n'est pas établie. La limitation est documentée plutôt qu'anticipée.
+- **Variante argv de l'identité** : rejetée pour les raisons de la section stdin.
+
+**Conséquences.** Une sous-commande de résolution est spécifiée pour 004.4.5 (E6) ; aucune migration, aucun type de travail, aucune action d'audit, aucun droit et aucun rôle ne sont ajoutés par cette décision. `mervio admin job enqueue-redact` prend un `--customer-ref` déjà calculé, et n'accepte **aucune** identité directe. La documentation de la CLI d'administration et du conteneur décrira le parcours en deux temps au moment de l'implémentation.
+**Risques résiduels :** la résolution n'est pas auditée par le produit (ci-dessus) ⚖️ ; quiconque peut exécuter un processus dans le conteneur worker peut exercer la capacité de ré-identification, qui était déjà techniquement à sa portée ; une identité mal saisie produit un `customer_ref` inexistant, donc un effacement sans effet — détectable au résultat du travail, pas à la résolution ; `g1:` reste hors de portée.
+**Compatibilité future.** **004.6 (API)** : la résolution reste hors HTTP ; si une route d'effacement est un jour exposée, elle devra arbitrer séparément où le HMAC est calculé — la présente décision ne préempte pas ce choix et n'expose aucun oracle réutilisable. **004.9 (KMS, rotation, réassignation)** : la résolution suit la clé maître ; elle n'ajoute aucune contrainte de rotation puisqu'elle ne persiste rien. **004.12 (webhooks RGPD Shopify)** : un webhook `customers/redact` apporte une identité par un canal automatisé ; il faudra alors une résolution non interactive, et c'est à ce moment que l'option C et l'audit de E′ devront être réexaminés ensemble.
+**Mission :** arbitrage d'architecture 004.4.5 ; implémentation E1–E6 en 004.4.5, **non commencée** à la ratification.
+
 ## D-050 — Répartiteur (dispatcher) : RLS + autorisation de service, PAS de fonction SECURITY DEFINER
 **Contexte :** l'option conçue en 004.2 (ADR-004.2-002, `docs/MISSION_004_2_DECISIONS.md`, reprise au périmètre 004.3 item 4 de `docs/MERVIO_FINAL_ROADMAP.md`) était un répartiteur porté par une **fonction `SECURITY DEFINER`** possédée par un rôle dédié `mervio_dispatcher`, ne renvoyant que des métadonnées d'aiguillage. Cette option **n'a pas été retenue** à l'implémentation.
 **Décision adoptée (révision `0007_service_identity`, `src/mervio/persistence/dispatch.py`) :** le répartiteur repose sur **PostgreSQL RLS + identité de service + autorisation explicite par organisation** (`service_authorizations`). Sans contexte d'organisation, le rôle `mervio_worker` ne voit que ses propres autorisations et les travaux `queued`/`running` de ces seules organisations ; l'équité est un tour de rôle par identifiant d'organisation (curseur). **Aucune fonction `SECURITY DEFINER`, aucun `BYPASSRLS`, aucun rôle `mervio_dispatcher`.**
