@@ -39,8 +39,9 @@ def test_revisions_are_linear_and_versioned():
                                    "0005_audit", "0006_job_leases", "0007_service_identity", "0008_admin_audit",
                                    "0009_qualify_security_functions", "0010_qualify_residual_security",
                                    "0011_identity_pii_schema", "0012_dispatch_probe_plan",
-                                   "0013_raw_objects", "0014_customer_erasure"]
-    assert migrate.head_revision() == "0014_customer_erasure"
+                                   "0013_raw_objects", "0014_customer_erasure",
+                                   "0015_raw_object_purge"]
+    assert migrate.head_revision() == "0015_raw_object_purge"
 
 
 def test_empty_database_upgrades_to_head(empty_database):
@@ -78,6 +79,8 @@ def test_each_revision_upgrades_and_downgrades_step_by_step(empty_database):
         "0013_raw_objects": {"raw_objects"},
         # 004.4.5: preuve d'effacement client, chemin privilegie et tombstone
         "0014_customer_erasure": {"customer_redactions"},
+        # 004.4.5 E4: finalisation `purging -> purged`, une fonction seule, aucune table
+        "0015_raw_object_purge": set(),
     }
     present = {"alembic_version"}
     for revision in migrate.revisions():

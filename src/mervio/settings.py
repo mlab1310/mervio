@@ -15,7 +15,7 @@ Bibliotheque standard uniquement: ce module n'importe ni pilote de base ni persi
     MERVIO_ENV                                development   development | test | staging | production
     MERVIO_DATABASE_URL (ou ..._FILE)         -             OBLIGATOIRE; postgresql://role@hote[:port]/base
     MERVIO_WORKER_NAME                        nom d'hote    [A-Za-z0-9._-], 1 a 40 caracteres
-    MERVIO_WORKER_JOB_TYPES                   tous          liste parmi import, analysis, purge
+    MERVIO_WORKER_JOB_TYPES                   tous          liste parmi import, analysis, purge, redact_customer
     MERVIO_WORKER_POLL_INTERVAL_SECONDS       1             0.05 a 60
     MERVIO_WORKER_POLL_MAX_SECONDS            5             >= intervalle, <= 60
     MERVIO_WORKER_DISPATCH_BATCH              50            1 a 1000
@@ -57,7 +57,7 @@ from .errors import ConfigurationError
 from .identity import IdentityKeyError, parse_hex_key
 
 ENVIRONMENTS = ("development", "test", "staging", "production")
-JOB_TYPES = ("import", "analysis", "purge")
+JOB_TYPES = ("import", "analysis", "purge", "redact_customer")
 LOG_LEVELS = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING, "ERROR": logging.ERROR}
 LOG_FORMATS = ("json", "text")
 #: Rythme du rafraichissement de sante pendant un travail (fil de bail, 004.3.5).

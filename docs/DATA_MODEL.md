@@ -33,7 +33,19 @@ ni `DELETE` au rôle applicatif, donc `sha256` est figé dès l'insertion. Le do
 `pending → available → purging → purged` est fixé par la contrainte. Depuis 004.4.5 (révision
 `0014`), la transition `available → purging` est faite **dans la transaction de l'effacement**, par
 la fonction privilégiée, et accompagnée d'un `purge_reason` (`customer_erasure`) qu'une contrainte
-lie à l'état. La destruction des octets et `purging → purged` restent à livrer.
+lie à l'état. Depuis E4 (révision `0015`), `purging → purged` est faite par une seconde fonction
+privilégiée, **après** que les octets ont réellement été détruits — jamais avant : une ligne
+`purged` affirme une destruction, et cette affirmation doit être vraie. Seuls `state` et
+`purged_at` changent ; l'empreinte, la taille, le type, la clé et les dates restent, comme D-056
+l'exige.
+
+**Il n'existe aucune transaction commune à PostgreSQL et au magasin d'objets** (système de
+fichiers ou S3), et rien n'en simule une. La sûreté vient de l'**ordre** et de l'**idempotence** :
+`ObjectStore.delete` ne se plaint pas d'une clé déjà absente, donc une reprise redétruit puis
+finalise. La seule fenêtre d'interruption — octets détruits, ligne encore `purging` — laisse
+l'objet **déjà illisible et déjà vide** ; c'est le sens sûr de la fenêtre, et c'est pourquoi
+l'ordre inverse est interdit. Un `delete` en échec laisse la ligne `purging` : illisible, jamais
+déclarée détruite, et reprenable.
 
 **Effacements client (004.4.5, D-056, révision `0014`)** : `customer_redactions` est la **preuve**
 qu'un client a été effacé. Elle ne contient **aucune donnée personnelle** : le `customer_ref`

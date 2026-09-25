@@ -52,6 +52,10 @@ class JobType(str, Enum):
     IMPORT = "import"
     ANALYSIS = "analysis"
     PURGE = "purge"
+    #: 004.4.5 (revision 0014, gestionnaire en E4): effacement d'UN client par le chemin
+    #: privilegie de D-052. La charge ne porte qu'un `customer_ref` -- un HMAC deja non
+    #: reversible, jamais une identite. Le worker ne resout jamais une identite (D-062).
+    REDACT_CUSTOMER = "redact_customer"
 
 
 class JobStatus(str, Enum):
@@ -88,6 +92,7 @@ ENQUEUE_PERMISSION = {
     JobType.IMPORT: Permission.IMPORT_DATA,
     JobType.ANALYSIS: Permission.RUN_ANALYSIS,
     JobType.PURGE: Permission.PURGE_DATA,
+    JobType.REDACT_CUSTOMER: Permission.REDACT_CUSTOMER,
 }
 
 #: Une charge utile localise une source, elle ne la transporte pas et ne porte aucun secret.

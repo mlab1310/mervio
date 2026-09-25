@@ -74,10 +74,21 @@ def test_the_python_vocabulary_matches_the_migration():
     assert {r.value for r in ResourceType} >= set(ERASURE_RESOURCES)
 
 
-def test_the_job_type_is_declared_in_the_database_only_until_its_handler_exists():
-    """`redact_customer` existe en base (E2) mais pas encore dans `JobType`: le depot exige que
-    tout type declare ait un gestionnaire (`tests/test_jobs_unit.py`), et celui-ci est E4."""
-    assert "redact_customer" not in {kind.value for kind in JobType}
+def test_the_job_type_declared_here_is_now_executable(database):
+    """0014 declare le type en base; E4 lui a donne son enumeration et son gestionnaire.
+
+    Les deux doivent rester d'accord: une valeur acceptee par la contrainte et inconnue de
+    Python (ou l'inverse) serait un travail que personne ne peut executer.
+    """
+    migrate.upgrade(database, CURRENT)
+    with psycopg.connect(database, autocommit=True) as conn:
+        accepted = conn.execute(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conrelid = 'public.jobs'::regclass AND conname = 'jobs_job_type_check'"
+        ).fetchone()[0]
+    for kind in JobType:
+        assert f"'{kind.value}'" in accepted, kind.value
+    assert "redact_customer" in {kind.value for kind in JobType}
 
 
 def test_upgrade_accepts_erasure_events_and_downgrade_keeps_them_but_refuses_new_ones(database):

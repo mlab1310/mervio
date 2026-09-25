@@ -19,6 +19,7 @@ Un travail rejoue apres un crash renvoie donc `reused` et le meme identifiant.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -30,9 +31,9 @@ from uuid import UUID
 
 from ..config import AnalyticsConfig
 from ..identity import MasterKey
-from ..observability.logging import EventLogger
-from ..storage import CHUNK_SIZE, ObjectNotFound
-from ..persistence import audit, jobs, raw_objects
+from ..observability.logging import EventLogger, redact_text
+from ..storage import CHUNK_SIZE, ObjectNotFound, ObjectStoreError
+from ..persistence import audit, erasure, jobs, raw_objects
 from ..persistence.audit import Action, ActorType, Outcome, ResourceType
 from ..persistence.codec import file_sha256
 from ..persistence.jobs import JobRecord, JobType
@@ -358,6 +359,72 @@ def purge_handler(context: JobContext) -> Dict[str, Any]:
     return counts
 
 
+# -- effacement client (004.4.5 E4) -------------------------------------------------------
+
+#: Forme d'une reference client EFFACABLE, identique a la contrainte de la base (0011/0014).
+#: Le gestionnaire VALIDE la forme, il ne la CALCULE jamais: deriver une reference depuis une
+#: identite est worker-local, hors file, et appartient a E6 (D-062).
+_CUSTOMER_REF = re.compile(r"^(c1|g1):[0-9a-f]{32}$")
+
+
+def make_redact_customer_handler(object_store: Optional[object]) -> Handler:
+    """Gestionnaire d'effacement client (D-056). L'objet de l'operation vient de la charge.
+
+    SEQUENCE, dans cet ordre exact:
+
+        1. la base efface        (0014)  tombstone, preuve, objets -> `purging`, audit
+        2. les octets partent    (E1)    `ObjectStore.delete`, idempotente
+        3. la base finalise      (0015)  `purging` -> `purged`, un objet a la fois
+
+    LES OCTETS D'ABORD, LA LIGNE ENSUITE. L'inverse affirmerait une destruction qui n'a pas eu
+    lieu. Il n'existe AUCUNE transaction commune a PostgreSQL et au magasin d'objets: la
+    surete vient de l'ordre et de l'idempotence, pas d'une atomicite qu'on ne peut pas avoir.
+    La seule fenetre d'interruption -- octets detruits, ligne encore `purging` -- laisse
+    l'objet deja illisible et deja vide; un rejeu redetruit sans erreur puis finalise.
+
+    Le gestionnaire ne lit aucune identite, ne derive aucune reference, ne journalise ni la
+    reference ni la charge, et ne touche jamais le systeme de fichiers: il passe par
+    `ObjectStore`, dont le confinement est la propriete de securite (D-055, D-061).
+    """
+    def redact_customer_handler(context: JobContext) -> Dict[str, Any]:
+        if object_store is None:
+            raise PermanentJobError("object_store_unavailable", "magasin d'objets non configure")
+        reference = context.require("customer_ref")
+        # Forme seulement. La base refuse de toute facon tout ce qui n'est pas un HMAC: ce
+        # controle rend l'echec lisible cote worker, il ne remplace pas la garde en base.
+        if not isinstance(reference, str) or not _CUSTOMER_REF.match(reference):
+            raise PermanentJobError("payload_invalid", "reference client hors forme")
+
+        context.checkpoint()
+        redaction = erasure.redact_customer(context.session, context.job)
+        # Ni la reference, ni le tombstone: des COMPTES. Un journal n'est pas une preuve.
+        context.log.info("customer_erasure.recorded", orders_tombstoned=redaction.orders_tombstoned,
+                         raw_objects_marked=redaction.raw_objects_marked)
+
+        destroyed, already = 0, 0
+        for recorded in erasure.purging_objects(context.session):
+            context.checkpoint()  # un bail perdu arrete la destruction net
+            try:
+                object_store.delete(recorded.object_key)
+            except ObjectStoreError as exc:
+                # La ligne RESTE `purging`: illisible, et reprise possible. Rien n'est
+                # marque `purged`, donc rien n'est affirme detruit a tort.
+                raise RetryableJobError("object_delete_failed", redact_text(str(exc))) from None
+            if erasure.finalize_object_purge(context.session, context.job, recorded.id):
+                destroyed += 1
+            else:
+                already += 1  # rejeu d'une tentative interrompue apres la suppression
+
+        counts = {"redaction_id": str(redaction.redaction_id),
+                  "orders_tombstoned": redaction.orders_tombstoned,
+                  "raw_objects_purged": destroyed, "raw_objects_already_purged": already}
+        context.log.info("customer_erasure.completed", raw_objects_purged=destroyed,
+                         raw_objects_already_purged=already)
+        return counts
+
+    return redact_customer_handler
+
+
 def default_registry(*, identity_master: Optional[MasterKey] = None,
                      object_store: Optional[object] = None) -> HandlerRegistry:
     """Registre par defaut: un gestionnaire par type declare dans le schema.
@@ -368,4 +435,5 @@ def default_registry(*, identity_master: Optional[MasterKey] = None,
     return (HandlerRegistry()
             .register(JobType.IMPORT, make_import_handler(identity_master, object_store))
             .register(JobType.ANALYSIS, analysis_handler)
-            .register(JobType.PURGE, purge_handler))
+            .register(JobType.PURGE, purge_handler)
+            .register(JobType.REDACT_CUSTOMER, make_redact_customer_handler(object_store)))

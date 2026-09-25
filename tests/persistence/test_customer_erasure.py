@@ -201,15 +201,17 @@ def test_the_python_vocabulary_matches_the_migration():
     # le TYPE DE TRAVAIL, lui, n'entre pas encore dans `JobType` (voir le test suivant)
 
 
-def test_the_job_type_exists_in_the_database_but_not_yet_in_the_python_queue():
-    """E2 declare le type EN BASE; son gestionnaire est E4.
+def test_the_job_type_and_its_handler_arrived_together():
+    """E2 avait declare le type EN BASE seulement; E4 apporte l'enumeration ET le gestionnaire.
 
-    Le depot exige que tout type declare dans `JobType` ait un gestionnaire
-    (`tests/test_jobs_unit.py`): l'invariant reste donc vrai, et aucun worker ne peut prendre
-    un effacement avant de savoir l'executer.
+    L'invariant du depot -- tout type declare dans `JobType` a un gestionnaire
+    (`tests/test_jobs_unit.py`) -- n'a jamais ete enfreint: il etait tenu par l'absence, il
+    l'est maintenant par la presence des deux.
     """
     from mervio.persistence.jobs import JobType
-    assert "redact_customer" not in {kind.value for kind in JobType}
+    from mervio.workers.handlers import default_registry
+    assert "redact_customer" in {kind.value for kind in JobType}
+    assert JobType.REDACT_CUSTOMER in default_registry(object_store=object()).types()
 
 
 # -- effacement nominal --------------------------------------------------------------------------

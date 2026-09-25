@@ -371,8 +371,9 @@ def test_the_isolation_boundary_is_unchanged(owner):
     assert {r[0] for r in owner.execute(
         "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
         "WHERE n.nspname = 'public' AND p.prosecdef").fetchall()} == {
-            "app_ensure_service_principal",   # 0007
-            "app_redact_customer",            # 0014, effacement client (D-052)
+            "app_ensure_service_principal",     # 0007
+            "app_redact_customer",              # 0014, effacement client (D-052)
+            "app_finalize_raw_object_purge",    # 0015, destruction des octets (D-056)
         }
 
 
