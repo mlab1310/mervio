@@ -64,6 +64,9 @@ class Action(str, Enum):
     SERVICE_REVOKED = "service.revoked"
     # 004.4.4 (revision 0013): depot d'un objet brut par un operateur
     OBJECT_UPLOADED = "object.uploaded"
+    # 004.4.5 (revision 0014): effacement client execute par le chemin privilegie.
+    # La trace designe la ligne de preuve; elle ne porte NI l'identite, NI la valeur effacee.
+    CUSTOMER_REDACTED = "customer.redacted"
 
 
 class ResourceType(str, Enum):
@@ -79,6 +82,8 @@ class ResourceType(str, Enum):
     SERVICE_AUTHORIZATION = "service_authorization"
     # 004.4.4 (revision 0013)
     RAW_OBJECT = "raw_object"
+    # 004.4.5 (revision 0014): la PREUVE d'un effacement, jamais le client lui-meme
+    CUSTOMER_REDACTION = "customer_redaction"
 
 
 class Outcome(str, Enum):

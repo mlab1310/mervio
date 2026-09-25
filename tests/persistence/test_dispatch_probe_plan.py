@@ -210,7 +210,8 @@ def test_the_ready_probe_plan_is_stable_whatever_the_physical_order(db, worker_d
     degraded = []
     for draw in range(DRAWS):
         with raw(owner) as conn:
-            conn.execute("TRUNCATE jobs")
+            # 004.4.5: `customer_redactions` reference `jobs`; les deux se vident ensemble
+            conn.execute("TRUNCATE customer_redactions, jobs")
         for tenant in rng.sample(eleven, len(eleven)):
             _insert(owner, tenant, 3000)
         owner.execute("ANALYZE jobs")
@@ -367,8 +368,12 @@ def test_the_isolation_boundary_is_unchanged(owner):
         "RESTRICTIVE {mervio_worker} ALL ((organization_id = ANY (( SELECT app_service_organizations() "
         "AS app_service_organizations)::uuid[])) IS TRUE)")
     assert rows["jobs_service_dispatch"].startswith("PERMISSIVE {mervio_worker} SELECT ")
-    assert owner.execute("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-                         "WHERE n.nspname = 'public' AND p.prosecdef").fetchone() == (1,)  # app_ensure_service_principal
+    assert {r[0] for r in owner.execute(
+        "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+        "WHERE n.nspname = 'public' AND p.prosecdef").fetchall()} == {
+            "app_ensure_service_principal",   # 0007
+            "app_redact_customer",            # 0014, effacement client (D-052)
+        }
 
 
 def test_revision_0012_round_trips(pg):

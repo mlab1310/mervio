@@ -28,10 +28,22 @@ organisation, boutique, clé d'objet générée côté serveur (`org/<org>/store
 `sha256`, `byte_size`, `source_kind`, `origin` (`csv_upload`), `state`, `retain_until`, `purged_at`.
 C'est **cette ligne, sous RLS**, qui porte la frontière de tenant : ni la clé, ni le magasin. Un
 objet d'une autre organisation est donc introuvable, exactement comme un objet qui n'a jamais
-existé. Aucun nom de fichier n'y figure. En 004.4.4 la ligne naît `available` et n'en bouge plus :
-la base n'accorde ni `UPDATE` ni `DELETE`, donc `sha256` est figé dès l'insertion. Le domaine
-complet `pending → available → purging → purged` est fixé par la contrainte, mais les transitions
-relèvent de 004.4.5 (D-056).
+existé. Aucun nom de fichier n'y figure. La ligne naît `available` ; la base n'accorde ni `UPDATE`
+ni `DELETE` au rôle applicatif, donc `sha256` est figé dès l'insertion. Le domaine complet
+`pending → available → purging → purged` est fixé par la contrainte. Depuis 004.4.5 (révision
+`0014`), la transition `available → purging` est faite **dans la transaction de l'effacement**, par
+la fonction privilégiée, et accompagnée d'un `purge_reason` (`customer_erasure`) qu'une contrainte
+lie à l'état. La destruction des octets et `purging → purged` restent à livrer.
+
+**Effacements client (004.4.5, D-056, révision `0014`)** : `customer_redactions` est la **preuve**
+qu'un client a été effacé. Elle ne contient **aucune donnée personnelle** : le `customer_ref`
+effacé (un HMAC, jamais un e-mail — la contrainte refuse toute autre forme), le tombstone qui l'a
+remplacé (`redacted:<uuid4>`, **aléatoire**, jamais dérivé de l'identité, **distinct par client**
+pour ne pas fusionner deux clients dans les agrégats), l'origine, le demandeur, le travail et la
+date. `UNIQUE (organization_id, customer_ref)` porte l'idempotence : rejouer un effacement
+retrouve le même tombstone au lieu d'en créer un second. Le rôle applicatif n'a que `SELECT` :
+la table n'est écrite que par `app_redact_customer`, la fonction `SECURITY DEFINER` étroite de
+D-052, déclenchée par un travail `redact_customer` et par rien d'autre.
 
 ## Définitions qui engagent les chiffres
 

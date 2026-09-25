@@ -5,6 +5,12 @@ Teste avec `moto` en processus, en CI: aucun compte AWS, aucun reseau, aucun end
 Hors perimetre (reportes a 004.9 par D-055): validation contre le fournisseur reel, ECRITURE
 CONDITIONNELLE, chiffrement cote serveur, versionnement et cycle de vie du bucket. Ce pilote
 n'offre donc, comme les deux autres, AUCUNE garantie de non-ecrasement (D-061).
+
+`delete` (004.4.5) n'introduit AUCUNE garantie propre au fournisseur: pas de suppression
+conditionnelle, pas de gestion de version. Sur un bucket VERSIONNE, `delete_object` pose un
+marqueur et les versions anterieures survivent -- la destruction reelle des octets releve alors
+du cycle de vie du bucket, reporte a 004.9. Le pilote de reference de 004.4.5 est le systeme de
+fichiers confine, ou la destruction est immediate.
 """
 from __future__ import annotations
 
@@ -128,6 +134,16 @@ class S3ObjectStore:
             yield handle
         finally:
             handle.close()
+
+    def delete(self, key: str) -> None:
+        """`delete_object` sur UNE cle. S3 est deja idempotent: une cle absente rend un succes.
+
+        Ni `delete_objects` (lot), ni suppression par prefixe, ni versionnement: la seule unite
+        de destruction est la cle. Un `NoSuchBucket` reste une VRAIE erreur et remonte: c'est une
+        erreur de configuration, pas une destruction deja faite.
+        """
+        validate_key(key)
+        self._client.delete_object(Bucket=self.bucket, Key=key)
 
 
 __all__ = ["S3ObjectStore"]

@@ -82,5 +82,20 @@ class FilesystemObjectStore:
         finally:
             handle.close()
 
+    def delete(self, key: str) -> None:
+        """Retire le fichier de CETTE cle, sous les memes quatre couches de confinement.
+
+        `missing_ok=True` porte l'idempotence: une cle deja detruite n'est pas une erreur.
+        Les repertoires parents sont LAISSES en place -- les retirer serait une suppression
+        recursive, hors du contrat, et une course avec un depot concurrent sous la meme boutique.
+        """
+        path = self._confined(key)  # refuse une cle hors forme ET une cible liee
+        if path.is_dir():
+            # Une cle canonique ne designe jamais un repertoire. Rendre un succes ici
+            # affirmerait une destruction qui n'a pas eu lieu; `unlink` leve d'ailleurs des
+            # erreurs differentes selon la plateforme (EISDIR sur Linux, EPERM sur macOS).
+            raise ObjectKeyInvalid("cle designant un repertoire")
+        path.unlink(missing_ok=True)  # porte l'idempotence: une cle deja detruite n'est pas une erreur
+
 
 __all__ = ["DIRECTORY_MODE", "FILE_MODE", "FilesystemObjectStore"]

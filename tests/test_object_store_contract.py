@@ -200,7 +200,106 @@ def test_the_contract_exposes_no_object_already_exists_error():
     assert not hasattr(storage, "ObjectAlreadyExists")
 
 
-def test_the_contract_exposes_neither_stat_nor_delete(store):
-    """Hors perimetre 004.4.4: destruction (D-056, 004.4.5) et ramassage (004.9)."""
-    assert not hasattr(store, "delete")
+def test_the_contract_still_exposes_no_stat(store):
+    """`delete` est arrivee en 004.4.5 (D-056); `stat` reste hors perimetre (ramassage, 004.9)."""
     assert not hasattr(store, "stat")
+
+
+# -- destruction (E1, 004.4.5, D-056) ----------------------------------------------------------
+
+def test_delete_removes_the_bytes_of_an_existing_object(store):
+    target = key()
+    store.put(target, io.BytesIO(b"identity-bearing"))
+    store.delete(target)
+    with pytest.raises(ObjectNotFound):
+        with store.open(target):
+            pass
+
+
+def test_delete_on_a_key_that_was_never_written_is_not_an_error(store):
+    """Idempotence, cas 1: un travail repris ne doit pas echouer sur ce qu'il n'a jamais ecrit."""
+    store.delete(key())
+
+
+def test_delete_twice_is_idempotent_and_restores_nothing(store):
+    """Idempotence, cas 2: rejouer un effacement ne leve pas et ne fait pas revivre les octets."""
+    target = key()
+    store.put(target, io.BytesIO(b"identity-bearing"))
+    store.delete(target)
+    store.delete(target)
+    with pytest.raises(ObjectNotFound):
+        with store.open(target):
+            pass
+
+
+def test_delete_touches_no_other_key(store):
+    """La seule unite de destruction est LA cle: aucun joker, aucun prefixe, aucun balayage."""
+    doomed, kept = key(), key()
+    store.put(doomed, io.BytesIO(b"doomed"))
+    store.put(kept, io.BytesIO(b"kept"))
+    store.delete(doomed)
+    with store.open(kept) as handle:
+        assert handle.read() == b"kept"
+
+
+def test_delete_leaves_the_neighbours_of_another_store_and_organization_intact(store):
+    """Confinement de tenant: deux cles d'organisations differentes ne se detruisent pas l'une
+    l'autre, alors meme qu'un pilote fichier les range sous des repertoires voisins."""
+    other_org, other_store = uuid.uuid4(), uuid.uuid4()
+    mine, theirs = key(), build_object_key(other_org, other_store)
+    store.put(mine, io.BytesIO(b"mine"))
+    store.put(theirs, io.BytesIO(b"theirs"))
+    store.delete(mine)
+    with store.open(theirs) as handle:
+        assert handle.read() == b"theirs"
+
+
+@pytest.mark.parametrize("bad", [
+    "../../etc/passwd", "/etc/passwd", "org/../../etc/passwd", "org/x/store/y/raw/z",
+    "", "raw/" + "0" * 36, "org\\x\\store\\y\\raw\\z", "org/%2e%2e/store/x/raw/y",
+    "org/*/store/*/raw/*", "org/" + "0" * 36 + "/store/" + "0" * 36 + "/raw/",
+])
+def test_a_key_outside_the_canonical_form_is_refused_by_delete(store, bad):
+    """Aucune evasion et AUCUN joker: une forme non canonique ne detruit rien, jamais."""
+    with pytest.raises(ObjectKeyInvalid):
+        store.delete(bad)
+
+
+def test_delete_refuses_a_non_string_key(store):
+    with pytest.raises(ObjectKeyInvalid):
+        store.delete(None)
+
+
+def test_delete_refuses_a_key_carrying_a_nul_byte(store):
+    with pytest.raises(ObjectKeyInvalid):
+        store.delete(key().replace("raw/", "raw\x00/"))
+
+
+def test_a_refused_key_destroys_nothing_at_all(store):
+    """Preuve que le refus precede l'operation: rien n'a disparu apres une cle rejetee."""
+    target = key()
+    store.put(target, io.BytesIO(b"kept"))
+    for bad in ("../../etc/passwd", "", "org/*/store/*/raw/*", None):
+        with pytest.raises(ObjectKeyInvalid):
+            store.delete(bad)
+    with store.open(target) as handle:
+        assert handle.read() == b"kept"
+
+
+def test_a_key_can_be_written_again_after_being_deleted(store):
+    """La destruction ne pose aucun tombstone dans le magasin: la cle redevient ecrivable.
+
+    Le magasin n'est pas une frontiere de securite (D-054): c'est la ligne `raw_objects` sous
+    RLS qui interdit la reutilisation d'une cle, jamais le pilote.
+    """
+    target = key()
+    store.put(target, io.BytesIO(b"first"))
+    store.delete(target)
+    store.put(target, io.BytesIO(b"second"))
+    with store.open(target) as handle:
+        assert handle.read() == b"second"
+
+
+def test_delete_is_part_of_the_protocol_on_every_driver(store):
+    """Parite: les trois pilotes exposent la MEME methode, appelable de la meme facon (D-055)."""
+    assert callable(getattr(store, "delete", None))

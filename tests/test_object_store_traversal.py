@@ -55,6 +55,8 @@ def test_a_hostile_key_never_reaches_the_filesystem(store, root, attack):
     with pytest.raises(ObjectKeyInvalid):
         with store.open(attack):
             pass
+    with pytest.raises(ObjectKeyInvalid):  # 004.4.5: la destruction passe les MEMES couches
+        store.delete(attack)
     assert not root.exists() or not list(root.rglob("*")), "aucun octet ne doit avoir ete ecrit"
 
 
@@ -160,3 +162,66 @@ def test_a_directory_where_an_object_is_expected_is_not_found(store, root):
     with pytest.raises(ObjectNotFound):
         with store.open(target):
             pass
+
+
+# -- destruction confinee (E1, 004.4.5) --------------------------------------------------------
+
+def test_delete_never_destroys_a_file_outside_the_root(store, tmp_path):
+    """Le vecteur le plus grave de `delete`: detruire un fichier du systeme hote."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("intact", encoding="utf-8")
+    for attack in ("../outside.txt", "../../outside.txt", str(outside)):
+        with pytest.raises(ObjectKeyInvalid):
+            store.delete(attack)
+    assert outside.read_text(encoding="utf-8") == "intact"
+
+
+def test_delete_does_not_follow_a_symlinked_target(store, root, tmp_path):
+    """Couche 4: la cible liee est refusee, donc la victime pointee n'est jamais detruite."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("intact", encoding="utf-8")
+    target = key()
+    path = root.joinpath(*target.split("/"))
+    path.parent.mkdir(parents=True)
+    path.symlink_to(victim)
+
+    with pytest.raises(ObjectKeyInvalid):
+        store.delete(target)
+    assert victim.exists() and victim.read_text(encoding="utf-8") == "intact"
+    assert path.is_symlink(), "le lien lui-meme n'est pas retire non plus"
+
+
+def test_delete_through_a_symlinked_parent_pointing_outside_is_refused(store, root, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    prey = elsewhere / "prey.txt"
+    prey.write_text("intact", encoding="utf-8")
+    target = key()
+    parts = target.split("/")
+    parent = root.joinpath(*parts[:-1])
+    parent.parent.mkdir(parents=True)
+    parent.symlink_to(elsewhere, target_is_directory=True)
+
+    with pytest.raises(ObjectKeyInvalid):
+        store.delete(target)
+    assert prey.read_text(encoding="utf-8") == "intact"
+
+
+def test_delete_refuses_a_directory_standing_where_an_object_should_be(store, root):
+    """Rendre un succes affirmerait une destruction qui n'a pas eu lieu."""
+    target = key()
+    path = root.joinpath(*target.split("/"))
+    path.mkdir(parents=True)
+    with pytest.raises(ObjectKeyInvalid):
+        store.delete(target)
+    assert path.is_dir()
+
+
+def test_delete_removes_the_object_but_leaves_its_directories(store, root):
+    """Aucune suppression recursive: seul le fichier de la cle disparait."""
+    target = key()
+    store.put(target, io.BytesIO(b"payload"))
+    path = root.joinpath(*target.split("/"))
+    store.delete(target)
+    assert not path.exists()
+    assert path.parent.is_dir() and root.is_dir()

@@ -41,5 +41,11 @@ class MemoryObjectStore:
         finally:
             handle.close()
 
+    def delete(self, key: str) -> None:
+        """Retire CETTE entree. `pop(..., None)`: une cle absente n'est pas une erreur."""
+        validate_key(key)
+        with self._lock:
+            self._objects.pop(key, None)
+
 
 __all__ = ["MemoryObjectStore"]

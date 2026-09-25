@@ -13,8 +13,13 @@ d'un `put_object` serait sujet a une course et ne garantirait rien. La propriete
 des TROIS pilotes: l'interface reste identique pour tous (exigence centrale de D-055). L'unicite
 est portee par les cles `uuid4` et par `UNIQUE (organization_id, object_key)` en base.
 
-Hors perimetre 004.4.4: `stat()` et `delete()`. La destruction d'octets releve de D-056 (004.4.5)
-et le ramassage des orphelins de 004.9.
+DESTRUCTION (D-056, 004.4.5): `delete` retire les octets d'UNE cle, et rien d'autre. Elle est
+IDEMPOTENTE -- une cle sans octet n'est pas une erreur -- parce que l'effacement client est
+rejouable: un travail repris ne doit ni echouer sur ce qu'il a deja detruit, ni restaurer quoi
+que ce soit. Aucun joker, aucun prefixe, aucune suppression recursive: la seule unite de
+destruction est la cle canonique, generee cote serveur.
+
+Hors perimetre: `stat()`, et le ramassage des orphelins (004.9).
 """
 from __future__ import annotations
 
@@ -119,6 +124,15 @@ class ObjectStore(Protocol):
         """Ouvre l'objet en lecture binaire; l'appelant referme (gestionnaire de contexte).
 
         Leve `ObjectKeyInvalid` ou `ObjectNotFound`.
+        """
+        ...  # pragma: no cover - protocole
+
+    def delete(self, key: str) -> None:
+        """Detruit les octets de CETTE cle. IDEMPOTENTE: une cle absente n'est pas une erreur.
+
+        Ne leve donc JAMAIS `ObjectNotFound`: l'effacement client est rejouable (D-056), et un
+        travail repris doit pouvoir repasser sur un objet deja detruit. Leve `ObjectKeyInvalid`
+        si la cle est hors forme, AVANT toute operation. Ne touche aucune autre cle.
         """
         ...  # pragma: no cover - protocole
 

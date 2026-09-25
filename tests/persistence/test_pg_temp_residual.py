@@ -194,7 +194,9 @@ def test_the_hygiene_changes_no_privilege_and_adds_no_definer(owner):
     definers = owner.execute(
         "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
         "WHERE n.nspname = 'public' AND p.prosecdef ORDER BY 1").fetchall()
-    assert definers == [("app_ensure_service_principal",)]
+    # 004.4.5: `app_redact_customer` s'y ajoute, etroite et prevue par D-052. Toute AUTRE
+    # fonction `SECURITY DEFINER` doit faire echouer ce test: c'est l'inventaire du privilege.
+    assert definers == [("app_ensure_service_principal",), ("app_redact_customer",)]
     assert owner.execute("SELECT has_function_privilege('public', 'app_ensure_service_principal()', "
                          "'EXECUTE')").fetchone()[0] is False
     for function in ("analysis_runs_require_sealed_snapshot()", "canonical_rows_guard_sealed()"):
