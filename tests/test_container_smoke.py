@@ -28,6 +28,8 @@ def load():
 
 
 smoke_module = load()
+#: Source du pilote de smoke: plusieurs gardes la relisent telle qu'elle sera livree.
+SMOKE_SOURCE = (ROOT / "scripts" / "container_smoke.py").read_text(encoding="utf-8")
 SmokeFailure = smoke_module.SmokeFailure
 
 GOOD_CONFIG = {"User": "10001:10001", "ExposedPorts": None, "Entrypoint": ["mervio"], "Cmd": ["worker"],
@@ -599,3 +601,33 @@ def test_the_smoke_shows_ad_hoc_container_output_when_an_assertion_fails():
     assert smoke.tail(smoke_module.Result(["docker", "run"], 0, "", "")) == ""
     source = inspect.getsource(smoke_module.Smoke.refuse_privileged_connections)
     assert source.count("self.tail(result)") == 4, "chaque refus ad-hoc doit publier sa sortie"
+
+
+def test_the_smoke_never_asserts_on_the_deliberately_masked_raw_counters():
+    """Les compteurs `raw_objects_*` sont masques EXPRES; le smoke ne doit pas s'y fier.
+
+    `render_job` passe le resultat d'un travail dans `scrub`, qui masque toute cle contenant "raw"
+    afin qu'aucune donnee brute ne ressorte par la CLI d'administration. Les compteurs de
+    l'effacement portent ce fragment: a travers `admin job show --json` ils valent `[redacted]`,
+    jamais un entier (CI 36260057101).
+
+    La tentation, en lisant l'echec, serait d'exposer ces compteurs. Ce serait affaiblir un filtre
+    de confidentialite pour le confort d'un test. La preuve de destruction se prend a la SOURCE:
+    l'etat des lignes `raw_objects` et le contenu reel du volume. Ce test verrouille les deux
+    moities de cette regle.
+    """
+    from mervio.observability.logging import scrub
+
+    masked = scrub({"raw_objects_purged": 2, "raw_objects_already_purged": 0,
+                    "orders_tombstoned": 1, "redaction_id": "9531414f-a58c-4d44-8974-34bc0cdba271"})
+    assert masked["raw_objects_purged"] == "[redacted]"
+    assert masked["raw_objects_already_purged"] == "[redacted]"
+    # ... tandis que le compteur de commandes, lui, traverse intact et reste exploitable
+    assert masked["orders_tombstoned"] == 1
+
+    for counter in ("raw_objects_purged", "raw_objects_already_purged"):
+        assert counter not in SMOKE_SOURCE, f"le smoke lit {counter}, masque par `scrub`"
+    # la preuve reste prise a la source: etat des lignes ET contenu du volume
+    erasure = inspect.getsource(smoke_module.Smoke.check_erasure)
+    assert 'row["state"] == "purged"' in erasure and 'row["purged_at"]' in erasure
+    assert "stored_object_keys()" in erasure

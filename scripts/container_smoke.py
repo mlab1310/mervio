@@ -669,8 +669,13 @@ class Smoke:
         finished = self.wait_job(organization, job)
         self.expect(finished["status"] == "succeeded",
                     f"effacement: {finished['status']} {finished.get('last_error_code')}")
-        self.expect(finished["result"]["raw_objects_purged"] == len(identity_bearing),
-                    f"objets detruits: {finished['result']}")
+        # Les compteurs `raw_objects_*` du resultat NE SONT PAS lisibles ici, et c'est VOULU:
+        # `render_job` passe le resultat dans `scrub`, qui masque toute cle contenant "raw" pour
+        # qu'aucune donnee brute ne ressorte par la CLI. On ne contourne pas ce filtre -- la preuve
+        # de destruction est prise a la source: l'etat des lignes et le CONTENU DU VOLUME, ci-dessous.
+        # `orders_tombstoned`, lui, n'est pas masque et corrobore le nombre de commandes touchees.
+        self.expect(finished["result"]["orders_tombstoned"] == orders,
+                    f"commandes tombstonees: {finished['result']}, {orders} attendues")
 
         # e. PREUVE PHYSIQUE: les octets porteurs d'identite ont quitte le volume
         after = self.stored_object_keys()
@@ -739,9 +744,16 @@ class Smoke:
         finished = self.wait_job(organization, job)
         self.expect(finished["status"] == "succeeded",
                     f"rejeu de l'effacement: {finished['status']} {finished.get('last_error_code')}")
-        self.expect(finished["result"]["raw_objects_purged"] == 0,
-                    f"le rejeu a pretendu detruire a nouveau: {finished['result']}")
+        # meme raison qu'au-dessus: le compteur est masque par `scrub`. Ce qui prouve qu'aucune
+        # destruction supplementaire n'a eu lieu, c'est que le volume est IDENTIQUE octet pour octet
+        # et que les lignes sont restees `purged` -- deux constats pris a la source.
         self.expect(self.stored_object_keys() == stored, "le rejeu a fait revivre ou detruit des octets")
+        replayed = self.raw_objects()
+        for kind, row in replayed.items():
+            expected = "purged" if kind in IDENTITY_BEARING else "available"
+            self.expect(row["state"] == expected, f"{kind}: etat {row['state']} apres le rejeu")
+            if kind in IDENTITY_BEARING:
+                self.expect(row["purged_at"] not in ("", None), f"{kind}: purged_at perdu au rejeu")
         self.expect(self.scalar("SELECT count(*) FROM customer_redactions") == "1",
                     "le rejeu a ecrit une seconde preuve")
         self.expect(self.scalar(f"SELECT count(*) FROM orders WHERE customer_ref = '{reference}'") == "0",
