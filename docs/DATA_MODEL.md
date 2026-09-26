@@ -57,6 +57,17 @@ retrouve le même tombstone au lieu d'en créer un second. Le rôle applicatif n
 la table n'est écrite que par `app_redact_customer`, la fonction `SECURITY DEFINER` étroite de
 D-052, déclenchée par un travail `redact_customer` et par rien d'autre.
 
+**Rejeu à l'import (004.4.5 E5, D-056)** : un client effacé le **reste**. Au moment où une
+référence client devient durable — dans la transaction de `write_snapshot`, entre sa dérivation
+et son écriture — les effacements enregistrés sont appliqués : la référence est remplacée par le
+tombstone **déjà enregistré**, jamais par un nouveau. Le rejeu n'enregistre aucun effacement et
+n'émet aucun `customer.redacted` : il *applique* un effacement, il ne le décide pas. Une seule
+requête par import, confinée au locataire par la RLS. **Ordonnancement (D-063)** : l'import tient
+le verrou consultatif **partagé** de son organisation de l'ouverture de cette transaction jusqu'à
+son commit, et toute opération destructrice prend le **même** verrou en exclusif — les deux
+opérations sont donc totalement ordonnées, dans un sens ou dans l'autre, et les deux ordres
+donnent le bon résultat final.
+
 ## Définitions qui engagent les chiffres
 
 **CA avant ajustements** (D-048, anciennement « CA net ») = `Order.subtotal` (D-041).

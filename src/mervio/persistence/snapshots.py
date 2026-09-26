@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
@@ -24,7 +24,9 @@ from psycopg.types.numeric import FloatLoader
 from ..config import ENGINE_VERSION
 from ..domain.models import Campaign, DailyAdPerformance, Dataset, Order, OrderItem, Payment, Product, Refund
 from ..identity import ORIGIN_ORGANIZATION, CustomerIdentity
+from . import erasure
 from .codec import quality_from_document, quality_to_document
+from .concurrency import lock_organization_shared
 from .errors import ImportRejected, NotFound, SnapshotIntegrityError
 from .money import money_to_db, optional_money_to_db
 from .stores import _limit, _uuid, fetch_connection, fetch_store
@@ -121,6 +123,11 @@ def write_snapshot(
         raise SnapshotIntegrityError("sources d'instantane invalides ou dupliquees")
 
     with session.transaction(Permission.IMPORT_DATA) as conn:
+        # D-063: verrou PARTAGE de l'organisation, pris AVANT la consultation du rejeu et avant
+        # toute ecriture canonique, conserve jusqu'au commit. Il ordonne totalement cet import
+        # et toute operation destructrice de la meme organisation -- dans un sens ou dans
+        # l'autre, les deux etant corrects. Deux imports d'un meme tenant coexistent.
+        lock_organization_shared(conn, session.organization_id)
         store = fetch_store(conn, session, store_id)
         connection = fetch_connection(conn, session, store.id, connection_id)
         if connection.status != "active":
@@ -154,7 +161,11 @@ def write_snapshot(
                  source.byte_size, counts.total if counts else None, counts.accepted if counts else None),
             )
 
-        writer = _RowWriter(conn, session.organization_id, store.id, snapshot_id, source_ids)
+        # E5 (D-056): les effacements deja enregistres sont appliques AVANT que la reference
+        # ne devienne durable. Jamais "ecrire puis corriger": une ligne canonique est
+        # immuable (`canonical_rows_forbid_update`), donc il n'existe pas de second tour.
+        redactions = erasure.recorded_redactions(conn, (o.customer_id for o in dataset.orders))
+        writer = _RowWriter(conn, session.organization_id, store.id, snapshot_id, source_ids, redactions)
         counts = writer.write_dataset(dataset)
         start, end = _data_period(dataset)
         row = conn.execute(
@@ -218,10 +229,13 @@ def record_failed_snapshot(
 
 
 class _RowWriter:
-    def __init__(self, conn, organization_id: UUID, store_id: UUID, snapshot_id: UUID, source_ids: Dict[str, UUID]):
+    def __init__(self, conn, organization_id: UUID, store_id: UUID, snapshot_id: UUID, source_ids: Dict[str, UUID],
+                 redactions: Optional[Mapping[str, str]] = None):
         self.conn = conn
         self.prefix = (organization_id, store_id, snapshot_id)
         self.source_ids = source_ids
+        #: {reference d'origine -> tombstone} des clients DEJA effaces (004.4.5 E5, D-056)
+        self.redactions = dict(redactions or {})
 
     def _source_id(self, kind: str, entity: str) -> UUID:
         try:
@@ -284,7 +298,11 @@ class _RowWriter:
 
         def rows():
             for position, o in enumerate(orders):
-                yield (source_id, position, o.source, o.order_id, o.order_id, o.customer_id,
+                yield (source_id, position, o.source, o.order_id, o.order_id,
+                       # E5: un client deja efface le RESTE. On reutilise le tombstone
+                       # ENREGISTRE, jamais un nouveau, sinon le meme client se scinderait en
+                       # deux dans les agregats historiques.
+                       self.redactions.get(o.customer_id, o.customer_id),
                        _utc(o.created_at), o.currency,
                        money_to_db(o.subtotal, field="orders.subtotal"), money_to_db(o.discount, field="orders.discount"),
                        money_to_db(o.shipping, field="orders.shipping"), money_to_db(o.tax, field="orders.tax"),
