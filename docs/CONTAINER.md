@@ -14,7 +14,9 @@ python -m mervio.persistence  (ops) rôle mervio_migrator ───────�
 mervio admin    (ops)         rôle mervio_app_user ───────────────┘
         ├─ volume mervio_data    : CSV locaux ; admin écrit, worker lit (lecture seule)
         └─ volume mervio_objects : objets bruts (004.4.4) ; admin dépose, worker lit
-                                   en LECTURE SEULE (il ne dépose jamais, D-054)
+                                   et DÉTRUIT (écriture depuis D-064 : l'effacement
+                                   client exige unlink ; il ne dépose jamais, mais
+                                   c'est une propriété du CODE, pas du noyau)
 ```
 
 ## 1. Prérequis
@@ -78,7 +80,7 @@ openssl rand -hex 32   # MERVIO_IDENTITY_MASTER_KEY
 | Variable | Rôle | Utilisé par |
 |---|---|---|
 | `MERVIO_IDENTITY_MASTER_KEY` | clé maître d'identité client : jamais en base, jamais journalisée ; les références client en dérivent via le sel de chaque organisation. Aussi requise par `worker resolve-customer-ref` (004.4.5, D-062) | `worker` |
-| `MERVIO_OBJECT_STORE_ROOT` | racine du magasin d'objets bruts (004.4.4, D-054) : `admin` y dépose, le worker y lit. Obligatoire dès que le worker traite des imports ; compose la fixe à `/var/lib/mervio/objects` | `worker`, `admin` |
+| `MERVIO_OBJECT_STORE_ROOT` | racine du magasin d'objets bruts (004.4.4, D-054) : `admin` y dépose, le worker y lit et, depuis D-064, y **détruit** les octets porteurs d'identité lors d'un effacement client. Obligatoire dès que le worker traite des imports ; compose la fixe à `/var/lib/mervio/objects` | `worker`, `admin` |
 
 La perdre bloque les nouveaux imports (refus explicite `identity_key_unavailable`) ; en changer
 aussi, pour les organisations déjà servies. La conserver comme un secret de production.
@@ -134,6 +136,64 @@ explicitement : la résolution est gouvernée par l'accès au conteneur, et le c
 D-052 porte sur la **mise en file** de l'effacement. La résolution n'est **pas auditée par le
 produit** ; la trace est celle du conteneur et du système (`application_name = mervio-resolve` dans
 `pg_stat_activity`). Restreindre `docker exec` sur ce service en conséquence.
+
+### Destruction des octets par le worker : montage en écriture, capacité vérifiée (004.4.5, D-064)
+
+L'effacement client ne se contente pas d'une pierre tombale en base : il **détruit les octets** des
+objets bruts porteurs d'identité (`shopify_orders`, `stripe`). C'est le worker qui les détruit, donc
+le volume `mervio_objects` lui est monté **en écriture** — `unlink` exige le droit d'écriture sur le
+répertoire parent, et POSIX ne connaît pas de droit « supprimer » distinct de « créer ».
+
+**Ce que cela change, et ce que cela ne change pas.** Le worker **ne dépose toujours aucun objet** :
+il n'appelle `ObjectStore.put` sur aucun chemin d'exécution, et le dépôt reste exclusivement
+`mervio admin object upload`. Mais c'est désormais une propriété **du code**, vérifiable par lecture
+et par test, et non plus une garantie du noyau : ce montage **n'est plus une frontière de sécurité**
+et ne doit jamais être invoqué comme un contrôle. La frontière est, et reste, la ligne `raw_objects`
+sous **RLS forcée**, avec l'autorisation de service et le délégué humain. Aucun privilège PostgreSQL
+n'a été élargi ; seule la capacité filesystem du worker l'a été. Le worker continue de ne recevoir
+**aucun chemin de fichier** : `validate_payload` les refuse, clés et valeurs, récursivement.
+
+**Compensation.** La protection que le `:ro` retirait est remplacée à la couche où elle appartient :
+le chemin de **lecture** du pilote filesystem ouvre avec `O_NOFOLLOW`, de sorte qu'un lien symbolique
+substitué après la résolution échoue (`ELOOP`) au lieu d'être suivi.
+
+**Contrôle de capacité au démarrage, fail-closed.** Un worker qui sert `redact_customer` vérifie au
+démarrage que son magasin est réellement capable de détruire, et **refuse de démarrer** sinon, avec
+le code de configuration (2) — la mauvaise configuration est détectée **avant** qu'un travail ne
+fasse passer des lignes en `purging`, pas au milieu d'un effacement. Le verdict vient du magasin
+lui-même, sans effet de bord : le pilote filesystem interroge `os.access(racine, W_OK | X_OK)`, qui
+reflète l'état **réel** du montage et non un drapeau déclaratif ; le pilote S3 rend `undetermined` —
+prouver `s3:DeleteObject` exigerait de l'appeler — et le worker démarre en journalisant un
+avertissement.
+
+```bash
+# la capacité de destruction du worker, telle que le produit la voit
+docker compose exec -T worker python -c \
+    "from mervio.storage import FilesystemObjectStore as S; \
+     print(S('/var/lib/mervio/objects').delete_capability())"
+# capable
+```
+
+**Ordre des opérations, et pourquoi il est une propriété de sécurité.** Le gestionnaire enchaîne, par
+objet : `available → purging` en base, puis `ObjectStore.delete`, puis `purging → purged`. Marquer
+`purged` avant de supprimer affirmerait une destruction qui n'a pas eu lieu. Il n'existe **aucune**
+transaction commune PostgreSQL + magasin : un `delete` en échec laisse la ligne `purging` — illisible,
+non détruite, reprenable — et le travail est reprenable, jamais définitivement échoué. Une
+interruption après la suppression laisse la ligne `purging` sur un objet déjà vide, qu'un rejeu
+redétruit sans erreur puis finalise. Les lignes `raw_objects` **survivent** avec leurs métadonnées
+non sensibles (`sha256`, `byte_size`) ; les objets **sans** identité (`shopify_products`,
+`google_ads`) restent intacts.
+
+**Production S3 (exigence 004.9, non implémentée).** Sur S3, la restriction que POSIX ne sait pas
+exprimer est disponible : `s3:DeleteObject` s'accorde **séparément** de `s3:PutObject` et se
+restreint par préfixe. Le déploiement S3 devra accorder la destruction étroitement. Cette politique
+IAM **n'est pas** livrée par 004.4.5 ; elle est consignée comme exigence de 004.9.
+
+**Risque accepté.** Une compromission du worker permet de détruire ou d'écraser les octets bruts de
+tous les locataires du volume partagé. Accepté explicitement par D-064 : l'effacement exige cette
+capacité, et l'isolation locative n'en dépend pas — un worker compromis ne gagne aucune visibilité ni
+aucun droit sur une ligne `raw_objects` d'une organisation pour laquelle son service n'est pas
+autorisé, et ne peut pas faire revivre un objet `purged`.
 
 Facultatif : `MERVIO_POSTGRES_PORT` (port publié sur 127.0.0.1, défaut 55432), `MERVIO_IMAGE`
 (défaut `mervio:local`), `MERVIO_ENV`, `MERVIO_LOG_LEVEL`, `MERVIO_WORKER_NAME`.
