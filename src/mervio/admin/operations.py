@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, TypeV
 from uuid import UUID
 
 from ..application.workspace import is_sample_path
+from ..identity import REF_PATTERN
 from ..observability.logging import get_event_logger, scrub
 from ..observability.redaction import redact_text
 from ..persistence import audit, jobs, raw_objects, service, snapshots, stores, tenancy
@@ -198,6 +199,23 @@ def validate_source_kind(value: Any) -> str:
     """Type de source d'un objet brut. Domaine ferme, identique a `snapshot_sources`."""
     if not isinstance(value, str) or value not in SOURCE_KINDS:
         raise InvalidInput("type de source attendu parmi: " + ", ".join(SOURCE_KINDS))
+    return value
+
+
+def validate_customer_ref(value: Any) -> str:
+    """Reference client DEJA calculee (004.4.5 E6, D-062). Jamais une identite.
+
+    `admin` ne resout aucune identite et ne detient pas la cle maitre: il n'accepte donc QUE la
+    forme canonique d'une reference, `c1:` ou `g1:` suivi de 32 caracteres hexadecimaux minuscules
+    -- la meme forme que la base impose (revisions 0011 et 0014). Un e-mail glisse ici est refuse
+    par cette regle, et le serait de toute facon par l'operation privilegiee.
+
+    La reference est deja un HMAC non reversible: la citer dans un message ne divulgue aucune
+    identite, mais le message n'en cite aucune valeur non plus, par la regle generale (D-016).
+    """
+    if not isinstance(value, str) or not REF_PATTERN.fullmatch(value):
+        raise InvalidInput("customer-ref: reference canonique attendue (c1: ou g1: puis 32 hexadecimaux "
+                           "minuscules); la resoudre avec `mervio worker resolve-customer-ref`")
     return value
 
 
@@ -733,6 +751,26 @@ def enqueue_purge(database: Database, *, actor: Any, organization: Any, priority
                     idempotency_key=idempotency_key)
 
 
+def enqueue_redact(database: Database, *, actor: Any, organization: Any, customer_ref: Any,
+                   priority: Any = 0, idempotency_key: Any = None) -> Dict[str, Any]:
+    """Effacement d'UN client, designe par une reference DEJA resolue (004.4.5 E6, D-056, D-062).
+
+    `admin` ne voit jamais l'identite du client ni la cle maitre: le chainon identite ->
+    reference est worker-local et hors file (`mervio worker resolve-customer-ref`). La charge
+    utile ne porte donc qu'un HMAC, et la frontiere est verifiable EN BASE -- l'operation
+    privilegiee refuse toute autre forme, pas seulement cette validation.
+
+    Le rang du demandeur (`admin` au moins, D-052) est verifie ici a la mise en file, puis
+    RELU PAR LA BASE a l'execution: retrograder le demandeur entre-temps arrete l'effacement.
+    """
+    reference = validate_customer_ref(customer_ref)
+    priority, idempotency_key = validate_priority(priority), validate_idempotency_key(idempotency_key)
+    session = _session(database, actor, organization)
+    # l'effacement porte sur l'organisation entiere, toutes boutiques confondues (D-056)
+    return _enqueue(session, JobType.REDACT_CUSTOMER, {"customer_ref": reference}, store_id=None,
+                    priority=priority, idempotency_key=idempotency_key)
+
+
 def list_jobs(database: Database, *, actor: Any, organization: Any, status: Optional[List[str]] = None,
               job_type: Optional[List[str]] = None, store: Any = None, limit: Any = 50) -> Dict[str, Any]:
     statuses = _choices(status, [s.value for s in JobStatus], "status")
@@ -926,6 +964,7 @@ __all__ = [
     "upload_object", "validate_local_source", "validate_source_kind",
     "create_connection",
     "create_organization", "create_store", "demo_provision", "enqueue_analysis", "enqueue_import", "enqueue_purge",
+    "enqueue_redact", "validate_customer_ref",
     "ensure_user", "guarded", "job_statistics", "list_audit_events", "list_jobs", "list_members",
     "list_organizations", "list_service_authorizations", "list_stores", "render_job", "resolve_actor",
     "revoke_service", "show_job", "show_organization", "translate",

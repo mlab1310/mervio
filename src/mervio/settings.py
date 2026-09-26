@@ -37,7 +37,9 @@ Bibliotheque standard uniquement: ce module n'importe ni pilote de base ni persi
     MERVIO_S3_ENDPOINT_URL                    -             surcharge d'endpoint (tests, fournisseur tiers)
     MERVIO_S3_REGION                          -             region S3
     MERVIO_IDENTITY_MASTER_KEY (ou ..._FILE)  -             hexadecimal, 32 octets au moins; OBLIGATOIRE si le
-                                                            worker traite des imports (cle maitre d'identite, D-053)
+                                                            worker traite des imports, et pour
+                                                            `worker resolve-customer-ref`
+                                                            (cle maitre d'identite, D-053, D-062)
 
 Le nom du principal de service n'est pas configurable: la base le derive du role de
 connexion (revision 0007).
@@ -210,6 +212,29 @@ class HealthCheckSettings:
 
 
 @dataclass(frozen=True)
+class ResolutionSettings:
+    """Ce que lit `mervio worker resolve-customer-ref` (004.4.5 E6, D-062): la connexion et la
+    cle maitre, rien d'autre.
+
+    Meme raison d'etre que `HealthCheckSettings`: une commande n'exige que ce qu'elle emploie.
+    Une resolution ne lit aucun objet brut, n'ecrit aucune sante et ne prend aucun travail --
+    exiger `MERVIO_OBJECT_STORE_ROOT`, un nom de worker ou un fichier de sante ferait echouer,
+    pour une raison etrangere, une commande par ailleurs parfaitement realisable.
+
+    La cle maitre est OBLIGATOIRE ici, alors qu'elle ne l'est pour le worker que s'il sert des
+    imports: sans elle, il n'y a simplement rien a resoudre (D-062, modes d'echec).
+    """
+
+    database_url: Secret = field(repr=False)
+    #: cle maitre d'identite (hexadecimal); jamais affichee, jamais en base (D-053)
+    identity_master_key: Secret = field(repr=False)
+
+    @classmethod
+    def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "ResolutionSettings":
+        return _Reader(os.environ if environ is None else environ, socket.gethostname).resolution()
+
+
+@dataclass(frozen=True)
 class AdminSettings:
     """Ce que lit `mervio admin` (004.3.7): la connexion applicative, rien d'autre.
 
@@ -326,7 +351,9 @@ class _Reader:
             name = name + "_FILE"
         if not direct:
             if required:
-                self.fail("MERVIO_IDENTITY_MASTER_KEY", "obligatoire pour les travaux import (cle maitre d'identite)")
+                self.fail("MERVIO_IDENTITY_MASTER_KEY",
+                          "obligatoire pour les travaux import et pour resolve-customer-ref "
+                          "(cle maitre d'identite)")
             return None
         try:
             parse_hex_key(direct)
@@ -414,6 +441,13 @@ class _Reader:
         return HealthCheckSettings(health_file=health_file, health_max_age_seconds=max_age,
                                    degraded_grace_seconds=degraded_grace)
 
+    def resolution(self) -> "ResolutionSettings":
+        database_url = self.database_url()
+        identity_master_key = self.identity_master_key(required=True)
+        if self.problems:
+            raise SettingsError(self.problems)
+        return ResolutionSettings(database_url=database_url, identity_master_key=identity_master_key)
+
     def admin(self) -> "AdminSettings":
         database_url = self.database_url()
         # `mervio admin object upload` depose des octets: le magasin est facultatif tant qu'aucune
@@ -466,5 +500,5 @@ class _Reader:
 
 
 __all__ = ["ENVIRONMENTS", "JOB_TYPES", "LOG_FORMATS", "OBJECT_STORE_DRIVERS", "AdminSettings",
-           "HealthCheckSettings", "ObjectStoreSettings", "Secret",
+           "HealthCheckSettings", "ObjectStoreSettings", "ResolutionSettings", "Secret",
            "SettingsError", "WorkerSettings", "describe_database_url"]

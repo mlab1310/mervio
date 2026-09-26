@@ -280,8 +280,9 @@ def test_a_missing_identity_master_key_exits_with_code_2_when_imports_are_served
     code, lines, _ = run_refused({"MERVIO_DATABASE_URL": "postgresql://w@db/mervio",
                                   "MERVIO_OBJECT_STORE_ROOT": "/var/lib/mervio/objects"})
     assert code == 2
-    assert lines[0]["problems"] == [{"variable": "MERVIO_IDENTITY_MASTER_KEY",
-                                     "rule": "obligatoire pour les travaux import (cle maitre d'identite)"}]
+    assert lines[0]["problems"] == [
+        {"variable": "MERVIO_IDENTITY_MASTER_KEY",
+         "rule": "obligatoire pour les travaux import et pour resolve-customer-ref (cle maitre d'identite)"}]
 
 
 def test_a_missing_object_store_exits_with_code_2_when_imports_are_served(restore_logging):

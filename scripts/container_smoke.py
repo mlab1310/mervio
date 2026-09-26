@@ -68,6 +68,9 @@ OBJECT_STORE_VARIABLE = f"MERVIO_OBJECT_STORE_ROOT={OBJECT_STORE_ROOT}"
 #: Codes des commandes du produit (workers.runtime, admin.errors).
 WORKER_EXIT_OK, WORKER_EXIT_CONFIG, WORKER_EXIT_SCHEMA = 0, 2, 4
 ADMIN_EXIT_DATABASE, ADMIN_EXIT_NOT_FOUND = 3, 5
+ADMIN_EXIT_USAGE = 2
+#: Forme canonique d'une reference client (004.4.5, D-062): le resolveur n'en produit pas d'autre.
+CUSTOMER_REF = re.compile(r"^c1:[0-9a-f]{32}$")
 PASSWORD_VARIABLES = ("MERVIO_POSTGRES_PASSWORD", "MERVIO_MIGRATOR_DB_PASSWORD", "MERVIO_APP_DB_PASSWORD",
                       "MERVIO_WORKER_DB_PASSWORD")
 #: cle maitre d'identite du worker (004.4.2): obligatoire des que le worker traite des imports
@@ -548,6 +551,97 @@ class Smoke:
                     "RLS: le worker lit des donnees metier sans delegue")
         self.expect(self.scalar("SELECT count(*) FROM orders") != "0", "isolation: aucune commande importee")
 
+    def check_resolution(self, demo: Dict[str, str]) -> None:
+        """Frontiere de D-062 dans le vrai runtime (004.4.5 E6): qui peut resoudre, et qui ne peut pas.
+
+        Executee APRES l'arret du worker long: le resolveur est une commande PONCTUELLE, lancee dans
+        un conteneur jetable du service `worker` (c'est lui, et lui seul, qui porte la cle maitre).
+        Le travail d'effacement mis en file reste donc `queued`, ce qui rend ce controle deterministe
+        -- il porte sur la FRONTIERE et sur la CHARGE UTILE, pas sur l'execution de l'effacement,
+        deja couverte par tests/persistence/test_customer_erasure_handler.py.
+        """
+        self.step("resolution: le worker resout, admin ne peut pas (D-062)")
+        organization = identifier(demo["organization"])
+        identity = "smoke-resolve@example.invalid"
+        # etat AVANT toute resolution: c'est lui qui prouve qu'elle n'ecrit rien
+        salts = self.scalar("SELECT count(*) FROM organization_identity_keys")
+        events = self.scalar("SELECT count(*) FROM audit_events")
+
+        # 1. le worker resout: la derniere ligne de stdout est la reference, et rien d'autre
+        first = self.resolve(organization, identity)
+        self.expect(CUSTOMER_REF.fullmatch(first), f"resolution: sortie inattendue {first!r}")
+
+        # 2. deterministe: meme identite, meme organisation, meme reference
+        self.expect(self.resolve(organization, identity) == first, "resolution: non deterministe")
+        # ... et l'identite n'est pas la reference: la casse ne change rien, l'identite ne sort pas
+        self.expect(self.resolve(organization, identity.upper()) == first,
+                    "resolution: la normalisation ne suit pas celle de l'import")
+        # 3. la resolution n'a RIEN ecrit: aucun sel cree, aucun evenement d'audit (E' non adoptee)
+        self.expect(self.scalar("SELECT count(*) FROM organization_identity_keys") == salts,
+                    "resolution: une ligne de sel a ete creee ou supprimee")
+        self.expect(self.scalar("SELECT count(*) FROM audit_events") == events,
+                    "resolution: un evenement d'audit de resolution a ete ecrit")
+
+        # 4. stdin, jamais argv: l'option n'existe nulle part
+        helped = self.compose("run", "--rm", "-T", "--entrypoint", "mervio", "worker",
+                              "worker", "resolve-customer-ref", "--help")
+        self.expect("--email" not in helped.stdout and "STDIN" in helped.stdout,
+                    "resolution: l'aide n'impose pas stdin, ou propose une identite en argument")
+
+        # 5. `admin` n'a PAS la cle maitre (et `migrate` non plus), le worker SI
+        self.expect(self.holds_identity_key("worker"), "frontiere: le worker n'a pas la cle maitre")
+        for service in ("admin", "migrate"):
+            self.expect(not self.holds_identity_key(service),
+                        f"frontiere: {service} recoit la cle maitre d'identite")
+
+        # ... et `admin` n'accepte AUCUNE identite comme reference
+        refused = self.admin("job", "enqueue-redact", "--as", OWNER, "--org", organization,
+                             "--customer-ref", identity, expect_code=ADMIN_EXIT_USAGE)
+        self.expect(refused["code"] == "invalid_input", f"admin: une identite acceptee comme reference: {refused}")
+
+        # 6. `admin` met en file la reference DEJA resolue: la charge ne porte qu'un HMAC
+        enqueued = self.admin("job", "enqueue-redact", "--as", OWNER, "--org", organization,
+                              "--customer-ref", first, "--idempotency-key", "smoke-redact")
+        job = identifier(enqueued["job"]["id"])
+        payload = self.scalar(f"SELECT payload::text FROM jobs WHERE id = '{job}'")
+        self.expect(payload == '{"customer_ref": "%s"}' % first, f"charge utile inattendue: {payload}")
+        self.expect(identity not in payload, "charge utile: l'identite du client y figure")
+        self.expect(self.scalar(f"SELECT status FROM jobs WHERE id = '{job}'") == "queued",
+                    "effacement: le travail a ete pris alors que le worker est arrete")
+
+    def holds_identity_key(self, service: str) -> bool:
+        """La cle maitre est-elle dans l'environnement de ce service? (D-062)
+
+        Le test se fait DANS le conteneur et ne publie qu'un mot: ni la valeur, ni le reste de
+        l'environnement. Un `env` complet ferait entrer `MERVIO_DATABASE_URL`, mot de passe inclus,
+        dans le journal du smoke -- c'est-a-dire creerait la fuite qu'il est cense chercher.
+        """
+        probe = f'test -n "${{{IDENTITY_KEY_VARIABLE}:-}}" && echo PRESENT || echo ABSENT'
+        result = self.compose("run", "--rm", "-T", "--entrypoint", "sh", service, "-c", probe)
+        verdict = [line.strip() for line in result.stdout.splitlines() if line.strip() in ("PRESENT", "ABSENT")]
+        self.expect(len(verdict) == 1, f"frontiere: sonde d'environnement muette pour {service}")
+        return verdict[0] == "PRESENT"
+
+    def resolve(self, organization: str, identity: str) -> str:
+        """`worker resolve-customer-ref`: l'identite entre par STDIN, la reference sort sur STDOUT.
+
+        Derniere ligne non vide de stdout, comme `parse_admin`: `docker compose run` publie ses
+        propres messages de cycle de vie, qui ne sont pas la sortie du produit. Ce qui est verifie
+        ici est donc ce que le produit ecrit -- une reference, aucun refus, et jamais l'identite.
+        """
+        result = self.compose("run", "--rm", "-T", "--entrypoint", "mervio", "worker",
+                              "worker", "resolve-customer-ref", "--org", organization, "--as", OWNER,
+                              stdin=identity + "\n")
+        published = result.stdout + result.stderr
+        self.expect("resolution refusee" not in published,
+                    f"resolution: refusee alors qu'elle devait aboutir: {result.stderr[-500:]}")
+        # l'identite entre par stdin et ne doit ressortir NULLE PART (D-062)
+        for form in (identity, identity.lower(), identity.upper()):
+            self.expect(form not in published, "resolution: l'identite fournie apparait dans une sortie")
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        self.expect(bool(lines), f"resolution: aucune sortie (code {result.returncode})")
+        return lines[-1]
+
     def stop_worker(self) -> None:
         self.step("worker: SIGTERM et arret propre")
         container = self.container_id("worker")
@@ -600,6 +694,7 @@ class Smoke:
             demo = self.demonstrate(principal)
             self.check_isolation(demo)
             self.stop_worker()
+            self.check_resolution(demo)
             self.check_leaks()
         except Exception:
             self.dump_logs()

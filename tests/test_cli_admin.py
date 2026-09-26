@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 ORG = "3f0c7c1e-8a55-4d7e-9d0b-6a1f2e0b9c11"
 STORE = "8d7c2a41-0c1a-4b7e-9a55-2f0e6b1d3c22"
 SECRET = "Zq9-admin-cli-s3cr3t"
+#: Reference client canonique DEJA resolue (004.4.5 E6): `admin` n'en calcule jamais aucune.
+CUSTOMER_REF = "c1:0123456789abcdef0123456789abcdef"
 
 #: Toutes les commandes feuilles et un jeu d'arguments valides.
 LEAVES = {
@@ -44,6 +46,7 @@ LEAVES = {
                            "--file", "/srv/s.csv"],
     ("job", "enqueue-analysis"): ["--as", "op|x", "--org", ORG, "--store", STORE, "--snapshot", STORE],
     ("job", "enqueue-purge"): ["--as", "op|x", "--org", ORG],
+    ("job", "enqueue-redact"): ["--as", "op|x", "--org", ORG, "--customer-ref", CUSTOMER_REF],
     ("job", "list"): ["--as", "op|x", "--org", ORG],
     ("job", "show"): ["--as", "op|x", "--org", ORG, "--job", STORE],
     ("job", "cancel"): ["--as", "op|x", "--org", ORG, "--job", STORE],
@@ -65,6 +68,19 @@ def run(*argv, environ=None, database_factory=None):
 
 
 # -- aide et analyse -----------------------------------------------------------------------------
+
+def test_the_duplicated_domains_still_match_their_canonical_definition():
+    """`cli/admin.py` recopie VOLONTAIREMENT ces domaines pour rester importable sans l'extra
+    `persistence`. La contrepartie d'une copie est une garde contre la derive: sans elle, un type
+    de travail ajoute en base resterait invisible a `job list --type` (c'etait le cas de
+    `redact_customer` entre E4 et E6)."""
+    from mervio.persistence.jobs import JobStatus, JobType
+    from mervio.persistence.raw_objects import SOURCE_KINDS
+
+    assert cli_admin.JOB_TYPES == tuple(kind.value for kind in JobType)
+    assert cli_admin.JOB_STATUSES == tuple(status.value for status in JobStatus)
+    assert cli_admin.SOURCE_KINDS == tuple(SOURCE_KINDS)
+
 
 def test_every_leaf_has_a_handler_and_accepts_its_arguments():
     assert set(cli_admin.HANDLERS) == {parse(*leaf, *argv).admin_handler for leaf, argv in LEAVES.items()}

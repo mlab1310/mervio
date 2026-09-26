@@ -9,7 +9,7 @@ Couche MINCE: arguments -> `mervio.admin.operations` -> affichage. Aucune regle 
     mervio admin connection create
     mervio admin service authorize|revoke|list
     mervio admin object upload      --store T --kind KIND --file CHEMIN
-    mervio admin job enqueue-import|enqueue-analysis|enqueue-purge|list|show|cancel|stats
+    mervio admin job enqueue-import|enqueue-analysis|enqueue-purge|enqueue-redact|list|show|cancel|stats
     mervio admin audit list
     mervio admin demo provision     --owner S --data-dir D [--service ROLE]
 
@@ -38,7 +38,7 @@ from ..settings import AdminSettings, SettingsError
 
 _DATABASE_DRIVERS = ("psycopg", "psycopg_binary", "psycopg_c")
 JOB_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled")
-JOB_TYPES = ("import", "analysis", "purge")
+JOB_TYPES = ("import", "analysis", "purge", "redact_customer")
 ASSIGNABLE_ROLES = ("admin", "analyst", "viewer")
 #: Types de source acceptes. Recopies ici VOLONTAIREMENT: la CLI reste importable sans l'extra
 #: `persistence` (barriere verifiee par tests/test_persistence_boundaries.py). Definition
@@ -169,6 +169,13 @@ def add_admin_parser(sub) -> None:
     parser.add_argument("--label")
     leaf(job_group, "enqueue-purge", "job_purge", "met en file une purge de retention (politique par defaut)",
          [scoped, idempotent])
+    parser = leaf(job_group, "enqueue-redact", "job_redact",
+                  "met en file l'effacement d'UN client, designe par une reference DEJA resolue",
+                  [scoped, idempotent])
+    parser.add_argument("--customer-ref", dest="customer_ref", required=True, metavar="REFERENCE",
+                        help="reference client canonique (c1: ou g1: puis 32 hexadecimaux minuscules), "
+                             "obtenue par `mervio worker resolve-customer-ref`; `admin` n'accepte "
+                             "AUCUNE identite directe et ne detient pas la cle maitre (D-062)")
     parser = leaf(job_group, "list", "job_list", "travaux recents", [scoped])
     parser.add_argument("--status", action="append", choices=JOB_STATUSES)
     parser.add_argument("--type", dest="job_type", action="append", choices=JOB_TYPES)
@@ -236,6 +243,9 @@ HANDLERS: Dict[str, Callable[[Any, Any, Any], Dict[str, Any]]] = {
         grain=a.grain, as_of=a.as_of, label=a.label, priority=a.priority, idempotency_key=a.idempotency_key),
     "job_purge": lambda ops, db, a: ops.enqueue_purge(db, actor=a.actor, organization=a.org, priority=a.priority,
                                                       idempotency_key=a.idempotency_key),
+    "job_redact": lambda ops, db, a: ops.enqueue_redact(db, actor=a.actor, organization=a.org,
+                                                        customer_ref=a.customer_ref, priority=a.priority,
+                                                        idempotency_key=a.idempotency_key),
     "job_list": lambda ops, db, a: ops.list_jobs(db, actor=a.actor, organization=a.org, status=a.status,
                                                  job_type=a.job_type, store=a.store, limit=a.limit),
     "job_show": lambda ops, db, a: ops.show_job(db, actor=a.actor, organization=a.org, job=a.job),

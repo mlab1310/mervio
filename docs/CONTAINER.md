@@ -68,7 +68,8 @@ openssl rand -hex 24   # à répéter pour chaque variable
 | `MERVIO_WORKER_DB_PASSWORD` | `mervio_worker_svc` (membre de `mervio_app` et `mervio_worker`) | `worker` |
 
 Et une **clé maître d'identité** (004.4.2, D-053), 32 octets en hexadécimal, lue par le seul
-`worker` (obligatoire dès qu'il traite des imports ; sinon il s'arrête avec le code 2) :
+`worker` (obligatoire dès qu'il traite des imports ; sinon il s'arrête avec le code 2). Elle reste
+absente de `admin` et de `migrate`, et n'entre jamais dans PostgreSQL :
 
 ```bash
 openssl rand -hex 32   # MERVIO_IDENTITY_MASTER_KEY
@@ -76,7 +77,7 @@ openssl rand -hex 32   # MERVIO_IDENTITY_MASTER_KEY
 
 | Variable | Rôle | Utilisé par |
 |---|---|---|
-| `MERVIO_IDENTITY_MASTER_KEY` | clé maître d'identité client : jamais en base, jamais journalisée ; les références client en dérivent via le sel de chaque organisation | `worker` |
+| `MERVIO_IDENTITY_MASTER_KEY` | clé maître d'identité client : jamais en base, jamais journalisée ; les références client en dérivent via le sel de chaque organisation. Aussi requise par `worker resolve-customer-ref` (004.4.5, D-062) | `worker` |
 | `MERVIO_OBJECT_STORE_ROOT` | racine du magasin d'objets bruts (004.4.4, D-054) : `admin` y dépose, le worker y lit. Obligatoire dès que le worker traite des imports ; compose la fixe à `/var/lib/mervio/objects` | `worker`, `admin` |
 
 La perdre bloque les nouveaux imports (refus explicite `identity_key_unavailable`) ; en changer
@@ -92,6 +93,47 @@ en 004.9) ; ne jamais « réparer » en modifiant `master_key_id` en base. Préc
 clé une seule fois, la sauvegarder avant le premier import, donner **la même** clé à tous les
 workers, et vérifier `identity_master_configured` dans l'événement `worker.config` au démarrage.
 Détail : `docs/DECISIONS.md` (D-053, statut 004.4.2).
+
+### Effacer un client : résoudre dans le worker, mettre en file depuis `admin` (004.4.5, D-062)
+
+La demande d'effacement désigne un client par son **e-mail**, alors que la base ne contient qu'un
+HMAC à clé d'organisation. Le seul processus autorisé à faire se rencontrer les deux est le
+`worker`, qui détient **déjà** la clé maître et dérive **déjà** la clé d'organisation à chaque
+import : la résolution ne lui accorde donc aucune capacité nouvelle. `admin` ne reçoit la clé
+maître à aucun moment, et sa commande de mise en file n'accepte **aucune identité directe**.
+
+```bash
+# 1. dans le conteneur worker : l'identité entre par STDIN, jamais en argument (`ps`, historique)
+printf '%s' 'client@example.com' \
+    | docker compose exec -T worker mervio worker resolve-customer-ref --org <org> --as 'ops|moi'
+# stdout : c1:<32 hexadécimaux>, et rien d'autre
+
+# 2. depuis `admin`, avec l'identité de l'humain habilité (rang admin, relu à l'exécution)
+docker compose --profile ops run --rm admin job enqueue-redact \
+    --as 'ops|moi' --org <org> --customer-ref c1:<32 hexadécimaux>
+```
+
+La résolution n'écrit **rien** : ni ligne, ni travail, ni instantané, ni audit, ni log, ni fichier.
+Elle est en lecture stricte — une organisation sans sel d'identité (qui n'a donc jamais produit de
+référence) est **refusée**, jamais initialisée ; un sel détruit de même. `--as` nomme un humain
+membre : le sel n'est lisible par une connexion worker que sous un délégué humain de rang
+`analyst` au moins (révision `0011`).
+
+Vérifier que la frontière tient, sans rien deviner :
+
+```bash
+# `admin` n'a pas la clé maître : la variable est absente de son environnement
+docker compose --profile ops run --rm --entrypoint env admin | grep -c MERVIO_IDENTITY_MASTER_KEY  # 0
+# et il n'accepte aucune identité : l'option n'existe pas
+docker compose --profile ops run --rm admin job enqueue-redact --help | grep -c -- --email          # 0
+```
+
+**Qui peut résoudre, peut ré-identifier.** Exécuter un processus dans le conteneur `worker` suffit
+— c'était déjà techniquement le cas, puisque ce conteneur détient la clé maître. D-062 l'assume
+explicitement : la résolution est gouvernée par l'accès au conteneur, et le contrôle de rang de
+D-052 porte sur la **mise en file** de l'effacement. La résolution n'est **pas auditée par le
+produit** ; la trace est celle du conteneur et du système (`application_name = mervio-resolve` dans
+`pg_stat_activity`). Restreindre `docker exec` sur ce service en conséquence.
 
 Facultatif : `MERVIO_POSTGRES_PORT` (port publié sur 127.0.0.1, défaut 55432), `MERVIO_IMAGE`
 (défaut `mervio:local`), `MERVIO_ENV`, `MERVIO_LOG_LEVEL`, `MERVIO_WORKER_NAME`.

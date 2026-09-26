@@ -368,14 +368,33 @@ def test_a_shadowing_temp_table_cannot_resurrect_a_destroyed_key(db, owner, tena
 
 
 def test_the_identity_key_sql_is_schema_qualified_and_the_trigger_reads_no_table(app_conn):
-    """Garde statique: toute relation de `identity_keys.py` est qualifiee `public.`; le declencheur ne lit rien."""
+    """Garde statique: toute relation de `identity_keys.py` est qualifiee `public.`; le declencheur ne lit rien.
+
+    Chaque `execute` doit etre INSPECTABLE ici: soit un litteral, soit une constante de module
+    (004.4.5 E6 partage le `SELECT` entre l'import et la resolution). Une requete construite
+    autrement echouerait la garde au lieu de lui echapper -- c'est le point de la garde.
+    """
     import ast
     import inspect
     from mervio.persistence import identity_keys
-    statements = [node.args[0].value for node in ast.walk(ast.parse(inspect.getsource(identity_keys)))
-                  if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "execute"
-                  and node.args and isinstance(node.args[0], ast.Constant)]
-    assert len(statements) == 2  # INSERT puis relecture
+    tree = ast.parse(inspect.getsource(identity_keys))
+    constants = {target.id: node.value.value
+                 for node in tree.body if isinstance(node, ast.Assign)
+                 for target in node.targets
+                 if isinstance(target, ast.Name) and isinstance(node.value, ast.Constant)
+                 and isinstance(node.value.value, str)}
+    statements = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "execute" and node.args):
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant):
+            statements.append(first.value)
+        else:
+            assert isinstance(first, ast.Name) and first.id in constants, ast.dump(first)
+            statements.append(constants[first.id])
+    # INSERT de l'import, sa relecture, et la lecture stricte de la resolution (D-062)
+    assert len(statements) == 3
     for statement in statements:
         relations = re.findall(r"\b(?:FROM|INTO|UPDATE|JOIN)\s+([\w.]+)", statement)
         assert relations and all(r == f"public.{KEYS}" for r in relations), statement

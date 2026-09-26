@@ -36,6 +36,7 @@ n'appartient à aucune organisation : elle n'est pas auditée.
 | `job enqueue-import ... --store --connection --shopify-orders UUID ...` | analyst | avec `--idempotency-key` |
 | `job enqueue-analysis ... --store (--snapshot ID \| --from-import JOB)` | analyst | avec `--idempotency-key` |
 | `job enqueue-purge` | owner | avec `--idempotency-key` |
+| `job enqueue-redact ... --customer-ref c1:…` | admin | avec `--idempotency-key` |
 | `job list\|show\|stats` / `job cancel --job ID` | viewer / analyst | lecture / non |
 | `audit list [--action A] [--limit N]` | admin | lecture |
 | `demo provision --owner S --data-dir D [--service ROLE]` | — | oui (rejouable à l'identique) |
@@ -52,6 +53,44 @@ doit être visible depuis son système de fichiers).
 `--as` fait confiance au détenteur des identifiants de base pour nommer l'humain qui agit (même
 limite que SEC-04) : l'autorisation est ensuite entièrement vérifiée en base pour cet humain.
 Le jeton OIDC remplacera ce paramètre avec l'API.
+
+## Effacement d'un client : deux commandes, deux identités (004.4.5, D-062)
+
+`admin` **ne détient pas** la clé maître d'identité et **n'accepte aucune identité directe** :
+aucune option `--email`, pas même facultative. La référence client est un HMAC à clé
+d'organisation, et le seul processus autorisé à la calculer est le **worker**, qui détient déjà
+cette clé et la dérive déjà à chaque import. Le parcours est donc en deux temps :
+
+```bash
+# 1. dans le conteneur worker : l'identité entre par STDIN, la référence sort sur STDOUT
+#    (jamais en argument : `ps` et l'historique du shell le liraient)
+printf '%s' 'client@example.com' \
+    | docker compose exec -T worker mervio worker resolve-customer-ref --org <org> --as 'ops|moi'
+# -> c1:0123456789abcdef0123456789abcdef
+
+# 2. avec l'identité de l'humain habilité : la mise en file ne transporte qu'une référence
+mervio admin job enqueue-redact --as 'ops|moi' --org <org> \
+    --customer-ref c1:0123456789abcdef0123456789abcdef
+```
+
+La première commande n'écrit **rien** : ni ligne, ni travail, ni instantané, ni événement
+d'audit, ni log, ni fichier. Elle est en lecture stricte — une organisation dont le sel
+d'identité n'existe pas (donc qui n'a jamais produit de référence, donc qui n'a rien à effacer)
+est **refusée**, jamais initialisée. `--as` nomme un humain membre de l'organisation : le sel
+n'est lisible par une connexion worker que sous un délégué humain de rang `analyst` au moins
+(révision `0011`), et c'est cette règle-là — pas une nouvelle — qui fixe le plancher.
+
+Sortie : stdout ne porte **que** la référence. Un refus n'écrit rien sur stdout et une ligne
+`resolution refusee: <code>` sur stderr, sans jamais citer l'identité fournie, la clé maître, le
+sel ni la clé dérivée. Codes : 0 résolu · 2 configuration ou résolution refusée · 3 base
+injoignable · 4 schéma non migré. Tous les refus de résolution partagent le code 2 : la valeur de
+sortie ne doit pas devenir l'oracle que les messages évitent d'être.
+
+Limite connue : une référence `g1:` (commande invitée, un client par commande) **n'est pas
+résoluble** depuis une identité client — c'est le HMAC d'un identifiant de commande, pas d'une
+personne. Elle reste effaçable si on la connaît par un autre moyen. La résolution elle-même n'est
+**pas auditée par le produit** (D-062, limitation assumée) : la trace est celle du conteneur et du
+système.
 
 ## Démonstration (données synthétiques)
 
