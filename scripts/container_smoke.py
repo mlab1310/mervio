@@ -711,12 +711,15 @@ class Smoke:
         self.expect(int(self.scalar("SELECT count(*) FROM customer_redactions"))
                     == int(tombstones_before) + 1, "preuve non ecrite, ou ecrite en double")
 
-        # g. audit: l'effacement est trace, sans identite
-        actions = [row[0] for row in self.sql(
-            "SELECT action FROM audit_events WHERE resource_type IN ('job', 'raw_object') "
-            "ORDER BY created_at")]
-        self.expect(any("redact" in action or "purge" in action for action in actions),
-                    f"aucun evenement d'audit d'effacement: {actions}")
+        # g. audit: l'effacement est trace, sans identite, par le vocabulaire RATIFIE de 0014:
+        # `customer.redacted` sur `customer_redaction`. La trace designe la ligne de PREUVE, pas
+        # le travail ni les objets bruts -- et 0015 n'ecrit aucune trace propre a la purge des
+        # octets. Filtrer sur `job` / `raw_object` excluait donc precisement le seul evenement
+        # d'effacement existant: on exige ici le couple ratifie, pas un motif approchant.
+        trail = [tuple(row) for row in self.sql(
+            "SELECT action, resource_type FROM audit_events ORDER BY created_at")]
+        self.expect(("customer.redacted", "customer_redaction") in trail,
+                    f"aucun evenement d'audit d'effacement ratifie: {trail}")
 
         # h. AUCUNE PII nulle part: ni charge utile, ni erreur, ni audit, ni ligne canonique
         self.check_no_identity(identity, reference)
