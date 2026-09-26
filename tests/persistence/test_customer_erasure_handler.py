@@ -378,3 +378,155 @@ def test_the_job_result_carries_counts_and_a_proof_id_but_no_reference(erasable,
         assert secret not in blob, blob
     assert set(result) == {"redaction_id", "orders_tombstoned", "raw_objects_purged",
                            "raw_objects_already_purged"}
+
+
+# =============================================================================================
+# Racine non inscriptible: le contrat d'erreur total, de bout en bout (004.4.5, D-064)
+# =============================================================================================
+#
+# Les tests de panne ci-dessus utilisent un magasin qui leve `ObjectStoreError` DELIBEREMENT. Ils
+# prouvent que le gestionnaire traite bien cette erreur -- ils ne prouvent PAS que le pilote reel la
+# produit. C'est exactement l'ecart qui a permis la contradiction de D-064: le pilote systeme de
+# fichiers laissait echapper un `OSError` nu, qui contournait la branche `object_delete_failed`.
+#
+# Ces tests emploient donc un VRAI `FilesystemObjectStore` sur une racine rendue non inscriptible,
+# c'est-a-dire la situation que produisait le montage `:ro` du worker dans compose.
+
+import os as _os
+
+from mervio.storage import FilesystemObjectStore, ObjectNotFound
+
+
+@pytest.fixture
+def real_store(tmp_path):
+    """Pilote systeme de fichiers REEL, sur une racine jetable."""
+    return FilesystemObjectStore(tmp_path / "objects")
+
+
+@pytest.fixture
+def erasable_on_disk(db, owner, worker_db, principal, real_store, tmp_path):
+    """Un locataire pret a effacer, dont les octets sont sur un VRAI systeme de fichiers."""
+    tenant = make_tenant(db, "d064")
+    authorize_service(tenant.session, principal.id)
+    _sealed_snapshot_with_orders(owner, tenant, [ALICE, ALICE, BOB, GUEST])
+    objects = {}
+    for kind in ("shopify_orders", "stripe", "shopify_products", "google_ads"):
+        object_id = _raw_object(owner, tenant, kind)
+        objects[kind] = object_id
+        real_store.put(_key_of(owner, tenant, object_id), io.BytesIO(PAYLOAD_BYTES))
+    return tenant, objects
+
+
+def _seal(root):
+    """Rend l'arbre non inscriptible: `unlink` devient impossible, comme sous un montage `:ro`."""
+    for entry in sorted(root.rglob("*"), reverse=True):
+        if entry.is_dir():
+            _os.chmod(entry, 0o500)
+    _os.chmod(root, 0o500)
+
+
+def _unseal(root):
+    _os.chmod(root, 0o700)
+    for entry in root.rglob("*"):
+        if entry.is_dir():
+            _os.chmod(entry, 0o700)
+
+
+def test_a_read_only_object_root_is_classified_object_delete_failed_and_stays_purging(
+        erasable_on_disk, owner, worker_db, principal, real_store):
+    """LE test de non-regression de D-064, avec le pilote reel et un `OSError` natif.
+
+    Avant D-064, le `PermissionError` d'`unlink` echappait au pilote, contournait la branche
+    `except ObjectStoreError` du gestionnaire, et etait publie sous un code derive du nom de classe
+    Python (`permission_error`). La ligne restait `purging` par chance, pas par contrat.
+    """
+    tenant, _ = erasable_on_disk
+    root = real_store.root
+    _seal(root)
+    try:
+        with pytest.raises(RetryableJobError) as failure:
+            _run(worker_db, principal, tenant, real_store, _enqueue(tenant))
+    finally:
+        _unseal(root)
+
+    assert failure.value.code == "object_delete_failed", "le code de DOMAINE, pas un nom de classe"
+    assert not isinstance(failure.value, PermanentJobError), "une racine en lecture seule est transitoire"
+    states = _states(owner, tenant)
+    assert states["shopify_orders"] == "purging:-" and states["stripe"] == "purging:-"
+    with owner.transaction():
+        owner.execute("SELECT set_config('app.organization_id', %s, true)", (str(tenant.organization_id),))
+        assert owner.execute("SELECT count(*) FROM raw_objects WHERE state = 'purged'").fetchone() == (0,)
+    # et les octets sont toujours la: rien n'a ete affirme detruit
+    for kind in ("shopify_orders", "stripe"):
+        with real_store.open(_key_of(owner, tenant, _[kind])) as handle:
+            assert handle.read() == PAYLOAD_BYTES
+
+
+def test_the_erasure_succeeds_on_a_writable_root_with_the_real_driver(
+        erasable_on_disk, owner, worker_db, principal, real_store):
+    """Le pendant positif: racine inscriptible, donc les octets partent VRAIMENT du disque."""
+    tenant, objects = erasable_on_disk
+    keys = {kind: _key_of(owner, tenant, object_id) for kind, object_id in objects.items()}
+
+    result = _run(worker_db, principal, tenant, real_store, _enqueue(tenant))
+
+    assert result["raw_objects_purged"] == 2
+    for kind in ("shopify_orders", "stripe"):
+        assert not (real_store.root / keys[kind]).exists(), "les octets doivent avoir quitte le disque"
+        with pytest.raises(ObjectNotFound):
+            with real_store.open(keys[kind]):
+                pass
+    for kind in ("shopify_products", "google_ads"):
+        with real_store.open(keys[kind]) as handle:
+            assert handle.read() == PAYLOAD_BYTES, "un objet sans identite n'est jamais detruit"
+
+
+def test_no_absolute_path_reaches_the_job_error_the_logs_or_the_audit(
+        erasable_on_disk, owner, worker_db, principal, real_store, db):
+    """Le message natif d'`unlink` CITE le chemin absolu. Rien de tout cela ne doit etre publie.
+
+    Deux barrieres, et le test verifie le resultat des deux: le pilote ne met plus le chemin dans
+    l'erreur (D-064), et `jobs._safe_error` redige de toute facon les chemins absolus (004.3).
+    """
+    tenant, _ = erasable_on_disk
+    root = real_store.root
+    job = _enqueue(tenant)
+    log = _NullLog()
+    _seal(root)
+    try:
+        with pytest.raises(RetryableJobError) as failure:
+            _run(worker_db, principal, tenant, real_store, job, log=log)
+    finally:
+        _unseal(root)
+
+    fragments = (str(root), str(root.parent), "/var/lib/mervio", "objects/org")
+    # 1. l'exception elle-meme
+    published = str(failure.value)
+    assert not any(fragment in published for fragment in fragments), published
+    # 2. le journal du worker
+    assert not any(fragment in str(log.events) for fragment in fragments)
+    # 3. l'erreur persistee du travail, telle qu'un operateur la lit
+    _record_failure(worker_db, principal, tenant, job, failure.value)
+    with owner.transaction():
+        owner.execute("SELECT set_config('app.organization_id', %s, true)", (str(tenant.organization_id),))
+        stored, code = owner.execute(
+            "SELECT last_error, last_error_code FROM jobs WHERE id = %s", (job.id,)).fetchone()
+        events = owner.execute("SELECT coalesce(metadata::text, '') FROM audit_events").fetchall()
+    assert code == "object_delete_failed"
+    assert stored and not any(fragment in stored for fragment in fragments), stored
+    # le pilote n'a mis AUCUN chemin dans l'erreur: `_safe_error` n'a donc rien eu a rediger.
+    # C'est la premiere barriere (D-064) qui tient, pas seulement la seconde (004.3).
+    assert "[redacted-path]" not in stored, stored
+    assert "/" not in stored, stored
+    assert "EACCES" in stored or "EROFS" in stored, "la CLASSE d'erreur reste diagnosticable"
+    # 4. l'audit
+    assert not any(fragment in row[0] for row in events for fragment in fragments)
+
+
+def _record_failure(worker_db, principal, tenant, job, error):
+    """Publie l'echec comme le worker le fait, pour lire `jobs.last_error` tel qu'il est persiste."""
+    from mervio.workers.errors import classify
+    claimed = jobs.get_job(tenant.session, job.id)
+    failure = classify(error)
+    jobs.mark_failed(tenant.session, claimed, error_code=failure.code, error=failure.message,
+                     retryable=failure.retryable, worker_id="worker-1")

@@ -41,9 +41,11 @@ from ..persistence.database import Database
 from ..persistence.dispatch import Dispatcher
 from ..persistence.errors import SchemaNotReady, UnsafeDatabaseConfiguration
 from ..persistence.retry import database_error_code, retryable_database_error
+from ..persistence.jobs import JobType
 from ..persistence.service import ServicePrincipal, service_principal
 from ..identity import MasterKey
 from ..settings import BUSY_HEARTBEAT_SECONDS, WorkerSettings, describe_database_url
+from ..storage import DELETE_INCAPABLE, DELETE_UNDETERMINED
 from .handlers import HandlerRegistry, default_registry
 from .lifecycle import HEALTH_STATE, Lifecycle, ProcessState
 from .worker import JobOutcome, Worker, default_worker_id
@@ -107,8 +109,10 @@ class WorkerRuntime:
                  forced_exit_delay: float = 5.0, jitter: Callable[[float, float], float] = random.uniform,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.settings = settings
+        #: magasin REELLEMENT configure: le preflight de D-064 l'interroge, il n'en devine rien
+        self.object_store = _object_store(settings)
         self.registry = registry or default_registry(identity_master=_identity_master(settings),
-                                                     object_store=_object_store(settings))
+                                                     object_store=self.object_store)
         self.database_factory = database_factory
         self.worker_id = default_worker_id(settings.worker_name)
         self.log = (log or get_event_logger("worker")).bind(worker_id=self.worker_id)
@@ -274,6 +278,41 @@ class WorkerRuntime:
                 on_job_start=self._job_started, on_job_end=self._job_ended)
             return
 
+    def _check_delete_capability(self) -> None:
+        """Fail-closed (D-064): servir `redact_customer` exige un magasin capable de DETRUIRE.
+
+        Sans ce controle, une mauvaise configuration -- typiquement un magasin monte en lecture
+        seule -- ne se manifeste qu'au MILIEU d'un effacement: la base a deja fait passer les
+        objets en `purging`, puis la destruction echoue. Le refus a lieu ici, avant la moindre
+        connexion, donc avant qu'aucune ligne n'ait bouge.
+
+        Le verdict vient du magasin lui-meme (`delete_capability`), jamais d'une deduction sur le
+        nom du pilote. `undetermined` est ACCEPTE et journalise: aucun controle non destructif ne
+        peut prouver `s3:DeleteObject`, et l'exigence IAM etroite est reportee a 004.9 (D-064).
+
+        Le refus ne nomme que la REGLE et le pilote: ni racine, ni chemin, ni bucket, ni endpoint.
+        """
+        if JobType.REDACT_CUSTOMER.value not in self.settings.job_types:
+            return
+        driver = self.settings.object_store.driver if self.settings.object_store else None
+        rule = ("un worker qui sert redact_customer doit disposer d'un magasin d'objets "
+                "capable de detruire")
+        if self.object_store is None:
+            self.log.error("worker.object_store_incapable", job_type=JobType.REDACT_CUSTOMER.value,
+                           object_store=driver, capability=None, rule=rule, exit_code=EXIT_CONFIG)
+            raise _Abort(EXIT_CONFIG, "config")
+        capability = self.object_store.delete_capability()
+        if capability == DELETE_INCAPABLE:
+            self.log.error("worker.object_store_incapable", job_type=JobType.REDACT_CUSTOMER.value,
+                           object_store=driver, capability=capability, rule=rule, exit_code=EXIT_CONFIG)
+            raise _Abort(EXIT_CONFIG, "config")
+        if capability == DELETE_UNDETERMINED:
+            # honnete plutot que rassurant: le produit ne PEUT pas verifier la permission ici
+            self.log.warning("worker.object_store_capability_undetermined",
+                             job_type=JobType.REDACT_CUSTOMER.value, object_store=driver,
+                             capability=capability, decision="D-064",
+                             remedy="accorder s3:DeleteObject etroitement (exigence 004.9)")
+
     def _close_databases(self) -> None:
         for database in self._databases:
             try:
@@ -289,6 +328,7 @@ class WorkerRuntime:
         self.log.info("worker.config", **self.settings.public())
         exit_code, reason = EXIT_OK, "stopped"
         try:
+            self._check_delete_capability()
             self._connect()
             self.health.database_ok()
             if not self._stop.is_set():

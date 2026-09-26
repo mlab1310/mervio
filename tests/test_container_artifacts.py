@@ -465,8 +465,10 @@ def test_the_worker_is_hardened_and_healthchecked():
     assert "ports" not in worker and "expose" not in worker
     assert worker["networks"] == ["backend"]
     assert worker["tmpfs"] == ["/run/mervio:uid=10001,gid=10001,mode=0700", "/tmp"]
+    # D-064: le magasin d'objets est monte en ECRITURE (le worker doit pouvoir DETRUIRE, D-056);
+    # les fichiers d'import restent en LECTURE SEULE, hors perimetre de D-064.
     assert worker["volumes"] == ["mervio_data:/var/lib/mervio/data:ro",
-                                 "mervio_objects:/var/lib/mervio/objects:ro"]
+                                 "mervio_objects:/var/lib/mervio/objects"]
     assert "entrypoint" not in worker and "command" not in worker, "l'image lance `mervio worker`"
     assert "user" not in worker, "l'utilisateur non-root de l'image n'est jamais remplace"
     grace = int(worker["stop_grace_period"].rstrip("s"))
@@ -720,8 +722,27 @@ def test_the_worker_can_write_the_scratch_it_materializes_objects_into():
     scratch = [entry for entry in worker["tmpfs"] if tmpfs_mount(entry)[0] == "/tmp"]
     assert scratch == ["/tmp"], worker["tmpfs"]
     assert writable_by("10001", "10001", runc_tmpfs_root(scratch[0], image_directories()))
-    # et la racine des objets est montee en LECTURE SEULE: le worker n'y ecrit jamais (D-054)
-    assert "mervio_objects:/var/lib/mervio/objects:ro" in worker["volumes"]
+
+
+def test_the_worker_object_store_is_writable_and_the_import_files_are_not():
+    """Posture de montage de D-064, et ses limites exactes.
+
+    `unlink` exige le droit d'ecriture sur le repertoire PARENT: POSIX ne connait pas de droit
+    "supprimer" distinct. Un magasin monte `:ro` rend donc l'effacement client (D-056) inexecutable,
+    ce que la CI n'a longtemps pas vu parce que le smoke ne l'executait pas. Ce test fixe la posture
+    ratifiee, et fixe aussi ce qu'elle NE change PAS.
+    """
+    worker = SERVICES["worker"]
+    objects = [v for v in worker["volumes"] if v.startswith("mervio_objects:")]
+    assert objects == ["mervio_objects:/var/lib/mervio/objects"], "aucun suffixe de mode, donc inscriptible"
+    assert not any(v.endswith(":ro") for v in objects), "D-064: le worker doit pouvoir detruire"
+    # ce qui reste INCHANGE: les fichiers d'import restent lus seulement (hors perimetre D-064)
+    assert "mervio_data:/var/lib/mervio/data:ro" in worker["volumes"]
+    # et `admin`, qui DEPOSE les octets, garde son montage en ecriture
+    assert "mervio_objects:/var/lib/mervio/objects" in SERVICES["admin"]["volumes"]
+    # le durcissement du conteneur n'est pas relache pour autant
+    assert worker["read_only"] is True and worker["cap_drop"] == ["ALL"]
+    assert worker["security_opt"] == ["no-new-privileges:true"]
 
 
 def test_the_health_file_lives_on_the_worker_tmpfs_and_is_private():
@@ -745,7 +766,10 @@ def test_the_smoke_negative_worker_uses_the_same_object_store_root_as_compose():
     assert SERVICES["admin"]["environment"]["MERVIO_OBJECT_STORE_ROOT"] == root
     assert f'OBJECT_STORE_ROOT = "{root}"' in smoke
     assert 'OBJECT_STORE_VARIABLE = f"MERVIO_OBJECT_STORE_ROOT={OBJECT_STORE_ROOT}"' in smoke
-    assert smoke.count('"-e", OBJECT_STORE_VARIABLE') == 2  # les deux workers ad-hoc, pas l'admin
+    # Tous les workers ad-hoc du smoke, et eux seuls (jamais l'admin), recoivent CETTE racine:
+    # deux refus de configuration (superutilisateur, cle maitre absente) et, depuis D-064, les deux
+    # conteneurs du preflight (magasin en lecture seule -> refus, puis worker sans effacement -> ok).
+    assert smoke.count('"-e", OBJECT_STORE_VARIABLE') == 4
 
 
 def test_each_role_uses_the_password_its_bootstrap_role_was_created_with():

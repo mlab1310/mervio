@@ -10,7 +10,7 @@ import threading
 from contextlib import contextmanager
 from typing import BinaryIO, Dict, Iterator
 
-from .base import ObjectNotFound, PutResult, copy_and_digest, validate_key
+from .base import DELETE_CAPABLE, ObjectNotFound, PutResult, copy_and_digest, validate_key
 
 
 class MemoryObjectStore:
@@ -46,6 +46,14 @@ class MemoryObjectStore:
         validate_key(key)
         with self._lock:
             self._objects.pop(key, None)
+
+    def delete_capability(self) -> str:
+        """Toujours capable, STRUCTURELLEMENT (D-064): detruire est un `pop` sur un dictionnaire.
+
+        Ce n'est pas un drapeau declaratif susceptible de deriver: il n'existe aucune
+        configuration, aucun montage et aucune permission qui puisse rendre ce pilote incapable.
+        """
+        return DELETE_CAPABLE
 
 
 __all__ = ["MemoryObjectStore"]

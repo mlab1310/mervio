@@ -8,7 +8,9 @@ temporaire, et absence de chemin dans l'audit.
 from __future__ import annotations
 
 import json
+import pathlib
 import tempfile
+import types
 import uuid
 from pathlib import Path
 
@@ -198,3 +200,46 @@ def test_no_path_and_no_filename_appear_in_the_audit_trail(tenant_a):
     assert "/" not in serialized, serialized
     for name in ("shopify_orders.csv", "stripe_transactions.csv", "google_ads.csv"):
         assert name not in serialized
+
+
+# -- semantique de reprise face au contrat d'erreur total (004.4.5, D-064) ----------------------
+
+def test_a_transient_store_failure_on_import_stays_retryable(monkeypatch):
+    """D-064 ne doit pas transformer une panne de magasin passagere en echec DEFINITIF d'import.
+
+    Avant le contrat d'erreur total, un `OSError` nu s'echappait du pilote et `classify` le traitait
+    comme reprenable par defaut. `ObjectStoreError` est un `MervioError`, que `classify` traite au
+    contraire comme PERMANENT: sans branche explicite, le wrapping aurait donc condamne un import
+    qu'un simple rejeu aurait sauve. Ce test fixe la reprenabilite de ce cas.
+
+    `ObjectNotFound` et `ObjectKeyInvalid` restent PERMANENTS: un objet absent ou une cle corrompue
+    ne se reparent pas d'eux-memes.
+    """
+    from mervio.storage import ObjectKeyInvalid, ObjectNotFound, ObjectStoreError
+    from mervio.workers.errors import PermanentJobError, RetryableJobError
+
+    class Broken:
+        def __init__(self, error):
+            self.error = error
+
+        def open(self, key):
+            raise self.error
+
+    record = types.SimpleNamespace(object_key="org/" + "0" * 36 + "/store/" + "0" * 36 + "/raw/" + "0" * 36,
+                                   source_kind="shopify_orders", sha256="0" * 64, byte_size=1)
+
+    cases = [
+        (ObjectStoreError("magasin d'objets: lecture refuse par le systeme (EIO)"),
+         RetryableJobError, "object_read_failed"),
+        (ObjectNotFound(), PermanentJobError, "object_missing"),
+        (ObjectKeyInvalid(), PermanentJobError, "object_key_invalid"),
+    ]
+    for error, expected, code in cases:
+        with tempfile.TemporaryDirectory() as directory:
+            with pytest.raises(expected) as failure:
+                handlers_module._materialize(None, Broken(error), record, pathlib.Path(directory))
+            assert failure.value.code == code, (error, failure.value.code)
+            if expected is RetryableJobError:
+                assert not isinstance(failure.value, PermanentJobError)
+            # jamais de chemin absolu dans le message publie
+            assert directory not in str(failure.value)

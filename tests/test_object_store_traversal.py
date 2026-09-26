@@ -225,3 +225,120 @@ def test_delete_removes_the_object_but_leaves_its_directories(store, root):
     store.delete(target)
     assert not path.exists()
     assert path.parent.is_dir() and root.is_dir()
+
+
+# -- O_NOFOLLOW sur la lecture (004.4.5, D-064) -------------------------------------------------
+#
+# D-061 avait omis `O_NOFOLLOW` en s'appuyant sur trois motifs, dont "la racine est montee en
+# LECTURE SEULE pour le worker". D-064 supprime ce motif (le worker doit pouvoir DETRUIRE, D-056),
+# donc un worker compromis peut desormais planter un lien sous la racine -- la precondition exacte
+# de la fenetre TOCTOU acceptee par D-061.
+#
+# La couche 4 cesse donc d'etre un controle AVANT l'ouverture pour devenir une propriete DE
+# L'OUVERTURE. Le test decisif est celui de la COURSE: il neutralise le controle prealable et
+# verifie que l'ouverture refuse quand meme.
+
+def test_a_symlink_substituted_after_the_confinement_check_is_refused_at_open(store, root, tmp_path,
+                                                                             monkeypatch):
+    """LA course de D-061, rendue deterministe: le lien apparait APRES la resolution.
+
+    Le controle prealable de la couche 4 est neutralise pour simuler exactement l'intervalle entre
+    `Path.resolve()` et l'ouverture. Sans `O_NOFOLLOW`, la lecture suivrait le lien et renverrait
+    la donnee de la victime; avec, l'ouverture echoue.
+    """
+    victim = tmp_path / "victim.txt"
+    victim.write_text("donnee-d-un-autre", encoding="utf-8")
+    target = key()
+    path = root.joinpath(*target.split("/"))
+    path.parent.mkdir(parents=True)
+    path.symlink_to(victim)
+
+    # neutralise UNIQUEMENT le refus prealable du lien, en gardant le reste du confinement
+    monkeypatch.setattr(FilesystemObjectStore, "_confined", lambda self, key: path)
+
+    with pytest.raises(ObjectKeyInvalid):
+        with store.open(target):
+            pass
+    assert victim.read_text(encoding="utf-8") == "donnee-d-un-autre", "la victime n'est pas lue"
+
+
+def test_the_raced_symlink_and_the_precheck_are_indistinguishable_to_the_caller(store, root,
+                                                                               monkeypatch):
+    """Meme verdict dans les deux cas: l'appelant ne peut pas deduire s'il a gagne la course.
+
+    Le lien pointe DANS la racine, pour que ce soit bien la couche 4 ("cible liee refusee") qui
+    reponde de part et d'autre: un lien pointant DEHORS serait arrete plus tot, par la couche 3
+    ("cle hors de la racine configuree"), et comparerait deux controles differents.
+    """
+    inside = root / "another-object"
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_text("donnee-d-un-autre", encoding="utf-8")
+    target = key()
+    path = root.joinpath(*target.split("/"))
+    path.parent.mkdir(parents=True)
+    path.symlink_to(inside)
+
+    with pytest.raises(ObjectKeyInvalid) as precheck:
+        with store.open(target):
+            pass
+    monkeypatch.setattr(FilesystemObjectStore, "_confined", lambda self, key: path)
+    with pytest.raises(ObjectKeyInvalid) as raced:
+        with store.open(target):
+            pass
+    assert str(precheck.value) == str(raced.value) == "cible liee refusee"
+    assert inside.read_text(encoding="utf-8") == "donnee-d-un-autre", "jamais lue a travers le lien"
+
+
+def test_a_regular_object_still_opens_and_reads_normally_under_nofollow(store):
+    """`O_NOFOLLOW` ne doit rien changer au cas nominal."""
+    target, payload = key(), b"order_id,total\nA-1,10.00\n"
+    store.put(target, io.BytesIO(payload))
+    with store.open(target) as handle:
+        assert handle.read() == payload
+
+
+def test_a_directory_is_still_not_found_under_nofollow(store, root):
+    """Garde-fou d'implementation: `os.open` NU reussit sur un repertoire.
+
+    Le pilote passe donc par la primitive integree `open(..., opener=...)`, qui conserve le refus
+    `IsADirectoryError` d'`io.open` et le traduit en `ObjectNotFound`. Avec un `os.open` nu, ce
+    test echouerait a la premiere lecture au lieu de l'ouverture -- et le contrat changerait.
+    """
+    target = key()
+    path = root.joinpath(*target.split("/"))
+    path.mkdir(parents=True)
+    with pytest.raises(ObjectNotFound):
+        with store.open(target):
+            pass
+
+
+def test_a_symlinked_parent_inside_the_root_is_still_tolerated_under_nofollow(store, root):
+    """`O_NOFOLLOW` ne porte que sur le DERNIER composant: l'arbitrage de D-061 est preserve."""
+    target = key()
+    parts = target.split("/")
+    real = root / "real-store"
+    real.mkdir(parents=True)
+    parent = root.joinpath(*parts[:-1])
+    parent.parent.mkdir(parents=True, exist_ok=True)
+    parent.symlink_to(real, target_is_directory=True)
+
+    store.put(target, io.BytesIO(b"confine"))
+    with store.open(target) as handle:
+        assert handle.read() == b"confine"
+
+
+def test_the_read_path_actually_requests_nofollow(store, root, monkeypatch):
+    """Preuve directe que le drapeau est demande, pas seulement que le comportement coincide."""
+    target = key()
+    store.put(target, io.BytesIO(b"payload"))
+    seen = []
+    real_open = os.open
+
+    def recording(path, flags, *args, **kwargs):
+        seen.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording)
+    with store.open(target) as handle:
+        handle.read()
+    assert seen and all(flags & os.O_NOFOLLOW for flags in seen), seen

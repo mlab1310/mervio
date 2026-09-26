@@ -303,3 +303,244 @@ def test_a_key_can_be_written_again_after_being_deleted(store):
 def test_delete_is_part_of_the_protocol_on_every_driver(store):
     """Parite: les trois pilotes exposent la MEME methode, appelable de la meme facon (D-055)."""
     assert callable(getattr(store, "delete", None))
+
+
+# =============================================================================================
+# Contrat d'erreur TOTAL et capacite de destruction (004.4.5, D-064)
+# =============================================================================================
+#
+# D-064 etend le contrat: aucune exception NATIVE de pilote ne franchit l'abstraction. Ces tests
+# provoquent de VRAIS echecs de pilote -- systeme de fichiers non inscriptible, fournisseur qui
+# refuse -- et verifient que ce qui sort est un `ObjectStoreError`, sans valeur dans le message.
+#
+# Pourquoi cela compte: le gestionnaire d'effacement client classe `ObjectStoreError` en
+# `object_delete_failed` REPRENABLE. Une exception native contournait cette branche et publiait un
+# code derive du nom de classe Python (`permission_error`), en laissant la ligne `purging`.
+#
+# Ces tests ne passent PAS par la fixture `store` parametree: ils sont specifiques au pilote, parce
+# qu'un echec natif se provoque differemment sur un systeme de fichiers et chez un fournisseur.
+
+import errno as _errno
+import os as _os
+
+from mervio.storage import (
+    DELETE_CAPABILITIES, DELETE_CAPABLE, DELETE_INCAPABLE, DELETE_UNDETERMINED, ObjectStoreError,
+)
+
+#: Fragments qui ne doivent JAMAIS apparaitre dans un message d'erreur de magasin.
+FORBIDDEN_IN_MESSAGE = ("/", "\\", "mervio-objects", "mervio_objects", "amazonaws", "http")
+
+
+def _unwritable(path):
+    """Rend l'arbre non inscriptible, comme un montage `:ro` du point de vue de `unlink`."""
+    for entry in sorted(path.rglob("*"), reverse=True):
+        if entry.is_dir():
+            _os.chmod(entry, 0o500)
+    _os.chmod(path, 0o500)
+
+
+def _restore(path):
+    _os.chmod(path, 0o700)
+    for entry in path.rglob("*"):
+        if entry.is_dir():
+            _os.chmod(entry, 0o700)
+
+
+def _assert_safe(exc: BaseException) -> str:
+    """Un echec de magasin: jamais une exception native, jamais une valeur dans le message."""
+    assert isinstance(exc, ObjectStoreError), type(exc)
+    assert not isinstance(exc, OSError), "une exception native a franchi l'abstraction"
+    message = str(exc)
+    for fragment in FORBIDDEN_IN_MESSAGE:
+        assert fragment not in message, (fragment, message)
+    return message
+
+
+# -- pilote systeme de fichiers ----------------------------------------------------------------
+
+def test_the_filesystem_driver_never_lets_a_native_oserror_escape_from_delete(tmp_path):
+    """LE cas de D-064: racine non inscriptible, donc `unlink` refuse par le systeme."""
+    root = tmp_path / "objects"
+    store = FilesystemObjectStore(root)
+    target = key()
+    store.put(target, io.BytesIO(b"payload"))
+    _unwritable(root)
+    try:
+        with pytest.raises(ObjectStoreError) as refused:
+            store.delete(target)
+    finally:
+        _restore(root)
+    message = _assert_safe(refused.value)
+    # la CLASSE d'erreur est conservee, elle seule: un operateur doit pouvoir diagnostiquer
+    assert _errno.errorcode[_errno.EACCES] in message or _errno.errorcode[_errno.EROFS] in message
+    assert "destruction" in message
+
+
+def test_the_filesystem_driver_never_lets_a_native_oserror_escape_from_put(tmp_path):
+    root = tmp_path / "objects"
+    store = FilesystemObjectStore(root)
+    root.mkdir(parents=True)
+    _unwritable(root)
+    try:
+        with pytest.raises(ObjectStoreError) as refused:
+            store.put(key(), io.BytesIO(b"payload"))
+    finally:
+        _restore(root)
+    _assert_safe(refused.value)
+
+
+def test_the_filesystem_driver_never_lets_a_native_oserror_escape_from_open(tmp_path):
+    """Objet present mais illisible: ce n'est pas une absence, c'est un echec de pilote."""
+    root = tmp_path / "objects"
+    store = FilesystemObjectStore(root)
+    target = key()
+    store.put(target, io.BytesIO(b"payload"))
+    path = root.joinpath(*target.split("/"))
+    _os.chmod(path, 0o000)
+    try:
+        with pytest.raises(ObjectStoreError) as refused:
+            with store.open(target):
+                pass
+    finally:
+        _os.chmod(path, 0o600)
+    message = _assert_safe(refused.value)
+    assert not isinstance(refused.value, ObjectNotFound), "illisible n'est pas introuvable"
+    assert "lecture" in message
+
+
+def test_a_genuinely_missing_filesystem_object_is_still_object_not_found(tmp_path):
+    """Non-regression: la traduction ne doit pas avaler la semantique existante."""
+    store = FilesystemObjectStore(tmp_path / "objects")
+    with pytest.raises(ObjectNotFound):
+        with store.open(key()):
+            pass
+
+
+# -- pilote S3 ----------------------------------------------------------------------------------
+
+class _Refusing:
+    """Client S3 qui refuse, comme botocore le fait: une SOUS-CLASSE portant `response`."""
+
+    class Denied(Exception):
+        def __init__(self, code: str) -> None:
+            # botocore cite couramment le bucket dans le message: on verifie qu'il ne ressort pas
+            super().__init__(f"An error occurred ({code}) when calling the operation: "
+                             f"arn:aws:s3:::mervio-objects is denied via https://s3.amazonaws.com")
+            self.response = {"Error": {"Code": code, "Message": "Access Denied"}}
+
+    def __init__(self, code: str = "AccessDenied") -> None:
+        self.code = code
+
+    def upload_fileobj(self, *args, **kwargs):
+        raise self.Denied(self.code)
+
+    def get_object(self, **kwargs):
+        raise self.Denied(self.code)
+
+    def delete_object(self, **kwargs):
+        raise self.Denied(self.code)
+
+
+def _s3(code: str = "AccessDenied"):
+    from mervio.storage.s3 import S3ObjectStore
+    return S3ObjectStore("mervio-objects", client=_Refusing(code))
+
+
+@pytest.mark.parametrize("operation", ["put", "open", "delete"])
+def test_the_s3_driver_never_lets_a_provider_exception_escape(operation):
+    store = _s3()
+    target = key()
+    with pytest.raises(ObjectStoreError) as refused:
+        if operation == "put":
+            store.put(target, io.BytesIO(b"payload"))
+        elif operation == "delete":
+            store.delete(target)
+        else:
+            with store.open(target):
+                pass
+    message = _assert_safe(refused.value)
+    # le CODE du fournisseur est conserve; le message natif, qui cite le bucket et l'endpoint, non
+    assert "AccessDenied" in message
+
+
+def test_the_s3_driver_never_publishes_the_bucket_the_endpoint_or_the_arn():
+    with pytest.raises(ObjectStoreError) as refused:
+        _s3().delete(key())
+    message = str(refused.value)
+    for secretish in ("mervio-objects", "arn:aws", "s3.amazonaws.com", "https://"):
+        assert secretish not in message, (secretish, message)
+
+
+def test_a_missing_s3_key_is_still_object_not_found():
+    """Non-regression: `NoSuchKey` garde sa semantique, il n'est pas noyé dans le contrat total."""
+    with pytest.raises(ObjectNotFound):
+        with _s3("NoSuchKey").open(key()):
+            pass
+
+
+def test_an_s3_delete_of_a_missing_key_stays_idempotent(s3_store):
+    """Contre le vrai moto: detruire une cle absente reste un succes (D-056)."""
+    s3_store.delete(key())
+
+
+# -- capacite de destruction --------------------------------------------------------------------
+
+def test_every_driver_reports_a_known_delete_capability(store):
+    assert store.delete_capability() in DELETE_CAPABILITIES
+
+
+def test_the_capability_of_each_driver_is_the_honest_one(memory_store, filesystem_store, s3_store):
+    """Memoire: capable par construction. Systeme de fichiers: controle vivant. S3: indeterminable.
+
+    S3 rend `undetermined` et NON `capable`: prouver `s3:DeleteObject` exigerait de l'appeler, et
+    un drapeau declaratif deriverait de la politique IAM reelle (D-064 interdit ce faux positif).
+    """
+    assert memory_store.delete_capability() == DELETE_CAPABLE
+    assert filesystem_store.delete_capability() == DELETE_CAPABLE
+    assert s3_store.delete_capability() == DELETE_UNDETERMINED
+
+
+def test_the_filesystem_capability_follows_the_real_root(tmp_path):
+    """Pas un drapeau: le verdict change quand le montage change."""
+    root = tmp_path / "objects"
+    store = FilesystemObjectStore(root)
+    root.mkdir(parents=True)
+    assert store.delete_capability() == DELETE_CAPABLE
+    _unwritable(root)
+    try:
+        assert store.delete_capability() == DELETE_INCAPABLE
+    finally:
+        _restore(root)
+    assert store.delete_capability() == DELETE_CAPABLE
+
+
+def test_the_filesystem_capability_answers_before_the_root_exists(tmp_path):
+    """`put` cree la racine: on interroge le premier ancetre existant, la ou la creation aurait lieu."""
+    store = FilesystemObjectStore(tmp_path / "not-created-yet" / "objects")
+    assert store.delete_capability() == DELETE_CAPABLE
+    _os.chmod(tmp_path, 0o500)
+    try:
+        assert store.delete_capability() == DELETE_INCAPABLE
+    finally:
+        _os.chmod(tmp_path, 0o700)
+
+
+def test_the_capability_check_has_no_side_effect_whatsoever(store):
+    """SANS EFFET DE BORD (D-064): ni sonde destructrice, ni cle creee, ni octet touche."""
+    target, payload = key(), b"intact"
+    store.put(target, io.BytesIO(payload))
+    for _ in range(5):
+        store.delete_capability()
+    with store.open(target) as handle:
+        assert handle.read() == payload
+
+
+def test_the_filesystem_capability_check_creates_no_entry_under_the_root(tmp_path):
+    root = tmp_path / "objects"
+    store = FilesystemObjectStore(root)
+    target = key()
+    store.put(target, io.BytesIO(b"intact"))
+    before = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+    for _ in range(5):
+        assert store.delete_capability() == DELETE_CAPABLE
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) == before

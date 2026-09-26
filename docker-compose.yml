@@ -78,9 +78,13 @@ services:
     volumes:
       # fichiers d'import deposes par `admin`: le worker les LIT seulement
       - mervio_data:/var/lib/mervio/data:ro
-      # 004.4.4: magasin d'objets bruts, partage avec `admin`. Monte en LECTURE SEULE: le worker
-      # resout un raw_object_id sous RLS puis lit des octets, il n'en depose jamais (D-054).
-      - mervio_objects:/var/lib/mervio/objects:ro
+      # 004.4.4: magasin d'objets bruts, partage avec `admin`. Monte en ECRITURE depuis D-064:
+      # l'effacement client (D-056) exige que le worker DETRUISE les octets porteurs d'identite, et
+      # `unlink` exige le droit d'ecriture sur le repertoire parent -- POSIX ne connait pas de droit
+      # "supprimer" distinct. Le worker ne DEPOSE toujours aucun objet (il n'appelle `put` sur aucun
+      # chemin d'execution), mais c'est desormais une propriete du CODE, pas du noyau: ce montage
+      # n'est plus une frontiere de securite. La frontiere reste la ligne `raw_objects` sous RLS.
+      - mervio_objects:/var/lib/mervio/objects
     tmpfs:
       # proprietaire explicite: runc donne au tmpfs le MODE du repertoire de l'image (0750) mais pas
       # son proprietaire (root); sans uid/gid, l'utilisateur 10001 ne pourrait pas ecrire sa sante

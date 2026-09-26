@@ -71,6 +71,15 @@ ADMIN_EXIT_DATABASE, ADMIN_EXIT_NOT_FOUND = 3, 5
 ADMIN_EXIT_USAGE = 2
 #: Forme canonique d'une reference client (004.4.5, D-062): le resolveur n'en produit pas d'autre.
 CUSTOMER_REF = re.compile(r"^c1:[0-9a-f]{32}$")
+#: Jeton de tombstone (D-056): aleatoire, jamais derive du HMAC du client.
+TOMBSTONE = re.compile(r"^redacted:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+#: Types de source PORTEURS d'identite, detruits par un effacement client (D-056). Les autres non.
+IDENTITY_BEARING = ("shopify_orders", "stripe")
+#: Identites du generateur synthetique: structurelles, donc reproductibles sans lire un fichier.
+#: Domaine reserve (`.invalid`): ces adresses ne peuvent designer personne de reel.
+DEMO_IDENTITY = "c{index:07d}@customers.synthetic.invalid"
+#: 1026 clients distincts pour 1500 commandes: une poignee de candidats suffit largement.
+DEMO_CUSTOMER_CANDIDATES = 12
 PASSWORD_VARIABLES = ("MERVIO_POSTGRES_PASSWORD", "MERVIO_MIGRATOR_DB_PASSWORD", "MERVIO_APP_DB_PASSWORD",
                       "MERVIO_WORKER_DB_PASSWORD")
 #: cle maitre d'identite du worker (004.4.2): obligatoire des que le worker traite des imports
@@ -554,11 +563,11 @@ class Smoke:
     def check_resolution(self, demo: Dict[str, str]) -> None:
         """Frontiere de D-062 dans le vrai runtime (004.4.5 E6): qui peut resoudre, et qui ne peut pas.
 
-        Executee APRES l'arret du worker long: le resolveur est une commande PONCTUELLE, lancee dans
-        un conteneur jetable du service `worker` (c'est lui, et lui seul, qui porte la cle maitre).
-        Le travail d'effacement mis en file reste donc `queued`, ce qui rend ce controle deterministe
-        -- il porte sur la FRONTIERE et sur la CHARGE UTILE, pas sur l'execution de l'effacement,
-        deja couverte par tests/persistence/test_customer_erasure_handler.py.
+        Le resolveur est une commande PONCTUELLE, lancee dans un conteneur jetable du service
+        `worker` (c'est lui, et lui seul, qui porte la cle maitre). Cette etape porte uniquement sur
+        la FRONTIERE: qui peut resoudre, qui ne peut pas, et ce que la resolution n'ecrit pas.
+        L'effacement lui-meme -- mise en file, execution par le VRAI worker, destruction physique des
+        octets -- est la gate de D-064 et appartient a `check_erasure`.
         """
         self.step("resolution: le worker resout, admin ne peut pas (D-062)")
         organization = identifier(demo["organization"])
@@ -599,15 +608,247 @@ class Smoke:
                              "--customer-ref", identity, expect_code=ADMIN_EXIT_USAGE)
         self.expect(refused["code"] == "invalid_input", f"admin: une identite acceptee comme reference: {refused}")
 
-        # 6. `admin` met en file la reference DEJA resolue: la charge ne porte qu'un HMAC
+        # La mise en file et l'EXECUTION appartiennent a `check_erasure`: le worker tourne desormais
+        # pendant cette etape, un travail mis en file ici serait pris immediatement.
+
+    # -- gate de D-064: effacement client REELLEMENT execute dans le conteneur ------------------
+
+    def check_erasure(self, demo: Dict[str, str]) -> None:
+        """LA gate de D-064: le VRAI worker execute `redact_customer` et les octets DISPARAISSENT.
+
+        Jusqu'a D-064, ce parcours n'etait jamais execute ici: le smoke mettait un travail en file
+        et n'attendait pas. C'est exactement ce qui a laisse passer la contradiction entre le
+        montage `:ro` du worker (D-054) et l'obligation de detruire les octets (D-056) -- une CI
+        verte ne disait rien du chemin d'effacement.
+
+        Ce controle prouve la DESTRUCTION PHYSIQUE, pas seulement le passage de la ligne a `purged`:
+        les octets sont constates presents avant, puis absents apres, DANS le volume partage.
+        """
+        self.step("effacement: le vrai worker detruit les octets porteurs d'identite (D-064)")
+        organization = identifier(demo["organization"])
+
+        # a. une identite REELLE et deterministe du jeu de demonstration, resolue par le worker
+        identity, reference, orders = self.demo_customer(organization)
+
+        # b. etat AVANT: les objets porteurs d'identite ont des octets sur le volume
+        before = self.raw_objects()
+        present = self.stored_object_keys()
+        identity_bearing = {kind: row for kind, row in before.items() if kind in IDENTITY_BEARING}
+        other = {kind: row for kind, row in before.items() if kind not in IDENTITY_BEARING}
+        self.expect(len(identity_bearing) >= 1, f"aucun objet porteur d'identite a effacer: {before}")
+        for kind, row in before.items():
+            self.expect(row["state"] == "available", f"{kind}: etat initial {row['state']}")
+            self.expect(row["object_key"] in present, f"{kind}: aucun octet avant l'effacement")
+        tombstones_before = self.scalar("SELECT count(*) FROM customer_redactions")
+
+        # c. mise en file: la charge ne transporte qu'un HMAC, jamais l'identite
+        job = self.enqueue_erasure(organization, reference, identity, key="smoke-redact")
+
+        # d. le VRAI worker prend et execute le travail
+        finished = self.wait_job(organization, job)
+        self.expect(finished["status"] == "succeeded",
+                    f"effacement: {finished['status']} {finished.get('last_error_code')}")
+        self.expect(finished["result"]["raw_objects_purged"] == len(identity_bearing),
+                    f"objets detruits: {finished['result']}")
+
+        # e. PREUVE PHYSIQUE: les octets porteurs d'identite ont quitte le volume
+        after = self.stored_object_keys()
+        for kind, row in identity_bearing.items():
+            self.expect(row["object_key"] not in after,
+                        f"{kind}: les octets sont TOUJOURS sur le volume apres l'effacement")
+        for kind, row in other.items():
+            self.expect(row["object_key"] in after,
+                        f"{kind}: un objet SANS identite a ete detruit (D-056 l'interdit)")
+
+        # f. preuve en base: etats, tombstone, preuve, metadonnees conservees
+        rows = self.raw_objects()
+        for kind, row in rows.items():
+            if kind in IDENTITY_BEARING:
+                self.expect(row["state"] == "purged", f"{kind}: etat {row['state']}, purged attendu")
+                self.expect(row["purged_at"] not in ("", None), f"{kind}: purged_at absent")
+                # la ligne SURVIT avec ses metadonnees non sensibles (D-056)
+                self.expect(row["sha256"] and row["byte_size"] not in ("", None),
+                            f"{kind}: metadonnees non sensibles perdues")
+            else:
+                self.expect(row["state"] == "available", f"{kind}: etat {row['state']} inattendu")
+        self.expect(len(rows) == len(before), "une ligne raw_objects a disparu: elles sont conservees")
+
+        tombstoned = self.sql("SELECT DISTINCT customer_ref FROM orders WHERE customer_ref LIKE 'redacted:%'")
+        self.expect(len(tombstoned) == 1 and TOMBSTONE.fullmatch(tombstoned[0][0]),
+                    f"tombstone absent ou hors forme: {tombstoned}")
+        self.expect(self.scalar(f"SELECT count(*) FROM orders WHERE customer_ref = '{reference}'") == "0",
+                    "la reference effacee subsiste dans les lignes canoniques")
+        self.expect(self.scalar(f"SELECT count(*) FROM orders WHERE customer_ref = '{tombstoned[0][0]}'")
+                    == str(orders), "le nombre de commandes tombstonees ne correspond pas")
+        proof = self.sql("SELECT customer_ref, redacted_ref FROM customer_redactions")
+        self.expect(proof == [[reference, tombstoned[0][0]]], f"preuve d'effacement inattendue: {proof}")
+        self.expect(int(self.scalar("SELECT count(*) FROM customer_redactions"))
+                    == int(tombstones_before) + 1, "preuve non ecrite, ou ecrite en double")
+
+        # g. audit: l'effacement est trace, sans identite
+        actions = [row[0] for row in self.sql(
+            "SELECT action FROM audit_events WHERE resource_type IN ('job', 'raw_object') "
+            "ORDER BY created_at")]
+        self.expect(any("redact" in action or "purge" in action for action in actions),
+                    f"aucun evenement d'audit d'effacement: {actions}")
+
+        # h. AUCUNE PII nulle part: ni charge utile, ni erreur, ni audit, ni ligne canonique
+        self.check_no_identity(identity, reference)
+
+        # i. isolation: l'organisation etrangere de `check_isolation` n'est pas touchee
+        self.expect(self.scalar("SELECT count(*) FROM raw_objects WHERE state = 'purged'")
+                    == str(len(identity_bearing)),
+                    "des objets d'une autre organisation ont ete detruits")
+
+        # j. rejeu: rejouer le MEME effacement ne resurrecte rien et ne double aucune preuve
+        self.check_erasure_replay(organization, reference, identity, tombstoned[0][0], after)
+
+    def check_erasure_replay(self, organization: str, reference: str, identity: str,
+                             tombstone: str, stored: set) -> None:
+        """Rejouer l'effacement est SANS EFFET: ni resurrection, ni seconde preuve, ni echec.
+
+        La fenetre exacte "octets detruits, ligne encore `purging`" n'est pas reproductible de
+        maniere deterministe ici -- il faudrait interrompre le worker au milieu d'une transaction.
+        Elle est prouvee en processus par
+        tests/persistence/test_customer_erasure_handler.py::test_a_retry_after_the_bytes_vanished_still_finalizes_the_row.
+        Ce qui est prouve ICI, dans le vrai conteneur, est la propriete que l'operateur constate:
+        un rejeu aboutit, ne restaure aucun octet et ne cree aucune seconde preuve.
+        """
+        job = self.enqueue_erasure(organization, reference, identity, key="smoke-redact-replay")
+        finished = self.wait_job(organization, job)
+        self.expect(finished["status"] == "succeeded",
+                    f"rejeu de l'effacement: {finished['status']} {finished.get('last_error_code')}")
+        self.expect(finished["result"]["raw_objects_purged"] == 0,
+                    f"le rejeu a pretendu detruire a nouveau: {finished['result']}")
+        self.expect(self.stored_object_keys() == stored, "le rejeu a fait revivre ou detruit des octets")
+        self.expect(self.scalar("SELECT count(*) FROM customer_redactions") == "1",
+                    "le rejeu a ecrit une seconde preuve")
+        self.expect(self.scalar(f"SELECT count(*) FROM orders WHERE customer_ref = '{reference}'") == "0",
+                    "le rejeu a fait revivre la reference effacee")
+        self.expect(self.scalar("SELECT count(*) FROM orders WHERE customer_ref LIKE 'redacted:%'")
+                    != "0" and self.scalar(
+                        f"SELECT count(*) FROM orders WHERE customer_ref = '{tombstone}'") != "0",
+                    "le tombstone a change au rejeu")
+
+    # -- gate de D-064: le preflight face a un montage REELLEMENT en lecture seule ---------------
+
+    def check_delete_preflight(self) -> None:
+        """Montage `:ro` REEL -> EROFS reel -> le worker refuse de demarrer (D-064).
+
+        Ce n'est pas une permission 0500 simulee: le volume est monte en lecture seule par le noyau,
+        exactement comme il l'etait pour le worker avant D-064. Le refus doit arriver AVANT toute
+        connexion, et c'est verifiable: aucun evenement de base n'est publie, et aucun principal de
+        service n'apparait pour ce conteneur.
+
+        L'URL de base est syntaxiquement valide mais injoignable et SANS mot de passe: si le
+        preflight ne refusait pas, l'echec suivant serait une panne de base (code 3), ce qui
+        distingue nettement les deux refus -- et aucun secret n'entre ni dans argv ni dans
+        l'environnement de ce conteneur.
+        """
+        self.step("preflight: un magasin d'objets en lecture seule refuse de servir l'effacement")
+        volume = f"{self.project}_mervio_objects"
+        untouched = self.stored_object_keys()
+        unreachable = f"postgresql://{WORKER_ROLE}@127.0.0.1:1/{DATABASE}"
+        result = self.run(["docker", "run", "--rm", "--read-only", "--tmpfs", HEALTH_TMPFS,
+                           "--volume", f"{volume}:{OBJECT_STORE_ROOT}:ro",
+                           "-e", "MERVIO_DATABASE_URL", "-e", IDENTITY_KEY_VARIABLE,
+                           "-e", OBJECT_STORE_VARIABLE, "-e", "MERVIO_WORKER_JOB_TYPES=redact_customer",
+                           self.image, "worker"],
+                          env=dict(self.environment, MERVIO_DATABASE_URL=unreachable),
+                          check=False, timeout=300)
+        published = result.stdout + result.stderr
+        self.expect(result.returncode == WORKER_EXIT_CONFIG,
+                    f"preflight: code {result.returncode}, {WORKER_EXIT_CONFIG} attendu (EROFS reel)")
+        self.expect("worker.object_store_incapable" in published,
+                    f"preflight: evenement worker.object_store_incapable attendu: {published[-600:]}")
+        self.expect("incapable" in published, "preflight: la capacite constatee n'est pas publiee")
+        # le refus PRECEDE la base: aucune tentative de connexion n'est publiee
+        for forbidden in ("worker.database_connected", "worker.database_unavailable", "worker.ready"):
+            self.expect(forbidden not in published, f"preflight: {forbidden} publie avant le refus")
+        # ni chemin de racine, ni valeur: le refus ne nomme que la regle et le pilote
+        self.expect(OBJECT_STORE_ROOT not in published,
+                    "preflight: la racine du magasin est publiee dans le refus")
+        # aucun effet destructif: le volume est EXACTEMENT celui d'avant le conteneur refuse
+        self.expect(self.stored_object_keys() == untouched,
+                    "preflight: le contenu du volume a change alors que le worker a refuse de demarrer")
+
+        # ... et un worker qui ne sert PAS l'effacement demarre malgre le montage en lecture seule
+        result = self.run(["docker", "run", "--rm", "--read-only", "--tmpfs", HEALTH_TMPFS,
+                           "--volume", f"{volume}:{OBJECT_STORE_ROOT}:ro",
+                           "-e", "MERVIO_DATABASE_URL", "-e", IDENTITY_KEY_VARIABLE,
+                           "-e", OBJECT_STORE_VARIABLE, "-e", "MERVIO_WORKER_JOB_TYPES=import,analysis",
+                           self.image, "worker"],
+                          env=dict(self.environment, MERVIO_DATABASE_URL=unreachable),
+                          check=False, timeout=300)
+        self.expect("worker.object_store_incapable" not in result.stdout + result.stderr,
+                    "preflight: un worker sans effacement ne doit pas etre soumis au controle")
+
+    # -- outils de la gate ----------------------------------------------------------------------
+
+    def demo_customer(self, organization: str):
+        """Un client REEL et deterministe du jeu de demonstration, resolu par le worker.
+
+        Les identites du generateur synthetique sont structurelles (`c<7 chiffres>@<domaine
+        reserve>`), donc reproductibles sans lire aucun fichier. La correspondance est VERIFIEE en
+        base avant l'effacement: on n'efface pas une reference qui ne designe personne, sinon
+        l'assertion de tombstone ne prouverait rien.
+        """
+        for index in range(1, DEMO_CUSTOMER_CANDIDATES + 1):
+            identity = DEMO_IDENTITY.format(index=index)
+            reference = self.resolve(organization, identity)
+            self.expect(CUSTOMER_REF.fullmatch(reference), f"resolution: sortie inattendue {reference!r}")
+            orders = int(self.scalar(
+                f"SELECT count(*) FROM orders WHERE customer_ref = '{reference}'"))
+            if orders:
+                return identity, reference, orders
+        raise SmokeFailure("aucune identite de demonstration ne correspond a une commande importee")
+
+    def raw_objects(self) -> Dict[str, dict]:
+        """Toutes les lignes `raw_objects`, par type de source.
+
+        Lue en superutilisateur du conteneur, donc SANS filtre d'organisation: c'est voulu, cela
+        permet d'affirmer qu'AUCUNE autre organisation n'a vu ses objets touches.
+        """
+        rows = self.sql("SELECT source_kind, object_key, state, coalesce(purged_at::text, ''), "
+                        "sha256, byte_size FROM raw_objects ORDER BY source_kind")
+        return {row[0]: {"object_key": row[1], "state": row[2], "purged_at": row[3],
+                         "sha256": row[4], "byte_size": row[5]} for row in rows}
+
+    def stored_object_keys(self) -> set:
+        """Cles REELLEMENT presentes sur le volume, lues dans un conteneur jetable.
+
+        C'est la preuve PHYSIQUE: la base peut dire `purged`, seul le volume dit si les octets sont
+        partis. Les fichiers vides comptent comme presents -- une troncature n'est pas une
+        destruction (raison pour laquelle D-064 a ecarte l'option B1).
+        """
+        listing = self.compose("run", "--rm", "-T", "--entrypoint", "sh", "worker", "-c",
+                               f"find {OBJECT_STORE_ROOT} -type f -print 2>/dev/null | "
+                               f"sed 's|^{OBJECT_STORE_ROOT}/||' || true")
+        return {line.strip() for line in listing.stdout.splitlines()
+                if line.strip().startswith("org/")}
+
+    def enqueue_erasure(self, organization: str, reference: str, identity: str, *, key: str) -> str:
+        """Met en file l'effacement et verifie que la charge ne porte QU'UN HMAC."""
         enqueued = self.admin("job", "enqueue-redact", "--as", OWNER, "--org", organization,
-                              "--customer-ref", first, "--idempotency-key", "smoke-redact")
+                              "--customer-ref", reference, "--idempotency-key", key)
         job = identifier(enqueued["job"]["id"])
         payload = self.scalar(f"SELECT payload::text FROM jobs WHERE id = '{job}'")
-        self.expect(payload == '{"customer_ref": "%s"}' % first, f"charge utile inattendue: {payload}")
+        self.expect(payload == '{"customer_ref": "%s"}' % reference, f"charge utile inattendue: {payload}")
         self.expect(identity not in payload, "charge utile: l'identite du client y figure")
-        self.expect(self.scalar(f"SELECT status FROM jobs WHERE id = '{job}'") == "queued",
-                    "effacement: le travail a ete pris alors que le worker est arrete")
+        return job
+
+    def check_no_identity(self, identity: str, reference: str) -> None:
+        """L'identite du client ne doit apparaitre NULLE PART: ni en base, ni en log, ni en audit."""
+        local = identity.split("@")[0]
+        for column, table in (("payload::text", "jobs"), ("coalesce(result::text, '')", "jobs"),
+                              ("coalesce(last_error, '')", "jobs"),
+                              ("coalesce(metadata::text, '')", "audit_events"),
+                              ("customer_ref", "orders"), ("object_key", "raw_objects")):
+            found = self.scalar(f"SELECT count(*) FROM {table} WHERE {column} LIKE '%{local}%'")
+            self.expect(found == "0", f"identite du client trouvee dans {table}.{column}")
+        logs = self.compose("logs", "--no-color", "--no-log-prefix", "worker").stdout
+        self.expect(identity not in logs and local not in logs, "identite du client dans les logs du worker")
+        self.expect(reference not in logs, "reference client dans les logs du worker")
 
     def holds_identity_key(self, service: str) -> bool:
         """La cle maitre est-elle dans l'environnement de ce service? (D-062)
@@ -693,8 +934,10 @@ class Smoke:
             self.check_data_volume()
             demo = self.demonstrate(principal)
             self.check_isolation(demo)
-            self.stop_worker()
             self.check_resolution(demo)
+            self.check_erasure(demo)
+            self.stop_worker()
+            self.check_delete_preflight()
             self.check_leaks()
         except Exception:
             self.dump_logs()

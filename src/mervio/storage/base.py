@@ -19,6 +19,21 @@ rejouable: un travail repris ne doit ni echouer sur ce qu'il a deja detruit, ni 
 que ce soit. Aucun joker, aucun prefixe, aucune suppression recursive: la seule unite de
 destruction est la cle canonique, generee cote serveur.
 
+CONTRAT D'ERREUR TOTAL (D-064): aucune exception NATIVE de pilote ne franchit cette
+abstraction. Toute methode des trois pilotes ne leve que `ObjectStoreError` ou une de ses
+sous-classes -- jamais un `OSError`, jamais une exception de botocore. La traduction se fait a
+la frontiere du pilote et conserve la CLASSE d'erreur exploitable (nom `errno` pour POSIX, code
+d'erreur de reponse pour S3) sans jamais interpoler de valeur: ni chemin absolu, ni cle, ni
+bucket, ni endpoint. Motif: l'appelant privilegie de l'effacement client classe `ObjectStoreError`
+en `object_delete_failed` reprenable ; une exception native contournait cette branche et publiait
+un code derive du nom de classe Python.
+
+CAPACITE DE DESTRUCTION (D-064): `delete_capability()` dit si CE magasin, tel qu'il est
+reellement configure, peut detruire. Trois valeurs seulement, et aucune n'est un drapeau
+declaratif: `capable` et `incapable` sont le resultat d'un controle VIVANT et SANS EFFET DE BORD,
+`undetermined` est un aveu d'ignorance. Le worker s'en sert au demarrage pour refuser de servir
+l'effacement client avec un magasin qui ne peut pas detruire (fail-closed).
+
 Hors perimetre: `stat()`, et le ramassage des orphelins (004.9).
 """
 from __future__ import annotations
@@ -45,8 +60,20 @@ OBJECT_KEY_PATTERN = r"^org/[0-9a-f-]{36}/store/[0-9a-f-]{36}/raw/[0-9a-f-]{36}$
 _OBJECT_KEY_RE = re.compile(OBJECT_KEY_PATTERN)
 
 
+#: Capacite de destruction d'un pilote (D-064). AUCUNE de ces valeurs n'est un drapeau declaratif
+#: qu'on pourrait fixer a la main: `capable`/`incapable` sortent d'un controle vivant et sans effet
+#: de bord, et `undetermined` signifie "non determinable ici", jamais "probablement oui".
+DELETE_CAPABLE = "capable"
+DELETE_INCAPABLE = "incapable"
+#: Aucun controle non destructif n'existe (cas S3: prouver `s3:DeleteObject` exigerait de
+#: l'appeler). Le preflight du worker l'ACCEPTE et le journalise; la verification IAM etroite est
+#: reportee a 004.9 par D-064 point 5.
+DELETE_UNDETERMINED = "undetermined"
+DELETE_CAPABILITIES = (DELETE_CAPABLE, DELETE_INCAPABLE, DELETE_UNDETERMINED)
+
+
 class ObjectStoreError(MervioError):
-    """Echec du magasin d'objets."""
+    """Echec du magasin d'objets. Message CLASSE mais sans valeur: ni chemin, ni cle, ni bucket."""
 
 
 class ObjectKeyInvalid(ObjectStoreError):
@@ -136,8 +163,19 @@ class ObjectStore(Protocol):
         """
         ...  # pragma: no cover - protocole
 
+    def delete_capability(self) -> str:
+        """Ce magasin, TEL QU'IL EST CONFIGURE, peut-il detruire? (D-064)
+
+        Rend `DELETE_CAPABLE`, `DELETE_INCAPABLE` ou `DELETE_UNDETERMINED`. SANS EFFET DE BORD:
+        cette methode ne cree, n'ecrit ni ne supprime jamais rien -- un pseudo-controle qui
+        supprimerait une cle inexistante serait de toute facon inutile sur un systeme de fichiers
+        (`unlink` d'une cle absente rend `ENOENT`, que le repertoire soit inscriptible ou non).
+        """
+        ...  # pragma: no cover - protocole
+
 
 __all__ = [
-    "CHUNK_SIZE", "OBJECT_KEY_PATTERN", "ObjectKeyInvalid", "ObjectNotFound", "ObjectStore",
+    "CHUNK_SIZE", "DELETE_CAPABILITIES", "DELETE_CAPABLE", "DELETE_INCAPABLE", "DELETE_UNDETERMINED",
+    "OBJECT_KEY_PATTERN", "ObjectKeyInvalid", "ObjectNotFound", "ObjectStore",
     "ObjectStoreError", "PutResult", "build_object_key", "copy_and_digest", "validate_key",
 ]

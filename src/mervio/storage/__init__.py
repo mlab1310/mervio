@@ -6,7 +6,8 @@ CI et compose) et S3 (`boto3` dans l'extra optionnel `[s3]`, importe a la demand
 from __future__ import annotations
 
 from .base import (
-    CHUNK_SIZE, OBJECT_KEY_PATTERN, ObjectKeyInvalid, ObjectNotFound, ObjectStore, ObjectStoreError,
+    CHUNK_SIZE, DELETE_CAPABILITIES, DELETE_CAPABLE, DELETE_INCAPABLE, DELETE_UNDETERMINED,
+    OBJECT_KEY_PATTERN, ObjectKeyInvalid, ObjectNotFound, ObjectStore, ObjectStoreError,
     PutResult, build_object_key, validate_key,
 )
 from .filesystem import FilesystemObjectStore
@@ -31,7 +32,8 @@ def build_object_store(settings) -> ObjectStore:
     raise ObjectStoreError(f"pilote de magasin d'objets inconnu: {settings.driver}")
 
 __all__ = [
-    "CHUNK_SIZE", "OBJECT_KEY_PATTERN", "FilesystemObjectStore", "MemoryObjectStore",
+    "CHUNK_SIZE", "DELETE_CAPABILITIES", "DELETE_CAPABLE", "DELETE_INCAPABLE", "DELETE_UNDETERMINED",
+    "OBJECT_KEY_PATTERN", "FilesystemObjectStore", "MemoryObjectStore",
     "ObjectKeyInvalid", "ObjectNotFound", "ObjectStore", "ObjectStoreError", "PutResult",
     "build_object_key", "build_object_store", "validate_key",
 ]

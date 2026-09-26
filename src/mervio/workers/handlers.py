@@ -32,7 +32,7 @@ from uuid import UUID
 from ..config import AnalyticsConfig
 from ..identity import MasterKey
 from ..observability.logging import EventLogger, redact_text
-from ..storage import CHUNK_SIZE, ObjectNotFound, ObjectStoreError
+from ..storage import CHUNK_SIZE, ObjectKeyInvalid, ObjectNotFound, ObjectStoreError
 from ..persistence import audit, erasure, jobs, raw_objects
 from ..persistence.audit import Action, ActorType, Outcome, ResourceType
 from ..persistence.codec import file_sha256
@@ -155,6 +155,15 @@ def _materialize(context: JobContext, object_store, recorded, directory: Path) -
             shutil.copyfileobj(source, sink, CHUNK_SIZE)
     except ObjectNotFound:
         raise PermanentJobError("object_missing", "objet brut absent du magasin") from None
+    except ObjectKeyInvalid:
+        # la cle vient de la base, ou son format est contraint: hors forme = corruption, definitif
+        raise PermanentJobError("object_key_invalid", "cle d'objet brut hors forme") from None
+    except ObjectStoreError as exc:
+        # D-064: le contrat d'erreur total fait remonter en `ObjectStoreError` ce qui etait un
+        # `OSError` nu, que `classify` traitait comme REPRENABLE par defaut. Sans cette branche, le
+        # wrapping transformerait une panne de magasin PASSAGERE en echec definitif d'import --
+        # une regression de semantique de reprise que D-064 n'autorise pas.
+        raise RetryableJobError("object_read_failed", redact_text(str(exc))) from None
     digest, size = file_sha256(target)
     if digest != recorded.sha256 or size != recorded.byte_size:
         raise PermanentJobError("object_checksum_mismatch",

@@ -19,7 +19,9 @@ from contextlib import contextmanager
 from typing import BinaryIO, Iterator, Optional
 
 from ..errors import ConfigurationError
-from .base import CHUNK_SIZE, ObjectNotFound, PutResult, validate_key
+from .base import (
+    CHUNK_SIZE, DELETE_UNDETERMINED, ObjectNotFound, ObjectStoreError, PutResult, validate_key,
+)
 
 
 def _boto3():
@@ -72,6 +74,31 @@ class _DigestingReader:
 _MISSING_CODES = frozenset({"NoSuchKey", "NoSuchBucket", "404"})
 
 
+def _provider_code(exc: BaseException) -> Optional[str]:
+    """Code d'erreur de la REPONSE du fournisseur, jamais le nom de classe ni le message.
+
+    botocore fabrique une SOUS-CLASSE par code d'erreur (`NoSuchKey`, ...) plutot qu'un
+    `ClientError` nu: on lit donc la reponse. Les classes de boto3 n'existent qu'avec l'extra,
+    d'ou l'absence de `except ClientError` dans ce module.
+    """
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code")
+        return str(code) if code else None
+    return None
+
+
+def _failure(exc: BaseException, *, what: str) -> ObjectStoreError:
+    """Echec fournisseur traduit SANS valeur (D-064).
+
+    Seul le CODE de reponse est publie -- une classe d'erreur, pas une donnee. Le message natif de
+    botocore est ecarte deliberement: il cite couramment le bucket, et parfois l'endpoint ou l'ARN.
+    Ni bucket, ni endpoint, ni cle, ni identifiant ne franchissent donc cette frontiere.
+    """
+    code = _provider_code(exc) or "unknown"
+    return ObjectStoreError(f"magasin d'objets: {what} refuse par le fournisseur (s3:{code})")
+
+
 class _ClosingBody:
     """Adaptateur mince: le corps renvoye par botocore n'expose pas d'etat `closed` fiable.
 
@@ -113,7 +140,12 @@ class S3ObjectStore:
     def put(self, key: str, source: BinaryIO) -> PutResult:
         validate_key(key)
         reader = _DigestingReader(source)  # ne ferme pas `source`
-        self._client.upload_fileobj(reader, self.bucket, key)
+        try:
+            self._client.upload_fileobj(reader, self.bucket, key)
+        except ObjectStoreError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - les classes boto3 n'existent qu'avec l'extra
+            raise _failure(exc, what="ecriture") from None
         return PutResult(reader.sha256, reader.byte_size)
 
     @contextmanager
@@ -122,13 +154,10 @@ class S3ObjectStore:
         try:
             body = self._client.get_object(Bucket=self.bucket, Key=key)["Body"]
         except Exception as exc:  # noqa: BLE001 - les classes boto3 n'existent qu'avec l'extra
-            # botocore fabrique une SOUS-CLASSE par code d'erreur (`NoSuchKey`, ...), pas un
-            # `ClientError` nu: on lit donc la reponse, jamais le nom de classe.
-            code = getattr(exc, "response", None)
-            code = (code or {}).get("Error", {}).get("Code") if isinstance(code, dict) else None
-            if code in _MISSING_CODES:
+            if _provider_code(exc) in _MISSING_CODES:
                 raise ObjectNotFound() from None
-            raise
+            # contrat total (D-064): aucune exception native ne franchit l'abstraction
+            raise _failure(exc, what="lecture") from None
         handle = _ClosingBody(body)
         try:
             yield handle
@@ -139,11 +168,33 @@ class S3ObjectStore:
         """`delete_object` sur UNE cle. S3 est deja idempotent: une cle absente rend un succes.
 
         Ni `delete_objects` (lot), ni suppression par prefixe, ni versionnement: la seule unite
-        de destruction est la cle. Un `NoSuchBucket` reste une VRAIE erreur et remonte: c'est une
-        erreur de configuration, pas une destruction deja faite.
+        de destruction est la cle. Un `NoSuchBucket` reste une VRAIE erreur et remonte -- c'est une
+        erreur de configuration, pas une destruction deja faite -- mais il remonte desormais en
+        `ObjectStoreError`, jamais en exception botocore nue (D-064).
         """
         validate_key(key)
-        self._client.delete_object(Bucket=self.bucket, Key=key)
+        try:
+            self._client.delete_object(Bucket=self.bucket, Key=key)
+        except ObjectStoreError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - les classes boto3 n'existent qu'avec l'extra
+            raise _failure(exc, what="destruction") from None
+
+    def delete_capability(self) -> str:
+        """`undetermined`, et c'est la seule reponse honnete (D-064 point 5).
+
+        Prouver `s3:DeleteObject` exigerait de l'APPELER. Aucun controle non destructif n'existe:
+        un `delete_object` sur une cle inexistante reussit sans rien detruire sur un bucket non
+        versionne, mais pose un MARQUEUR DE SUPPRESSION sur un bucket versionne -- donc un effet de
+        bord -- et `head_bucket` ou `list_objects` ne prouvent rien de la permission de suppression.
+        Rendre `capable` serait un drapeau declaratif susceptible de deriver de la politique IAM
+        reelle; c'est precisement ce que D-064 interdit.
+
+        Le preflight du worker ACCEPTE cette valeur et la journalise. La verification IAM etroite
+        (`s3:DeleteObject` accorde separement de `s3:PutObject`, restreint par prefixe) est
+        l'exigence de production enregistree par D-064 point 5 et reportee a 004.9.
+        """
+        return DELETE_UNDETERMINED
 
 
 __all__ = ["S3ObjectStore"]

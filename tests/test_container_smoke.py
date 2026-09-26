@@ -283,17 +283,18 @@ def test_the_steps_run_in_order_and_cleanup_comes_last(monkeypatch):
     order = []
     for name in ("prerequisites", "check_image", "start_postgres", "refuse_unmigrated_schema", "migrate",
                  "refuse_privileged_connections", "check_data_volume", "check_isolation", "stop_worker",
-                 "check_resolution", "check_leaks", "cleanup"):
+                 "check_resolution", "check_erasure", "check_delete_preflight", "check_leaks", "cleanup"):
         monkeypatch.setattr(smoke, name, lambda *args, _name=name: order.append(_name))
     monkeypatch.setattr(smoke, "start_worker", lambda: order.append("start_worker") or "principal")
     monkeypatch.setattr(smoke, "demonstrate", lambda principal: order.append(f"demonstrate:{principal}") or {})
     smoke.execute()
-    # `check_resolution` vient APRES `stop_worker`: le resolveur est une commande ponctuelle, et le
-    # travail d'effacement qu'elle met en file doit rester `queued` (004.4.5 E6)
+    # D-064: `check_erasure` s'execute AVANT `stop_worker` -- c'est le VRAI worker qui doit prendre
+    # et executer le travail d'effacement. `check_delete_preflight` vient APRES l'arret: il lance son
+    # propre conteneur jetable avec le volume monte en lecture seule.
     assert order == ["prerequisites", "check_image", "start_postgres", "refuse_unmigrated_schema", "migrate",
                      "refuse_privileged_connections", "start_worker", "check_data_volume",
-                     "demonstrate:principal", "check_isolation", "stop_worker", "check_resolution",
-                     "check_leaks", "cleanup"]
+                     "demonstrate:principal", "check_isolation", "check_resolution", "check_erasure",
+                     "stop_worker", "check_delete_preflight", "check_leaks", "cleanup"]
 
 
 def test_the_image_is_built_only_when_asked():
