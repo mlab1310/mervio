@@ -7,6 +7,7 @@ du pilote lui-meme, avec un executeur de commandes factice.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import secrets
 import subprocess
@@ -354,8 +355,12 @@ def test_negative_connections_pass_their_url_through_the_environment_only():
         assert "postgresql://" not in " ".join(argv)
         assert call["env"]["MERVIO_DATABASE_URL"].startswith("postgresql://")
     superuser, no_key, wrong = runs
-    assert superuser["argv"].count("-e") == 3 and "MERVIO_IDENTITY_MASTER_KEY" in superuser["argv"]
+    assert superuser["argv"].count("-e") == 4 and "MERVIO_IDENTITY_MASTER_KEY" in superuser["argv"]
     assert "MERVIO_IDENTITY_MASTER_KEY" not in no_key["argv"]  # l'absence de cle est le cas teste
+    # ces deux workers negatifs n'activent PAS l'effacement: sinon le preflight de D-064 refuserait
+    # pour incapacite de destruction avant le refus teste (CI 36258539901)
+    for call in (superuser, no_key):
+        assert smoke_module.NEGATIVE_JOB_TYPES in call["argv"], call["argv"]
     assert smoke.passwords["MERVIO_IDENTITY_MASTER_KEY"] not in " ".join(superuser["argv"])  # nom seul
     assert superuser["env"]["MERVIO_DATABASE_URL"].startswith(f"postgresql://{smoke_module.SUPERUSER}:")
     assert no_key["env"]["MERVIO_DATABASE_URL"].startswith(f"postgresql://{smoke_module.WORKER_ROLE}:")
@@ -540,3 +545,57 @@ def test_the_negative_worker_environment_really_satisfies_the_worker_contract():
     with pytest.raises(SettingsError) as refusal:  # sinon le refus precede le controle d'identite
         WorkerSettings.from_env(without)
     assert [name for name, _ in refusal.value.problems] == ["MERVIO_OBJECT_STORE_ROOT"]
+
+
+# -- isolation des scenarios negatifs et du preflight de D-064 ----------------------------------
+
+def test_the_negative_worker_containers_never_activate_the_erasure():
+    """Garde anti-regression de la CI 36258539901.
+
+    Les deux workers ad-hoc de `refuse_privileged_connections` eprouvent des refus d'IDENTITE et de
+    CONFIGURATION. Ils tournent sans volume d'objets et avec une racine en lecture seule: si
+    `redact_customer` y etait actif, le preflight de D-064 refuserait -- correctement -- pour
+    incapacite de destruction, AVANT que le refus teste ne soit atteint. Les deux scenarios doivent
+    rester distincts.
+
+    Le controle est SEMANTIQUE, pas textuel: la variable est passee au vrai lecteur de configuration.
+    """
+    from mervio.persistence.jobs import JobType
+    from mervio.settings import WorkerSettings
+
+    name, _, value = smoke_module.NEGATIVE_JOB_TYPES.partition("=")
+    assert name == "MERVIO_WORKER_JOB_TYPES", smoke_module.NEGATIVE_JOB_TYPES
+
+    settings = WorkerSettings.from_env({
+        "MERVIO_DATABASE_URL": "postgresql://svc@127.0.0.1:5432/mervio",
+        "MERVIO_IDENTITY_MASTER_KEY": "ab" * 32,
+        "MERVIO_OBJECT_STORE_ROOT": "/var/lib/mervio/objects",
+        "MERVIO_WORKER_JOB_TYPES": value,
+    })
+    assert JobType.REDACT_CUSTOMER.value not in settings.job_types, settings.job_types
+    # ... et `import` est CONSERVE: c'est lui qui rend la cle maitre et le magasin obligatoires,
+    # donc c'est lui qui donne leur sens aux deux refus testes.
+    assert JobType.IMPORT.value in settings.job_types, settings.job_types
+
+
+def test_both_negative_worker_containers_carry_the_restriction():
+    """Chaque conteneur ad-hoc de worker de cette etape porte la restriction, aucun ne l'oublie."""
+    source = inspect.getsource(smoke_module.Smoke.refuse_privileged_connections)
+    workers = source.count('self.image, "worker"')
+    assert workers == 2, f"{workers} workers ad-hoc: la garde ci-dessous doit etre mise a jour"
+    assert source.count('"-e", NEGATIVE_JOB_TYPES') == workers
+    assert "redact_customer" not in source
+
+
+def test_the_smoke_shows_ad_hoc_container_output_when_an_assertion_fails():
+    """`docker run` n'apparait pas dans `docker compose logs`: son flux doit sortir a l'echec.
+
+    Sans cela, l'echec d'un refus ad-hoc ne dit pas ce que le conteneur a publie -- exactement ce
+    qui a rendu le diagnostic de la CI 36258539901 indirect.
+    """
+    smoke = make(FakeDocker())
+    result = smoke_module.Result(["docker", "run"], 2, "worker.object_store_incapable\n", "")
+    assert "worker.object_store_incapable" in smoke.tail(result)
+    assert smoke.tail(smoke_module.Result(["docker", "run"], 0, "", "")) == ""
+    source = inspect.getsource(smoke_module.Smoke.refuse_privileged_connections)
+    assert source.count("self.tail(result)") == 4, "chaque refus ad-hoc doit publier sa sortie"

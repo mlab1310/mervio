@@ -65,6 +65,14 @@ HEALTH_TMPFS = f"/run/mervio:uid={IMAGE_UID},gid={IMAGE_UID},mode=0700"
 #: pilote ne touche au systeme de fichiers qu'au premier objet, jamais a la construction.
 OBJECT_STORE_ROOT = "/var/lib/mervio/objects"
 OBJECT_STORE_VARIABLE = f"MERVIO_OBJECT_STORE_ROOT={OBJECT_STORE_ROOT}"
+#: Types de travaux des workers ad-hoc NEGATIFS (`refuse_privileged_connections`). `import` est
+#: CONSERVE parce que c'est lui qui rend la cle maitre et le magasin d'objets OBLIGATOIRES: c'est
+#: exactement ce que ces tests eprouvent, et les retirer dissoudrait leur premisse. En revanche
+#: `redact_customer` est deliberement ABSENT: ces conteneurs n'ont pas le volume d'objets et tournent
+#: avec une racine en LECTURE SEULE, donc le preflight de D-064 refuserait -- a juste titre -- pour
+#: incapacite de destruction AVANT d'atteindre le refus d'identite ou de configuration teste ici.
+#: Ce n'est pas un contournement du preflight: c'est la separation des scenarios negatifs.
+NEGATIVE_JOB_TYPES = "MERVIO_WORKER_JOB_TYPES=import,analysis"
 #: Codes des commandes du produit (workers.runtime, admin.errors).
 WORKER_EXIT_OK, WORKER_EXIT_CONFIG, WORKER_EXIT_SCHEMA = 0, 2, 4
 ADMIN_EXIT_DATABASE, ADMIN_EXIT_NOT_FOUND = 3, 5
@@ -268,6 +276,17 @@ class Smoke:
     def step(self, label: str) -> None:
         self.log(f"container_smoke: {label}")
 
+    def tail(self, result: Result, limit: int = 1200) -> str:
+        """Sortie d'un conteneur ad-hoc, pour le message d'un refus INATTENDU.
+
+        `docker run` n'apparait pas dans `docker compose logs`, et son flux est capture dans
+        `Result`: sans cela, l'echec d'une de ces assertions ne dit PAS ce que le conteneur a
+        publie. C'est ce qui a rendu le diagnostic de la CI 36258539901 indirect. Le texte est
+        nettoye par `expect`, comme tout message de refus.
+        """
+        published = (result.stdout + result.stderr).strip()
+        return f"\n--- sortie du conteneur ---\n{published[-limit:]}" if published else ""
+
     def expect(self, condition: bool, message: str) -> None:
         if not condition:
             raise SmokeFailure(self.redact(message))
@@ -413,25 +432,27 @@ class Smoke:
                          f"@postgres:5432/{DATABASE}")
         result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", HEALTH_TMPFS,
                            "-e", "MERVIO_DATABASE_URL", "-e", IDENTITY_KEY_VARIABLE,
-                           "-e", OBJECT_STORE_VARIABLE, self.image, "worker"],
+                           "-e", OBJECT_STORE_VARIABLE, "-e", NEGATIVE_JOB_TYPES, self.image, "worker"],
                           env=dict(self.environment, MERVIO_DATABASE_URL=superuser_url), check=False, timeout=300)
         self.expect(result.returncode == WORKER_EXIT_CONFIG,
-                    f"worker superutilisateur: code {result.returncode}, 2 attendu")
+                    f"worker superutilisateur: code {result.returncode}, 2 attendu{self.tail(result)}")
         self.expect("worker.identity_refused" in result.stdout + result.stderr,
-                    "worker superutilisateur: evenement worker.identity_refused attendu")
+                    f"worker superutilisateur: evenement worker.identity_refused attendu{self.tail(result)}")
         self.expect(self.scalar("SELECT count(*) FROM users WHERE kind = 'service'") == "0",
                     "worker superutilisateur: un principal a ete enregistre")
         # 004.4.2: sans cle maitre d'identite, le worker (qui traite les imports) refuse de demarrer
         worker_url = (f"postgresql://{WORKER_ROLE}:{self.passwords['MERVIO_WORKER_DB_PASSWORD']}"
                       f"@postgres:5432/{DATABASE}")
         result = self.run(["docker", "run", "--rm", "--network", network, "--read-only", "--tmpfs", HEALTH_TMPFS,
-                           "-e", "MERVIO_DATABASE_URL", "-e", OBJECT_STORE_VARIABLE, self.image, "worker"],
+                           "-e", "MERVIO_DATABASE_URL", "-e", OBJECT_STORE_VARIABLE,
+                           "-e", NEGATIVE_JOB_TYPES, self.image, "worker"],
                           env=dict(self.environment, MERVIO_DATABASE_URL=worker_url), check=False, timeout=300)
         self.expect(result.returncode == WORKER_EXIT_CONFIG,
-                    f"worker sans cle d'identite: code {result.returncode}, 2 attendu")
+                    f"worker sans cle d'identite: code {result.returncode}, 2 attendu{self.tail(result)}")
         self.expect("worker.config_invalid" in result.stdout + result.stderr
                     and IDENTITY_KEY_VARIABLE in result.stdout + result.stderr,
-                    "worker sans cle d'identite: refus de configuration nommant la variable attendu")
+                    f"worker sans cle d'identite: refus de configuration nommant la variable "
+                    f"attendu{self.tail(result)}")
         self.expect(self.scalar("SELECT count(*) FROM users WHERE kind = 'service'") == "0",
                     "worker sans cle d'identite: un principal a ete enregistre")
         wrong = secrets.token_hex(24)
