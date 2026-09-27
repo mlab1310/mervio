@@ -169,13 +169,29 @@ def test_the_same_worker_audit_is_accepted_for_a_real_job(worker_conn, principal
                          resource_id=job.id, on_behalf_of=tenant_a.owner_id)
 
 
-# -- 4. inventaire: plus aucune fonction ne lit une relation par un nom nu ----------------------
+# -- 4. inventaire: plus aucune fonction ne DESIGNE une relation par un nom nu ------------------
+#
+# F-1 (residuel 004.4.1) exigeait d'elargir cet inventaire "au plus tard avec l'introduction des
+# fonctions privilegiees d'ecriture (D-052, 004.4.5 / 004.4.6)". 004.4.5 en a introduit deux sans
+# l'elargir -- sans defaut reel, toutes leurs cibles etant qualifiees, mais avec une garde plus
+# etroite que le risque. D-065 en a fait une consequence explicite, et c'est ici qu'elle est tenue.
+#
+# Ce qui est desormais couvert, en plus de FROM et JOIN:
+#   INSERT INTO <rel>   la cible d'une insertion
+#   UPDATE <rel>        la cible d'une mise a jour
+#   USING <rel>         la source d'un DELETE ... USING
+#   DELETE FROM <rel>   deja couvert par FROM
+#   UPDATE ... FROM     deja couvert par FROM
 
-def _unqualified_relation_reads(conn):
+_DESIGNATIONS = r"(?:FROM|JOIN|USING|UPDATE|INSERT\s+INTO)"
+
+
+def _unqualified_relation_uses(conn):
     relations = [r[0] for r in conn.execute(
         "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm')").fetchall()]
-    pattern = re.compile(r"\b(?:FROM|JOIN)\s+(" + "|".join(map(re.escape, relations)) + r")\b", re.IGNORECASE)
+    pattern = re.compile(_DESIGNATIONS + r"\s+(" + "|".join(map(re.escape, relations)) + r")\b",
+                         re.IGNORECASE)
     found = {}
     for name, source in conn.execute(
             "SELECT p.proname, p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
@@ -186,18 +202,48 @@ def _unqualified_relation_reads(conn):
     return found
 
 
-def test_no_public_function_reads_a_relation_by_an_unqualified_name(owner):
-    assert _unqualified_relation_reads(owner) == {}
+def test_no_public_function_names_a_relation_by_an_unqualified_name(owner):
+    """Lectures ET cibles d'ecriture: une cible non qualifiee serait ombrable par `pg_temp`."""
+    assert _unqualified_relation_uses(owner) == {}
+
+
+def test_the_inventory_would_catch_an_unqualified_write_target(owner):
+    """La garde elargie est elle-meme verifiee: sans cela, un motif casse passerait pour un succes.
+
+    On ne modifie aucune fonction du produit -- on prouve que le MOTIF attrape bien chacune des
+    formes d'ecriture, sur des corps fabriques pour l'occasion.
+    """
+    relations = ["jobs", "orders", "raw_objects"]
+    pattern = re.compile(_DESIGNATIONS + r"\s+(" + "|".join(relations) + r")\b", re.IGNORECASE)
+    for body, expected in (("INSERT INTO jobs VALUES (1)", "jobs"),
+                           ("UPDATE orders SET x = 1", "orders"),
+                           ("DELETE FROM raw_objects WHERE id = 1", "raw_objects"),
+                           ("DELETE FROM public.jobs USING orders WHERE true", "orders"),
+                           ("SELECT 1 FROM jobs", "jobs")):
+        assert pattern.findall(body) == [expected], body
+    for body in ("INSERT INTO public.jobs VALUES (1)", "UPDATE public.orders SET x = 1",
+                 "DELETE FROM public.raw_objects WHERE id = 1"):
+        assert pattern.findall(body) == [], body
 
 
 def test_the_hygiene_changes_no_privilege_and_adds_no_definer(owner):
     definers = owner.execute(
         "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
         "WHERE n.nspname = 'public' AND p.prosecdef ORDER BY 1").fetchall()
-    # 004.4.5: `app_redact_customer` s'y ajoute, etroite et prevue par D-052. Toute AUTRE
-    # fonction `SECURITY DEFINER` doit faire echouer ce test: c'est l'inventaire du privilege.
-    assert definers == [("app_ensure_service_principal",), ("app_finalize_raw_object_purge",),
-                        ("app_redact_customer",)]
+    # 004.4.5: `app_redact_customer` s'y ajoute, etroite et prevue par D-052. 004.4.6 y ajoute
+    # les SEPT operations de purge tenant. Toute AUTRE fonction `SECURITY DEFINER` doit faire
+    # echouer ce test: c'est l'inventaire du privilege.
+    #
+    # `app_purge_guard` en est ABSENTE, et ce n'est pas un oubli: elle porte les gardes D-052
+    # communes aux sept, mais reste `SECURITY INVOKER`. Appelee depuis un definisseur elle
+    # s'execute avec les privileges de celui-ci; appelee directement elle est refusee, faute
+    # d'`EXECUTE` (`REVOKE ALL ... FROM PUBLIC`, aucun `GRANT`). La surface privilegiee du
+    # depot n'augmente donc que des sept operations, pas de huit.
+    assert definers == [("app_close_organization",), ("app_close_store",),
+                        ("app_destroy_identity_key",), ("app_ensure_service_principal",),
+                        ("app_finalize_raw_object_purge",), ("app_purge_finalize_raw_object",),
+                        ("app_purge_tenant_data",), ("app_redact_customer",),
+                        ("app_tombstone_organization",), ("app_tombstone_store",)]
     assert owner.execute("SELECT has_function_privilege('public', 'app_ensure_service_principal()', "
                          "'EXECUTE')").fetchone()[0] is False
     for function in ("analysis_runs_require_sealed_snapshot()", "canonical_rows_guard_sealed()"):
@@ -301,7 +347,7 @@ def test_0010_closes_the_vector_that_0009_left_open_and_downgrades_faithfully(fr
     migrate.upgrade(url, AFTER)
     assert _attacks_succeed(url, ids) == (False, False)
     with psycopg.connect(url, autocommit=True) as conn:
-        assert _unqualified_relation_reads(conn) == {}
+        assert _unqualified_relation_uses(conn) == {}
 
     migrate.downgrade(url, BEFORE)
     assert _residual_objects(url) == before  # corps, droits et politique d'origine, a l'identique

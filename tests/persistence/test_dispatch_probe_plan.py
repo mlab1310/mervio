@@ -374,6 +374,16 @@ def test_the_isolation_boundary_is_unchanged(owner):
             "app_ensure_service_principal",     # 0007
             "app_redact_customer",              # 0014, effacement client (D-052)
             "app_finalize_raw_object_purge",    # 0015, destruction des octets (D-056)
+            # 0016, purge tenant (D-051, D-065). `app_purge_guard`, qui porte leurs gardes
+            # communes, n'y figure PAS: elle est SECURITY INVOKER, donc n'ajoute aucune
+            # surface privilegiee -- c'est ce qui a rendu la garde partagee acceptable.
+            "app_close_organization",
+            "app_close_store",
+            "app_destroy_identity_key",
+            "app_purge_finalize_raw_object",
+            "app_purge_tenant_data",
+            "app_tombstone_organization",
+            "app_tombstone_store",
         }
 
 
