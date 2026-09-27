@@ -231,7 +231,7 @@ def test_the_hygiene_changes_no_privilege_and_adds_no_definer(owner):
         "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
         "WHERE n.nspname = 'public' AND p.prosecdef ORDER BY 1").fetchall()
     # 004.4.5: `app_redact_customer` s'y ajoute, etroite et prevue par D-052. 004.4.6 y ajoute
-    # les SEPT operations de purge tenant. Toute AUTRE fonction `SECURITY DEFINER` doit faire
+    # les HUIT operations de purge tenant. Toute AUTRE fonction `SECURITY DEFINER` doit faire
     # echouer ce test: c'est l'inventaire du privilege.
     #
     # `app_purge_guard` en est ABSENTE, et ce n'est pas un oubli: elle porte les gardes D-052
@@ -243,7 +243,8 @@ def test_the_hygiene_changes_no_privilege_and_adds_no_definer(owner):
                         ("app_destroy_identity_key",), ("app_ensure_service_principal",),
                         ("app_finalize_raw_object_purge",), ("app_purge_finalize_raw_object",),
                         ("app_purge_tenant_data",), ("app_redact_customer",),
-                        ("app_tombstone_organization",), ("app_tombstone_store",)]
+                        ("app_tombstone_organization",), ("app_tombstone_organization_stores",),
+                        ("app_tombstone_store",)]
     assert owner.execute("SELECT has_function_privilege('public', 'app_ensure_service_principal()', "
                          "'EXECUTE')").fetchone()[0] is False
     for function in ("analysis_runs_require_sealed_snapshot()", "canonical_rows_guard_sealed()"):

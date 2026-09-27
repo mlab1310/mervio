@@ -90,7 +90,9 @@ def test_a_read_only_object_store_refuses_startup_with_the_configuration_code(tm
     assert code != EXIT_DATABASE, "le refus precede la connexion, il ne doit pas etre pris pour une panne"
     [refusal] = find(events, "worker.object_store_incapable")
     assert refusal["capability"] == DELETE_INCAPABLE
-    assert refusal["job_type"] == "redact_customer"
+    # D-065 Q8: le refus nomme TOUS les types destructeurs servis -- par defaut, les trois --
+    # pour qu'un operateur sache laquelle de ses configurations l'a declenche.
+    assert refusal["job_type"] == "redact_customer, purge_store, purge_organization"
     assert refusal["object_store"] == "filesystem"
     assert refusal["exit_code"] == EXIT_CONFIG
 
@@ -225,3 +227,40 @@ def test_an_absent_object_store_is_refused_when_the_erasure_is_served(tmp_path, 
     stream = io.StringIO()
     configure(format="json", level=logging.DEBUG, service="worker", stream=stream)
     assert runtime.run().exit_code == EXIT_CONFIG
+
+
+# -- D-065 Q8: les purges arment le meme controle, sans en changer la semantique ----------------
+
+def test_each_destructive_job_type_arms_the_preflight_on_its_own(tmp_path, restore_logging):
+    """Servir UNE SEULE purge suffit a exiger un magasin capable de detruire.
+
+    Le controle ne doit pas dependre de la presence de `redact_customer`: une organisation se
+    purge sans qu'aucun effacement client ne soit jamais servi par ce worker.
+    """
+    root = tmp_path / "objects"
+    unwritable(root)
+    try:
+        for job_type in ("redact_customer", "purge_store", "purge_organization"):
+            code, events = run(settings_for(tmp_path, job_types=job_type, root=root))
+            assert code == EXIT_CONFIG, job_type
+            [refusal] = find(events, "worker.object_store_incapable")
+            assert refusal["job_type"] == job_type
+            assert refusal["capability"] == DELETE_INCAPABLE
+    finally:
+        os.chmod(root, 0o700)
+
+
+def test_a_worker_serving_no_destructive_type_is_never_asked_for_the_capability(tmp_path, restore_logging):
+    """La semantique ne change pas: un worker d'analyse n'a rien a prouver ici.
+
+    Il echoue plus loin, faute de base joignable -- ce qui est precisement la preuve que le
+    preflight ne l'a pas arrete AVANT.
+    """
+    root = tmp_path / "objects"
+    unwritable(root)
+    try:
+        code, events = run(settings_for(tmp_path, job_types="analysis", root=root))
+    finally:
+        os.chmod(root, 0o700)
+    assert find(events, "worker.object_store_incapable") == []
+    assert code != EXIT_CONFIG

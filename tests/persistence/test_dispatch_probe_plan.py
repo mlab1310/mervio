@@ -383,6 +383,7 @@ def test_the_isolation_boundary_is_unchanged(owner):
             "app_purge_finalize_raw_object",
             "app_purge_tenant_data",
             "app_tombstone_organization",
+            "app_tombstone_organization_stores",
             "app_tombstone_store",
         }
 

@@ -16,7 +16,8 @@ PREVIOUS = "0015_raw_object_purge"
 
 PURGE_FUNCTIONS = ("app_close_organization", "app_close_store", "app_destroy_identity_key",
                    "app_purge_finalize_raw_object", "app_purge_tenant_data",
-                   "app_tombstone_organization", "app_tombstone_store")
+                   "app_tombstone_organization", "app_tombstone_organization_stores",
+                   "app_tombstone_store")
 
 CLOSURE_GUARDED = ("stores", "connections", "data_snapshots", "snapshot_sources",
                    "analysis_runs", "reports", "raw_objects", "customer_redactions", "jobs")
@@ -190,3 +191,44 @@ def test_the_closure_trigger_covers_the_entry_points_and_not_the_canonical_table
     assert guarded == set(CLOSURE_GUARDED)
     assert not (guarded & {"orders", "order_lines", "products", "payments", "refunds",
                            "campaigns", "ad_daily_performance"})
+
+
+def test_the_downgrade_restores_the_table_level_insert_grant(staged):
+    """F: la restriction d'`INSERT` sur le cycle de vie se defait EXACTEMENT.
+
+    La montee retire l'`INSERT` de TABLE puis le rend colonne par colonne; la descente doit
+    rendre l'ACL d'origine -- un unique `INSERT` de table, SANS aucune entree de colonne
+    residuelle. Une restauration approximative laisserait des droits de colonne que personne
+    n'aurait decides, et l'empreinte de l'aller-retour ne le dirait pas aussi clairement.
+    """
+    def acl(url):
+        with psycopg.connect(url) as conn:
+            return {row[0]: row[1] for row in conn.execute(
+                "SELECT relname, coalesce(relacl::text, '') FROM pg_class "
+                "WHERE relnamespace = 'public'::regnamespace "
+                "AND relname IN ('organizations', 'stores')").fetchall()}
+
+    def insertable(url, table, column):
+        with psycopg.connect(url) as conn:
+            return conn.execute("SELECT has_column_privilege('mervio_app', %s, %s, 'INSERT')",
+                                (f"public.{table}", column)).fetchone()[0]
+
+    before = acl(staged)
+    migrate.upgrade(staged)
+    for table in ("organizations", "stores"):
+        assert insertable(staged, table, "status") is False, table
+        assert insertable(staged, table, "purged_at") is False, table
+    assert insertable(staged, "organizations", "name") is True
+    assert insertable(staged, "stores", "currency") is True
+
+    migrate.downgrade(staged)
+    assert acl(staged) == before, "l'ACL de table doit revenir a l'identique"
+    for table in ("organizations", "stores"):
+        assert insertable(staged, table, "name") is True, table
+    with psycopg.connect(staged) as conn:
+        residual = conn.execute(
+            "SELECT count(*) FROM information_schema.column_privileges "
+            "WHERE table_schema = 'public' AND grantee = 'mervio_app' "
+            "AND table_name IN ('organizations', 'stores') AND privilege_type = 'INSERT' "
+            "AND column_name IN ('status', 'purged_at')").fetchone()[0]
+    assert residual == 0, "les colonnes de cycle de vie n'existent plus apres la descente"

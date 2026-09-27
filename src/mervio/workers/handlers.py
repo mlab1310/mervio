@@ -33,7 +33,7 @@ from ..config import AnalyticsConfig
 from ..identity import MasterKey
 from ..observability.logging import EventLogger, redact_text
 from ..storage import CHUNK_SIZE, ObjectKeyInvalid, ObjectNotFound, ObjectStoreError
-from ..persistence import audit, erasure, jobs, raw_objects
+from ..persistence import audit, erasure, jobs, raw_objects, tenant_purge
 from ..persistence.audit import Action, ActorType, Outcome, ResourceType
 from ..persistence.codec import file_sha256
 from ..persistence.jobs import JobRecord, JobType
@@ -434,6 +434,128 @@ def make_redact_customer_handler(object_store: Optional[object]) -> Handler:
     return redact_customer_handler
 
 
+# -- purge tenant (004.4.6) -------------------------------------------------------------------
+
+def _destroy_purging_bytes(context: JobContext, object_store) -> Dict[str, int]:
+    """Detruit les octets des objets marques `purging`, puis RETIRE leur ligne.
+
+    L'ORDRE EST LA PROPRIETE DE SECURITE, et c'est le meme qu'a l'effacement: les octets
+    d'abord, la ligne ensuite. Retirer la ligne en premier supprimerait la SEULE trace de ce
+    qu'il faut detruire -- un echec du magasin deviendrait alors des octets orphelins que plus
+    rien ne designe. Il n'existe aucune transaction commune a PostgreSQL et au magasin: la
+    surete vient de l'ordre et de l'idempotence.
+
+    La seule fenetre d'interruption -- octets detruits, ligne encore `purging` -- laisse un
+    objet deja illisible et deja vide; un rejeu redetruit sans erreur puis retire la ligne.
+    """
+    destroyed, already = 0, 0
+    for recorded in tenant_purge.purging_objects(context.session):
+        context.checkpoint()  # un bail perdu arrete la destruction net
+        try:
+            object_store.delete(recorded.object_key)
+        except ObjectStoreError as exc:
+            # La ligne RESTE `purging`: illisible, non detruite, et reprise possible.
+            raise RetryableJobError("object_delete_failed", redact_text(str(exc))) from None
+        if tenant_purge.remove_object(context.session, context.job, recorded.id):
+            destroyed += 1
+        else:
+            already += 1  # rejeu d'une tentative interrompue apres la suppression
+    return {"raw_objects_destroyed": destroyed, "raw_objects_already_destroyed": already}
+
+
+def make_purge_store_handler(object_store: Optional[object]) -> Handler:
+    """Purge d'UNE boutique (D-051, D-065). La boutique vient du travail, jamais de la charge.
+
+    SEQUENCE, dans cet ordre exact:
+
+        1. cloture         0016  boutique -> `purging`, travaux en file annules, objets
+                                 illisibles, audit `store.purge_started`
+        2. les octets      D-064 `ObjectStore.delete`, idempotente, objet par objet
+        3. les lignes      0016  `raw_objects` retirees, une a la fois
+        4. les donnees     0016  rapports -> executions -> instantanes (CASCADE) -> connexions
+        5. pierre tombale  0016  boutique -> `purged`, audit `store.purged`
+
+    CE QUE CETTE PURGE NE TOUCHE PAS, et c'est ratifie: le sel d'identite de l'organisation
+    (D-065 Q4), meme si cette boutique est la derniere; et les preuves `customer_redactions`
+    (Q5), qui sont a l'echelle de l'organisation et attestent d'un effacement demande par une
+    personne, pas d'un fait de boutique. L'organisation, elle, reste vivante.
+    """
+    def purge_store_handler(context: JobContext) -> Dict[str, Any]:
+        if object_store is None:
+            raise PermanentJobError("object_store_unavailable", "magasin d'objets non configure")
+
+        context.checkpoint()
+        closure = tenant_purge.close_store(context.session, context.job)
+        context.log.info("store_purge.closed", jobs_cancelled=closure.jobs_cancelled,
+                         raw_objects_marked=closure.raw_objects_marked)
+
+        bytes_counts = _destroy_purging_bytes(context, object_store)
+        context.checkpoint()
+        counts = tenant_purge.purge_tenant_data(context.session, context.job)
+        context.checkpoint()
+        tenant_purge.tombstone_store(context.session, context.job)
+
+        result = {"jobs_cancelled": closure.jobs_cancelled,
+                  "raw_objects_marked": closure.raw_objects_marked,
+                  **bytes_counts, **counts.as_document()}
+        context.log.info("store_purge.completed", **counts.as_document())
+        return result
+
+    return purge_store_handler
+
+
+def make_purge_organization_handler(object_store: Optional[object]) -> Handler:
+    """Purge d'une ORGANISATION entiere (D-051). Pierre tombale, audit conserve.
+
+    SEQUENCE, dans l'ordre impose par D-051 et par les cles etrangeres reelles:
+
+        1. cloture         0016  organisation -> `purging`, travaux annules, objets illisibles
+        2. le sel          0016  detruit -- ICI SEULEMENT (D-065 Q4, D-053)
+        3. les octets      D-064 detruits, puis les lignes `raw_objects` retirees
+        4. les donnees     0016  rapports -> executions -> instantanes (CASCADE) -> connexions
+                                 -> preuves d'effacement -> travaux (fenetre D-066)
+        5. boutiques       0016  chacune tombstonee
+        6. pierre tombale  0016  organisation -> `purged`, audit `organization.purged`
+
+    LE SEL AVANT LES DONNEES, deliberement: les references client encore presentes deviennent
+    definitivement non reversibles AVANT d'etre supprimees. C'est une propriete, pas un ordre
+    arbitraire.
+
+    LE NETTOYAGE DES TRAVAUX PRECEDE LA PIERRE TOMBALE, et il le doit: apres `purged`, la
+    fenetre D-066 se REFERME et l'etape 10 de D-051 redevient impossible. La fonction de
+    tombstone refuse d'ailleurs tant qu'un objet, un travail ou une boutique subsiste.
+    """
+    def purge_organization_handler(context: JobContext) -> Dict[str, Any]:
+        if object_store is None:
+            raise PermanentJobError("object_store_unavailable", "magasin d'objets non configure")
+
+        context.checkpoint()
+        closure = tenant_purge.close_organization(context.session, context.job)
+        context.log.info("organization_purge.closed", jobs_cancelled=closure.jobs_cancelled,
+                         raw_objects_marked=closure.raw_objects_marked)
+
+        salt_destroyed = tenant_purge.destroy_identity_key(context.session, context.job)
+        bytes_counts = _destroy_purging_bytes(context, object_store)
+        context.checkpoint()
+        counts = tenant_purge.purge_tenant_data(context.session, context.job)
+
+        # Les boutiques sont tombstonees AVANT l'organisation: `app_tombstone_organization`
+        # l'exige, et cet ordre est celui de D-051 -- la portee la plus fine d'abord.
+        context.checkpoint()
+        stores = tenant_purge.tombstone_stores(context.session, context.job)
+        tenant_purge.tombstone_organization(context.session, context.job)
+
+        result = {"jobs_cancelled": closure.jobs_cancelled,
+                  "raw_objects_marked": closure.raw_objects_marked,
+                  "identity_salt_destroyed": salt_destroyed, "stores_tombstoned": stores,
+                  **bytes_counts, **counts.as_document()}
+        context.log.info("organization_purge.completed", stores_tombstoned=stores,
+                         identity_salt_destroyed=salt_destroyed, **counts.as_document())
+        return result
+
+    return purge_organization_handler
+
+
 def default_registry(*, identity_master: Optional[MasterKey] = None,
                      object_store: Optional[object] = None) -> HandlerRegistry:
     """Registre par defaut: un gestionnaire par type declare dans le schema.
@@ -445,4 +567,7 @@ def default_registry(*, identity_master: Optional[MasterKey] = None,
             .register(JobType.IMPORT, make_import_handler(identity_master, object_store))
             .register(JobType.ANALYSIS, analysis_handler)
             .register(JobType.PURGE, purge_handler)
-            .register(JobType.REDACT_CUSTOMER, make_redact_customer_handler(object_store)))
+            .register(JobType.REDACT_CUSTOMER, make_redact_customer_handler(object_store))
+            .register(JobType.PURGE_STORE, make_purge_store_handler(object_store))
+            .register(JobType.PURGE_ORGANIZATION,
+                      make_purge_organization_handler(object_store)))

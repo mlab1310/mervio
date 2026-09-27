@@ -56,6 +56,13 @@ class JobType(str, Enum):
     #: privilegie de D-052. La charge ne porte qu'un `customer_ref` -- un HMAC deja non
     #: reversible, jamais une identite. Le worker ne resout jamais une identite (D-062).
     REDACT_CUSTOMER = "redact_customer"
+    #: 004.4.6 (revision 0016): purge TENANT, sans rapport avec `PURGE` ci-dessus, qui est une
+    #: purge de RETENTION. Les deux semantiques sont opposees -- la retention supprime des
+    #: travaux termines et des evenements expires SANS toucher aux instantanes, rapports ni
+    #: executions; la purge tenant detruit exactement cela et CONSERVE l'audit (D-051).
+    #: La charge ne porte rien: la boutique visee est `jobs.store_id`, contrainte par une FK.
+    PURGE_STORE = "purge_store"
+    PURGE_ORGANIZATION = "purge_organization"
 
 
 class JobStatus(str, Enum):
@@ -93,6 +100,10 @@ ENQUEUE_PERMISSION = {
     JobType.ANALYSIS: Permission.RUN_ANALYSIS,
     JobType.PURGE: Permission.PURGE_DATA,
     JobType.REDACT_CUSTOMER: Permission.REDACT_CUSTOMER,
+    # D-065 Q6: `PURGE_TENANT`, jamais `PURGE_DATA` -- qui peut expirer des journaux ne doit
+    # pas, par la meme permission, pouvoir detruire l'organisation entiere.
+    JobType.PURGE_STORE: Permission.PURGE_TENANT,
+    JobType.PURGE_ORGANIZATION: Permission.PURGE_TENANT,
 }
 
 #: Une charge utile localise une source, elle ne la transporte pas et ne porte aucun secret.

@@ -7,7 +7,7 @@ Create Date: 2026-09-26
 CE QUE FAIT CETTE REVISION
 La couche BASE de la purge tenant, et rien d'autre: statuts et pierres tombales, types de
 travaux cote base, vocabulaire d'audit, motifs de purge, declencheur de cloture, exception
-D-066 au plancher de retention, et les sept operations privilegiees. Aucun gestionnaire,
+D-066 au plancher de retention, et les huit operations privilegiees. Aucun gestionnaire,
 aucune commande, aucune orchestration de magasin d'objets: c'est la phase suivante.
 
 CONTRAT DE SEQUENCE -- CE QUE CETTE REVISION NE LIVRE PAS
@@ -28,8 +28,8 @@ d'aucun gestionnaire et fixe des maintenant le rang `owner` exige.
 GARDE PARTAGEE ENTRE LES SEULES FONCTIONS DE PURGE (revue d'architecture 004.4.6)
 `0014` et `0015` inlinent chacune leur batterie D-052, pour ne pas rouvrir une fonction deja
 ratifiee. Ce motif est PRESERVE: `app_redact_customer` et `app_finalize_raw_object_purge` ne
-sont pas touchees, et restent auditables seules. Entre les SEPT fonctions nouvelles, en
-revanche, la batterie est portee par `app_purge_guard`, pour une raison mesuree: a sept corps,
+sont pas touchees, et restent auditables seules. Entre les HUIT fonctions nouvelles, en
+revanche, la batterie est portee par `app_purge_guard`, pour une raison mesuree: a huit corps,
 la propriete "les batteries sont equivalentes" n'est garantie par rien de structurel, et
 D-065 consignait deja la derive comme risque residuel a DEUX corps.
 
@@ -49,7 +49,7 @@ DEPENDANCE NON ENREGISTREE -- DISCIPLINE D'ORDRE A LA DESCENTE
 Mesure: PostgreSQL n'enregistre AUCUNE entree `pg_depend` entre une fonction plpgsql et les
 fonctions qu'elle appelle -- un corps plpgsql est une chaine opaque. Supprimer le helper
 avant ses appelants REUSSIT donc sans erreur, et laisse des fonctions privilegiees pointant
-dans le vide, detectables seulement au premier appel. La descente ci-dessous retire les sept
+dans le vide, detectables seulement au premier appel. La descente ci-dessous retire les huit
 definisseurs AVANT le helper, et un test verrouille cet ordre: la garantie vient de la
 migration et du test, jamais du moteur.
 
@@ -80,7 +80,7 @@ Mesures sur le schema migre, sous le proprietaire:
       D'ou un `DELETE` unique couvrant toute la portee, jamais un traitement par lots.
 
 DESCENTE
-Les sept definisseurs, puis le helper, puis le declencheur, puis la politique D-066 remplacee
+Les huit definisseurs, puis le helper, puis le declencheur, puis la politique D-066 remplacee
 par la clause de `0004` reproduite LITTERALEMENT, puis les domaines rendus a leur liste
 d'origine, puis les colonnes.
 
@@ -127,6 +127,22 @@ TENANT_PURGE_REASONS = ("store_purge", "organization_purge")
 
 TENANT_STATUSES = ("active", "purging", "purged")
 
+#: Colonnes que `mervio_app` peut inserer sur les deux tables de locataire, APRES cette
+#: revision. `status` et `purged_at` en sont EXCLUES: ce sont les colonnes de cycle de vie, et
+#: l'ancre de D-066 en particulier ne doit etre ecrite que par une fonction privilegiee.
+#:
+#: Pourquoi enumerer, et pourquoi ne pas se contenter d'un `REVOKE` de colonne: MESURE --
+#: `REVOKE INSERT (status) ... FROM role` est SANS EFFET quand `INSERT` a ete accorde au niveau
+#: TABLE (`0001`). `has_column_privilege` reste vrai et l'insertion passe. La seule forme qui
+#: fonctionne est de retirer le privilege de table, puis de le re-accorder colonne par colonne.
+#: Consequence assumee: une colonne ajoutee plus tard ne sera PAS inserable par `mervio_app`
+#: tant qu'on ne l'aura pas ajoutee ici. C'est fail-closed, et c'est voulu sur ces deux tables.
+INSERTABLE_COLUMNS = {
+    "organizations": ("id", "name", "created_at"),
+    "stores": ("id", "organization_id", "name", "currency", "created_at",
+               "timezone", "timezone_source"),
+}
+
 #: vocabulaire d'audit du depot avant cette revision (releve du catalogue, pas de memoire)
 BASE_ACTIONS = (
     "job.enqueued", "job.claimed", "job.succeeded", "job.failed", "job.requeued",
@@ -169,6 +185,24 @@ def _replace_check(table: str, column: str, values, *, validated: bool) -> None:
                f"CHECK ({column} IN ({_in_list(values)})){suffix}")
 
 
+def _restrict_lifecycle_insert(table: str) -> None:
+    """Retire `INSERT` de la table, puis le rend colonne par colonne -- sauf le cycle de vie."""
+    columns = ", ".join(INSERTABLE_COLUMNS[table])
+    op.execute(f"REVOKE INSERT ON public.{table} FROM {APP_ROLE}")
+    op.execute(f"GRANT INSERT ({columns}) ON public.{table} TO {APP_ROLE}")
+
+
+def _restore_table_insert(table: str) -> None:
+    """Rend l'etat d'avant `0016`: un unique `INSERT` de TABLE, sans aucun droit de colonne.
+
+    Verifie: apres ce couple, `relacl` ne porte plus aucune entree de colonne residuelle -- la
+    descente restaure donc le catalogue a l'identique, ce que l'aller-retour controle.
+    """
+    columns = ", ".join(INSERTABLE_COLUMNS[table])
+    op.execute(f"REVOKE INSERT ({columns}) ON public.{table} FROM {APP_ROLE}")
+    op.execute(f"GRANT INSERT ON public.{table} TO {APP_ROLE}")
+
+
 def _replace_purge_reason(values, *, validated: bool) -> None:
     """`0014` a nomme cette contrainte `_known` et lui a donne la forme `IS NULL OR IN (...)`.
 
@@ -182,7 +216,7 @@ def _replace_purge_reason(values, *, validated: bool) -> None:
                f"CHECK (purge_reason IS NULL OR purge_reason IN ({_in_list(values)})){suffix}")
 
 
-# -- garde partagee des sept operations privilegiees ------------------------------------------
+# -- garde partagee des huit operations privilegiees ------------------------------------------
 
 PURGE_GUARD = f"""
     CREATE FUNCTION public.app_purge_guard(p_job_id uuid, p_job_type text)
@@ -314,7 +348,7 @@ CLOSURE_GUARD = """
 
 # -- operations privilegiees (D-052) ----------------------------------------------------------
 #
-# Les sept partagent `app_purge_guard`. Ce qui suit chaque appel est ce qui leur est PROPRE:
+# Les huit partagent `app_purge_guard`. Ce qui suit chaque appel est ce qui leur est PROPRE:
 # la garde ne decide de rien, elle refuse. Chacune verifie en outre son propre invariant de
 # portee, en deux lignes lisibles, plutot que de le confier au helper.
 
@@ -627,6 +661,71 @@ PURGE_TENANT_DATA = f"""
     $$
 """
 
+TOMBSTONE_ORGANIZATION_STORES = f"""
+    CREATE FUNCTION public.app_tombstone_organization_stores(p_job_id uuid)
+    RETURNS bigint
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path = pg_catalog, public, pg_temp
+    AS $$
+    DECLARE
+        v_job       public.jobs%ROWTYPE;
+        v_tombstoned bigint := 0;
+    BEGIN
+        -- RESERVEE a la purge d'ORGANISATION. `app_tombstone_store` reste, elle, reservee a la
+        -- purge de BOUTIQUE et n'est pas elargie: la separation des deux voies est portee par
+        -- la GARDE, exactement comme pour les sept autres operations de purge (D-065 Q2).
+        v_job := public.app_purge_guard(p_job_id, '{ORGANIZATION_JOB}');
+        {_LOCK}
+
+        -- BARRIERE, avant toute ecriture. Une pierre tombale de boutique affirme que la
+        -- boutique n'a plus rien; la poser sur des donnees encore presentes serait la meme
+        -- faute que marquer un objet `purged` avant d'en detruire les octets.
+        IF EXISTS (SELECT 1 FROM public.raw_objects ro
+                   WHERE ro.organization_id = v_job.organization_id) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'restrict_violation',
+                MESSAGE = 'raw objects remain: their bytes must be destroyed first';
+        END IF;
+        IF EXISTS (SELECT 1 FROM public.jobs j
+                   WHERE j.organization_id = v_job.organization_id AND j.id <> v_job.id) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'restrict_violation',
+                MESSAGE = 'jobs remain: they must be removed before the stores are tombstoned';
+        END IF;
+        IF EXISTS (SELECT 1 FROM public.data_snapshots d
+                   WHERE d.organization_id = v_job.organization_id)
+           OR EXISTS (SELECT 1 FROM public.analysis_runs a
+                      WHERE a.organization_id = v_job.organization_id)
+           OR EXISTS (SELECT 1 FROM public.reports r
+                      WHERE r.organization_id = v_job.organization_id)
+           OR EXISTS (SELECT 1 FROM public.connections c
+                      WHERE c.organization_id = v_job.organization_id) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'restrict_violation',
+                MESSAGE = 'store data remains: it must be destroyed before the tombstone';
+        END IF;
+
+        -- UN SEUL `UPDATE`, jamais une boucle: une boucle interrompue laisserait une partie des
+        -- boutiques tombstonees et l'autre vivante, etat que rien ne saurait interpreter. Ici
+        -- c'est tout ou rien, et un rejeu ne trouve plus rien a faire.
+        --
+        -- `active -> purged` est ACCEPTE autant que `purging -> purged`: la cloture de
+        -- l'ORGANISATION est deja la barriere d'ecriture qui protege l'ensemble, et exiger un
+        -- passage prealable par `purging` n'ajouterait aucune garantie -- seulement une
+        -- transition artificielle a la charge de `app_close_organization`.
+        UPDATE public.stores s
+        SET name = '[purged]', currency = NULL, status = 'purged',
+            -- `coalesce` est une construction de la GRAMMAIRE SQL, pas une fonction du
+            -- catalogue: elle n'est pas resolue par `search_path`, donc pas ombrable,
+            -- et ne peut pas etre qualifiee (`pg_catalog.coalesce` n'existe pas).
+            purged_at = coalesce(s.purged_at, pg_catalog.now())
+        WHERE s.organization_id = v_job.organization_id AND s.status <> 'purged';
+        GET DIAGNOSTICS v_tombstoned = ROW_COUNT;
+        RETURN v_tombstoned;
+    END
+    $$
+"""
+
 TOMBSTONE_ORGANIZATION = f"""
     CREATE FUNCTION public.app_tombstone_organization(p_job_id uuid)
     RETURNS boolean
@@ -731,13 +830,14 @@ TOMBSTONE_STORE = f"""
     $$
 """
 
-#: les SEPT, avec leur signature exacte -- l'ordre compte a la descente (voir l'en-tete).
+#: les HUIT, avec leur signature exacte -- l'ordre compte a la descente (voir l'en-tete).
 PURGE_FUNCTIONS = (
     ("app_close_organization", "uuid"),
     ("app_close_store", "uuid"),
     ("app_destroy_identity_key", "uuid"),
     ("app_purge_finalize_raw_object", "uuid, uuid"),
     ("app_purge_tenant_data", "uuid"),
+    ("app_tombstone_organization_stores", "uuid"),
     ("app_tombstone_organization", "uuid"),
     ("app_tombstone_store", "uuid"),
 )
@@ -789,6 +889,11 @@ def upgrade() -> None:
     #    ouvrir l'exception D-066 lui-meme, et c'est ce qui la borne.
     for table in ("organizations", "stores"):
         _add_tenant_state(table)
+        # Un `GRANT INSERT` de TABLE (`0001`) couvre AUTOMATIQUEMENT les colonnes ajoutees
+        # ensuite: sans ceci, `mervio_app` pourrait creer une organisation deja `purging`.
+        # Aucun autre privilege n'est retire -- `SELECT` et l'`INSERT` des autres colonnes
+        # restent inchanges, et `UPDATE (name)` / `UPDATE (name, currency)` ne sont pas touches.
+        _restrict_lifecycle_insert(table)
 
     # 2. types de travaux, EN BASE SEULEMENT (voir le contrat de sequence en tete)
     _replace_check("jobs", "job_type", JOB_TYPES + PURGE_JOB_TYPES, validated=True)
@@ -813,12 +918,12 @@ def upgrade() -> None:
                 FOR EACH ROW EXECUTE FUNCTION public.tenant_closure_guard('{scope}')
         """)
 
-    # 7. la garde partagee, PUIS les sept operations qui l'appellent
+    # 7. la garde partagee, PUIS les huit operations qui l'appellent
     op.execute(PURGE_GUARD)
     op.execute("REVOKE ALL ON FUNCTION public.app_purge_guard(uuid, text) FROM PUBLIC")
     for body in (CLOSE_ORGANIZATION, CLOSE_STORE, DESTROY_IDENTITY_KEY,
                  PURGE_FINALIZE_RAW_OBJECT, PURGE_TENANT_DATA,
-                 TOMBSTONE_ORGANIZATION, TOMBSTONE_STORE):
+                 TOMBSTONE_ORGANIZATION_STORES, TOMBSTONE_ORGANIZATION, TOMBSTONE_STORE):
         op.execute(body)
     for name, args in PURGE_FUNCTIONS:
         op.execute(f"REVOKE ALL ON FUNCTION public.{name}({args}) FROM PUBLIC")
@@ -828,7 +933,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # ORDRE IMPOSE, ET NON PROTEGE PAR LE MOTEUR: PostgreSQL n'enregistre aucune dependance
     # `pg_depend` entre une fonction plpgsql et celles qu'elle appelle. Retirer la garde avant
-    # ses appelants REUSSIRAIT, en laissant sept fonctions privilegiees pointer dans le vide.
+    # ses appelants REUSSIRAIT, en laissant huit fonctions privilegiees pointer dans le vide.
     # Les definisseurs partent donc D'ABORD, la garde ENSUITE. Un test verrouille cet ordre.
     for name, args in PURGE_FUNCTIONS:
         op.execute(f"REVOKE ALL ON FUNCTION public.{name}({args}) FROM {WORKER_ROLE}")
@@ -848,4 +953,5 @@ def downgrade() -> None:
     _replace_check("jobs", "job_type", JOB_TYPES, validated=False)
 
     for table in ("stores", "organizations"):
+        _restore_table_insert(table)
         _drop_tenant_state(table)

@@ -46,6 +46,10 @@ from ..persistence.service import ServicePrincipal, service_principal
 from ..identity import MasterKey
 from ..settings import BUSY_HEARTBEAT_SECONDS, WorkerSettings, describe_database_url
 from ..storage import DELETE_INCAPABLE, DELETE_UNDETERMINED
+
+#: Types de travaux qui DETRUISENT des octets, et exigent donc le controle fail-closed
+#: de D-064 (etendu aux purges par D-065 Q8).
+DESTRUCTIVE_JOB_TYPES = (JobType.REDACT_CUSTOMER, JobType.PURGE_STORE, JobType.PURGE_ORGANIZATION)
 from .handlers import HandlerRegistry, default_registry
 from .lifecycle import HEALTH_STATE, Lifecycle, ProcessState
 from .worker import JobOutcome, Worker, default_worker_id
@@ -279,12 +283,18 @@ class WorkerRuntime:
             return
 
     def _check_delete_capability(self) -> None:
-        """Fail-closed (D-064): servir `redact_customer` exige un magasin capable de DETRUIRE.
+        """Fail-closed (D-064, etendu par D-065 Q8): servir un type DESTRUCTEUR exige un magasin
+        capable de DETRUIRE.
 
         Sans ce controle, une mauvaise configuration -- typiquement un magasin monte en lecture
         seule -- ne se manifeste qu'au MILIEU d'un effacement: la base a deja fait passer les
         objets en `purging`, puis la destruction echoue. Le refus a lieu ici, avant la moindre
         connexion, donc avant qu'aucune ligne n'ait bouge.
+
+        D-065 Q8 etend ce controle aux purges de boutique et d'organisation, pour exactement la
+        meme raison: elles detruisent des octets comme un effacement. SEUL l'ensemble des types
+        qui l'arment s'elargit -- la semantique ne change pas, ni les trois verdicts, ni
+        l'absence de sonde destructive, ni l'avertissement sur `undetermined`.
 
         Le verdict vient du magasin lui-meme (`delete_capability`), jamais d'une deduction sur le
         nom du pilote. `undetermined` est ACCEPTE et journalise: aucun controle non destructif ne
@@ -292,24 +302,29 @@ class WorkerRuntime:
 
         Le refus ne nomme que la REGLE et le pilote: ni racine, ni chemin, ni bucket, ni endpoint.
         """
-        if JobType.REDACT_CUSTOMER.value not in self.settings.job_types:
+        served = [kind.value for kind in DESTRUCTIVE_JOB_TYPES
+                  if kind.value in self.settings.job_types]
+        if not served:
             return
+        # Le message nomme les types SERVIS, pas le premier venu: un operateur doit savoir
+        # laquelle de ses configurations a declenche le refus.
+        names = ", ".join(served)
         driver = self.settings.object_store.driver if self.settings.object_store else None
-        rule = ("un worker qui sert redact_customer doit disposer d'un magasin d'objets "
+        rule = (f"un worker qui sert {names} doit disposer d'un magasin d'objets "
                 "capable de detruire")
         if self.object_store is None:
-            self.log.error("worker.object_store_incapable", job_type=JobType.REDACT_CUSTOMER.value,
+            self.log.error("worker.object_store_incapable", job_type=names,
                            object_store=driver, capability=None, rule=rule, exit_code=EXIT_CONFIG)
             raise _Abort(EXIT_CONFIG, "config")
         capability = self.object_store.delete_capability()
         if capability == DELETE_INCAPABLE:
-            self.log.error("worker.object_store_incapable", job_type=JobType.REDACT_CUSTOMER.value,
+            self.log.error("worker.object_store_incapable", job_type=names,
                            object_store=driver, capability=capability, rule=rule, exit_code=EXIT_CONFIG)
             raise _Abort(EXIT_CONFIG, "config")
         if capability == DELETE_UNDETERMINED:
             # honnete plutot que rassurant: le produit ne PEUT pas verifier la permission ici
             self.log.warning("worker.object_store_capability_undetermined",
-                             job_type=JobType.REDACT_CUSTOMER.value, object_store=driver,
+                             job_type=names, object_store=driver,
                              capability=capability, decision="D-064",
                              remedy="accorder s3:DeleteObject etroitement (exigence 004.9)")
 

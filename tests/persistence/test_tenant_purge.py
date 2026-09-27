@@ -37,6 +37,7 @@ PURGE_FUNCTIONS = (
     ("app_destroy_identity_key", "uuid"),
     ("app_purge_finalize_raw_object", "uuid, uuid"),
     ("app_purge_tenant_data", "uuid"),
+    ("app_tombstone_organization_stores", "uuid"),
     ("app_tombstone_organization", "uuid"),
     ("app_tombstone_store", "uuid"),
 )
@@ -743,12 +744,13 @@ def test_the_whole_organization_purge_runs_in_the_ratified_order(victim, owner, 
     _call(worker_sql, tenant, claimed, "SELECT app_destroy_identity_key(%s)", (claimed.id,))
     _finalize_all(worker_sql, tenant, claimed, owner)
     _call(worker_sql, tenant, claimed, "SELECT * FROM app_purge_tenant_data(%s)", (claimed.id,))
-    store_claimed = claimed
-    with owner.transaction():
-        _ctx(owner, tenant)
-        owner.execute("UPDATE stores SET name = '[purged]', currency = NULL, status = 'purged', "
-                      "purged_at = now() WHERE organization_id = %s", (tenant.organization_id,))
-    assert _call(worker_sql, tenant, store_claimed, "SELECT app_tombstone_organization(%s)",
+    # UNIQUEMENT le chemin privilegie: aucune ecriture brute de statut. La premiere version de
+    # ce test posait la pierre tombale des boutiques a la main, en SQL brut sous le
+    # proprietaire -- ce qui masquait que rien, dans 0016, ne savait le faire pour une purge
+    # d'organisation. C'est ce contournement qui a laisse passer le defaut.
+    assert _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization_stores(%s)",
+                 (claimed.id,))[0] == 1
+    assert _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization(%s)",
                  (claimed.id,))[0] is True
 
     with owner.transaction():
@@ -762,6 +764,11 @@ def test_the_whole_organization_purge_runs_in_the_ratified_order(victim, owner, 
             (tenant.organization_id,)).fetchone()
         assert (name, status) == ("[purged]", "purged") and purged_at is not None
         assert owner.execute("SELECT count(*) FROM memberships").fetchone()[0] >= 1
+        store_name, store_currency, store_status, store_purged = owner.execute(
+            "SELECT name, currency, status, purged_at FROM stores WHERE id = %s",
+            (tenant.store_id,)).fetchone()
+        assert (store_name, store_currency, store_status) == ("[purged]", None, "purged")
+        assert store_purged is not None
         assert owner.execute("SELECT count(*) FROM organization_identity_keys").fetchone()[0] == 1
         actions = [r[0] for r in owner.execute(
             "SELECT action FROM audit_events WHERE action LIKE 'organization.purge%' "
@@ -784,3 +791,228 @@ def test_the_purge_audit_carries_no_identity(victim, owner, worker_sql):
     serialized = str(metadata)
     for forbidden in ("Boutique", "Organisation", "EUR", ALICE):
         assert forbidden not in serialized
+
+
+# -- 9. pierre tombale des boutiques lors d'une purge d'ORGANISATION -------------------------------
+
+def _ready_to_tombstone(worker_sql, tenant, owner, claimed):
+    """Amene l'organisation au point ou les boutiques peuvent etre tombstonees.
+
+    Cloture, destruction des octets, retrait des lignes, puis purge des donnees: la barriere de
+    `app_tombstone_organization_stores` exige exactement cet etat.
+    """
+    _call(worker_sql, tenant, claimed, "SELECT * FROM app_close_organization(%s)", (claimed.id,))
+    _finalize_all(worker_sql, tenant, claimed, owner)
+    _call(worker_sql, tenant, claimed, "SELECT * FROM app_purge_tenant_data(%s)", (claimed.id,))
+
+
+def test_the_organization_tombstone_refuses_while_a_store_is_not_purged(victim, owner, worker_sql):
+    """A: la TROISIEME garde, qu'aucun test ne couvrait -- et que le SQL brut contournait."""
+    tenant, _ = victim
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _ready_to_tombstone(worker_sql, tenant, owner, claimed)
+    with pytest.raises(psycopg.errors.RestrictViolation, match="every store must be tombstoned"):
+        _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization(%s)", (claimed.id,))
+
+
+def test_the_organization_store_tombstone_refuses_a_store_purge_job(victim, owner, worker_sql):
+    """B: la separation des voies est portee par la GARDE, pas par une convention."""
+    tenant, _ = victim
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, STORE_JOB))
+    with pytest.raises(psycopg.errors.RestrictViolation, match="does not run for this job type"):
+        _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization_stores(%s)",
+              (claimed.id,))
+
+
+def test_the_store_tombstone_refuses_an_organization_purge_job(victim, owner, worker_sql):
+    """C: reciproque de B. `app_tombstone_store` n'a PAS ete elargie (D-065 Q2)."""
+    tenant, _ = victim
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    with pytest.raises(psycopg.errors.RestrictViolation, match="does not run for this job type"):
+        _call(worker_sql, tenant, claimed, "SELECT app_tombstone_store(%s)", (claimed.id,))
+
+
+def test_an_active_store_is_tombstoned_directly_by_an_organization_purge(victim, owner, worker_sql):
+    """D: `active -> purged` en une transition.
+
+    La cloture de l'ORGANISATION est deja la barriere d'ecriture qui protege l'ensemble:
+    exiger un passage prealable par `purging` n'ajouterait aucune garantie, seulement une
+    transition artificielle a la charge de `app_close_organization`.
+    """
+    tenant, _ = victim
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    assert _status(owner, tenant, "stores")[0] == "active"
+    _ready_to_tombstone(worker_sql, tenant, owner, claimed)
+    assert _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization_stores(%s)",
+                 (claimed.id,))[0] == 1
+    with owner.transaction():
+        _ctx(owner, tenant)
+        name, currency, status, purged_at = owner.execute(
+            "SELECT name, currency, status, purged_at FROM stores WHERE id = %s",
+            (tenant.store_id,)).fetchone()
+    assert (name, currency, status) == ("[purged]", None, "purged") and purged_at is not None
+
+
+def test_a_purging_store_is_also_tombstoned(victim, owner, worker_sql):
+    """E: `purging -> purged` fonctionne aussi -- une boutique deja close n'est pas laissee."""
+    tenant, _ = victim
+    store_job = _claim(owner, tenant, _enqueue(owner, tenant, STORE_JOB))
+    _call(worker_sql, tenant, store_job, "SELECT * FROM app_close_store(%s)", (store_job.id,))
+    assert _status(owner, tenant, "stores")[0] == "purging"
+    # La purge de boutique se termine: un travail `running` survivrait a la purge des donnees
+    # (I1 le protege) et bloquerait la barriere. Ici la boutique reste `purging`, ce qui est
+    # exactement l'etat que ce test veut exercer.
+    with owner.transaction():
+        _ctx(owner, tenant)
+        owner.execute("SELECT set_config('app.job_lease_token', %s, true)",
+                      (f"{store_job.attempts}:{store_job.locked_by}",))
+        # `jobs_lock_consistent`: seul un travail `running` porte un bail. Le relacher fait
+        # partie de la terminaison, ce n'est pas un contournement du test.
+        owner.execute("UPDATE jobs SET status = 'succeeded', finished_at = now(), "
+                      "updated_at = now(), locked_at = NULL, locked_by = NULL, "
+                      "lease_expires_at = NULL WHERE id = %s", (store_job.id,))
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _ready_to_tombstone(worker_sql, tenant, owner, claimed)
+    assert _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization_stores(%s)",
+                 (claimed.id,))[0] == 1
+    assert _status(owner, tenant, "stores")[0] == "purged"
+
+
+def test_tombstoning_the_stores_twice_changes_nothing(victim, owner, worker_sql):
+    """F: idempotent. Le rejeu ne trouve plus rien a faire, et ne leve pas."""
+    tenant, _ = victim
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _ready_to_tombstone(worker_sql, tenant, owner, claimed)
+    first = _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization_stores(%s)",
+                  (claimed.id,))[0]
+    with owner.transaction():
+        _ctx(owner, tenant)
+        stamped = owner.execute("SELECT purged_at FROM stores WHERE id = %s",
+                                (tenant.store_id,)).fetchone()[0]
+    second = _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization_stores(%s)",
+                   (claimed.id,))[0]
+    assert (first, second) == (1, 0)
+    with owner.transaction():
+        _ctx(owner, tenant)
+        assert owner.execute("SELECT purged_at FROM stores WHERE id = %s",
+                             (tenant.store_id,)).fetchone()[0] == stamped, \
+            "`coalesce` doit preserver l'horodatage du premier passage"
+
+
+def test_tombstoning_stores_never_reaches_another_organization(victim, bystander, owner, worker_sql):
+    """G: l'isolation vient de la RLS, pas d'une condition relue."""
+    tenant, _ = victim
+    neighbour, _ = bystander
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _ready_to_tombstone(worker_sql, tenant, owner, claimed)
+    _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization_stores(%s)", (claimed.id,))
+    with owner.transaction():
+        _ctx(owner, neighbour)
+        name, status = owner.execute("SELECT name, status FROM stores WHERE id = %s",
+                                     (neighbour.store_id,)).fetchone()
+    assert status == "active" and name != "[purged]"
+
+
+def test_the_application_roles_cannot_write_a_store_status(victim, pg):
+    """H et I: aucun `GRANT UPDATE` sur `stores.status`, pour ni l'un ni l'autre des roles."""
+    tenant, _ = victim
+    for kind in ("app", "worker"):
+        with psycopg.connect(pg.url(kind), autocommit=True) as conn:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with conn.transaction():
+                    _ctx(conn, tenant)
+                    conn.execute("UPDATE stores SET status = 'purged' WHERE id = %s",
+                                 (tenant.store_id,))
+
+
+def test_a_rolled_back_store_tombstone_leaves_every_store_untouched(victim, owner, pg, worker_sql):
+    """J: tout ou rien. Un `UPDATE` unique, jamais une boucle: pas d'etat partiel."""
+    tenant, _ = victim
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _ready_to_tombstone(worker_sql, tenant, owner, claimed)
+    with psycopg.connect(pg.url("worker")) as conn:          # PAS autocommit
+        conn.execute("SELECT set_config('app.organization_id', %s, false), "
+                     "set_config('app.job_lease_token', %s, false)",
+                     (str(tenant.organization_id), f"{claimed.attempts}:{claimed.locked_by}"))
+        assert conn.execute("SELECT app_tombstone_organization_stores(%s)",
+                            (claimed.id,)).fetchone()[0] == 1
+        conn.rollback()
+    with owner.transaction():
+        _ctx(owner, tenant)
+        name, status, purged_at = owner.execute(
+            "SELECT name, status, purged_at FROM stores WHERE id = %s",
+            (tenant.store_id,)).fetchone()
+    assert status == "active" and name != "[purged]" and purged_at is None
+
+
+# -- 10. colonnes de cycle de vie: ni UPDATE, ni INSERT par le role applicatif --------------------
+
+def test_the_application_role_cannot_insert_a_lifecycle_status(victim, pg):
+    """A et B: `mervio_app` ne peut pas NAITRE dans un etat de cycle de vie qu'il choisit.
+
+    Un `GRANT INSERT` de TABLE (`0001`) couvre automatiquement les colonnes ajoutees ensuite:
+    sans la restriction de `0016`, `mervio_app` aurait pu creer une organisation deja
+    `purging`. Et un `REVOKE INSERT (status)` ne suffit PAS contre un grant de table -- mesure
+    a l'appui, il est sans effet. Seul le retrait du privilege de table, suivi d'un
+    re-octroi colonne par colonne, ferme la porte.
+    """
+    tenant, _ = victim
+    with psycopg.connect(pg.url("app"), autocommit=True) as conn:
+        conn.execute("SELECT set_config('app.organization_id', %s, false), "
+                     "set_config('app.user_id', %s, false)",
+                     (str(tenant.organization_id), str(tenant.owner_id)))
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("INSERT INTO organizations (id, name, status) VALUES (%s, 'x', 'purging')",
+                         (uuid.uuid4(),))
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("INSERT INTO stores (id, organization_id, name, status, purged_at) "
+                         "VALUES (%s, %s, 'x', 'purged', now())",
+                         (uuid.uuid4(), tenant.organization_id))
+
+
+def test_the_lifecycle_columns_are_writable_by_no_application_privilege(pg, owner):
+    """Ni `INSERT` ni `UPDATE`, pour aucun des deux roles, sur les quatre colonnes."""
+    for table in ("organizations", "stores"):
+        for column in ("status", "purged_at"):
+            for kind in ("app", "worker"):
+                for privilege in ("INSERT", "UPDATE"):
+                    granted = owner.execute(
+                        "SELECT has_column_privilege(%s, %s, %s, %s)",
+                        (pg.role(kind), f"public.{table}", column, privilege)).fetchone()[0]
+                    assert granted is False, (table, column, kind, privilege)
+
+
+def test_creating_an_organization_and_a_store_still_works(db, owner):
+    """C: le chemin NORMAL de creation reste intact, et prend les valeurs par defaut.
+
+    Le re-octroi colonne par colonne doit couvrir exactement ce dont le produit a besoin: ce
+    test echouerait si une colonne inserable avait ete oubliee.
+    """
+    tenant = make_tenant(db, "lifecycle")
+    with owner.transaction():
+        _ctx(owner, tenant)
+        assert owner.execute("SELECT status, purged_at FROM organizations WHERE id = %s",
+                             (tenant.organization_id,)).fetchone() == ("active", None)
+        assert owner.execute("SELECT status, purged_at FROM stores WHERE id = %s",
+                             (tenant.store_id,)).fetchone() == ("active", None)
+
+
+def test_no_other_grant_was_withdrawn(pg, owner):
+    """D: seules `status` et `purged_at` perdent l'`INSERT`; tout le reste est inchange."""
+    expected = {
+        "organizations": ("id", "name", "created_at"),
+        "stores": ("id", "organization_id", "name", "currency", "created_at",
+                   "timezone", "timezone_source"),
+    }
+    for table, columns in expected.items():
+        for column in columns:
+            assert owner.execute("SELECT has_column_privilege(%s, %s, %s, 'INSERT')",
+                                 (pg.role("app"), f"public.{table}", column)).fetchone()[0] is True, \
+                (table, column)
+        assert owner.execute("SELECT has_table_privilege(%s, %s, 'SELECT')",
+                             (pg.role("app"), f"public.{table}")).fetchone()[0] is True, table
+    # les `UPDATE` de colonnes metier de `0001` ne sont pas touches
+    for table, column in (("organizations", "name"), ("stores", "name"), ("stores", "currency")):
+        assert owner.execute("SELECT has_column_privilege(%s, %s, %s, 'UPDATE')",
+                             (pg.role("app"), f"public.{table}", column)).fetchone()[0] is True, \
+            (table, column)

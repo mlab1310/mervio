@@ -38,7 +38,8 @@ from ..settings import AdminSettings, SettingsError
 
 _DATABASE_DRIVERS = ("psycopg", "psycopg_binary", "psycopg_c")
 JOB_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled")
-JOB_TYPES = ("import", "analysis", "purge", "redact_customer")
+JOB_TYPES = ("import", "analysis", "purge", "redact_customer",
+             "purge_store", "purge_organization")
 ASSIGNABLE_ROLES = ("admin", "analyst", "viewer")
 #: Types de source acceptes. Recopies ici VOLONTAIREMENT: la CLI reste importable sans l'extra
 #: `persistence` (barriere verifiee par tests/test_persistence_boundaries.py). Definition

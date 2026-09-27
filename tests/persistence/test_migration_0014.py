@@ -86,9 +86,31 @@ def test_the_job_type_declared_here_is_now_executable(database):
             "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
             "WHERE conrelid = 'public.jobs'::regclass AND conname = 'jobs_job_type_check'"
         ).fetchone()[0]
-    for kind in JobType:
-        assert f"'{kind.value}'" in accepted, kind.value
+    # A CETTE REVISION, et pas au-dela: `0016` a legitimement ajoute deux types de purge que
+    # `0014` ne connait pas. Ce qui se verifie ici est donc ce que 0014 a promis -- son propre
+    # type est executable. La parite COMPLETE Python <-> base appartient a `head`, et elle est
+    # verifiee ci-dessous: l'invariant n'est pas affaibli, il est porte la ou il a du sens.
+    assert "'redact_customer'" in accepted
     assert "redact_customer" in {kind.value for kind in JobType}
+
+
+def test_every_declared_job_type_is_accepted_by_the_schema_at_head(database):
+    """L'invariant reel: aucun type connu de Python n'est inconnu de la base, et reciproquement.
+
+    Un type accepte par la contrainte et inconnu de `JobType` serait un travail que personne ne
+    peut executer; l'inverse serait un travail que la base refuserait de mettre en file.
+    """
+    migrate.upgrade(database)
+    with psycopg.connect(database, autocommit=True) as conn:
+        accepted = conn.execute(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conrelid = 'public.jobs'::regclass AND conname = 'jobs_job_type_check'"
+        ).fetchone()[0]
+    declared = {kind.value for kind in JobType}
+    for kind in declared:
+        assert f"'{kind}'" in accepted, kind
+    quoted = {fragment.split("'")[0] for fragment in accepted.split("'")[1::2]}
+    assert quoted == declared, (quoted, declared)
 
 
 def test_upgrade_accepts_erasure_events_and_downgrade_keeps_them_but_refuses_new_ones(database):
