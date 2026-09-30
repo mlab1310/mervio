@@ -1,4 +1,4 @@
-"""Fondation PostgreSQL de la purge de boutique et d'organisation (004.4.6, D-051, D-065, D-066).
+"""Fondation PostgreSQL de la purge de boutique et d'organisation (004.4.6, D-051, D-065 a D-069).
 
 Revision ID: 0016_tenant_purge
 Revises: 0015_raw_object_purge
@@ -9,6 +9,25 @@ La couche BASE de la purge tenant, et rien d'autre: statuts et pierres tombales,
 travaux cote base, vocabulaire d'audit, motifs de purge, declencheur de cloture, exception
 D-066 au plancher de retention, et les huit operations privilegiees. Aucun gestionnaire,
 aucune commande, aucune orchestration de magasin d'objets: c'est la phase suivante.
+
+CE QUE LA REVUE DE CONCURRENCE Y A AJOUTE (D-067, D-068, D-069)
+La revue a mesure que deux purges concurrentes d'une meme organisation detruisaient toutes
+deux les donnees, puis echouaient toutes deux a la pierre tombale -- chacune voyant survivre
+le travail de l'autre, protege par D-066 I1 -- laissant l'organisation `purging`, le sel
+detruit et plus aucune mise en file possible. Elle a ensuite mesure que le meme blocage
+naissait de N'IMPORTE QUEL travail en vol, des cinq types, et non des seules purges. Trois
+ajouts y repondent, chacun a son etage:
+
+    D-067  `jobs_tenant_purge_active_uniq`  au plus UNE purge tenant active par organisation,
+                                            imposee par le moteur de stockage, a l'insertion
+    D-068  barriere de drain + `55006`      rien n'est detruit tant qu'un travail est en vol,
+                                            et ce refus est TRANSITOIRE, donc repris; plus
+                                            l'exception de reprise du declencheur de cloture
+    D-069  precondition de cloture          le sel ne se detruit que dans une organisation
+                                            deja close, comme les donnees l'exigeaient deja
+
+D-063 n'est pas touchee: aucune portee de verrou ajoutee, aucune seconde primitive de
+concurrence. D-070 (audit des refus) n'est pas traitee ici.
 
 CONTRAT DE SEQUENCE -- CE QUE CETTE REVISION NE LIVRE PAS
 Comme `0014` avant elle, et pour la meme raison, les deux types de travaux existent ici EN
@@ -117,6 +136,14 @@ OWNER_RANK = 3
 STORE_JOB = "purge_store"
 ORGANIZATION_JOB = "purge_organization"
 PURGE_JOB_TYPES = (STORE_JOB, ORGANIZATION_JOB)
+
+#: D-067: AU PLUS UNE purge tenant active par organisation.
+ORGANIZATION_PURGE_INDEX = "jobs_tenant_purge_active_uniq"
+
+#: SQLSTATE d'un refus TRANSITOIRE (`object_in_use`). Choisi, et non invente: `55006` figure
+#: DEJA dans `RETRYABLE_SQLSTATES` de `persistence/retry.py`, donc `classify` le rend reprenable
+#: sans qu'aucune ligne de Python ne change. Un `restrict_violation` aurait ete definitif.
+TRANSIENT_ERRCODE = "object_in_use"
 
 #: etat des lignes `jobs` du depot avant cette revision
 JOB_TYPES = ("import", "analysis", "purge", "redact_customer")
@@ -310,7 +337,7 @@ PURGE_GUARD = f"""
 
 # -- declencheur de cloture -------------------------------------------------------------------
 
-CLOSURE_GUARD = """
+CLOSURE_GUARD = f"""
     CREATE FUNCTION public.tenant_closure_guard() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public, pg_temp
@@ -322,6 +349,29 @@ CLOSURE_GUARD = """
         -- l'execution, contrairement a une expression de politique.
         SELECT o.status INTO v_status FROM public.organizations o
         WHERE o.id = NEW.organization_id;
+
+        -- EXCEPTION DE REPRISE (D-068). Une organisation `purging` n'accepte QU'UNE ecriture:
+        -- la remise en file de sa PROPRE purge. Sans elle, une purge definitivement echouee
+        -- apres la cloture fige l'organisation pour toujours -- alors que D-066 qualifie
+        -- justement `purging` d'"etat de travail dont la persistance signale une purge A
+        -- REPRENDRE". Le schema contredisait donc le texte; il ne le contredit plus.
+        --
+        -- PORTEE, volontairement etroite: `jobs` seule, `purge_organization` seul, `purging`
+        -- seul. `purged` reste TERMINAL -- rien n'y entre, pas meme une purge. `purge_store`,
+        -- `redact_customer`, `import`, `analysis` et la purge de retention restent refuses:
+        -- l'intention de D-065 Q7 (plus aucune ecriture METIER apres la cloture) est intacte,
+        -- une purge de reprise n'etant pas un travail metier.
+        --
+        -- Ce qui borne cette exception n'est pas ici: c'est `{ORGANIZATION_PURGE_INDEX}`
+        -- (D-067), qui garantit qu'il n'existe jamais plus d'une purge tenant active.
+        -- Le `IF` est IMBRIQUE, non conjonctif: `NEW.job_type` n'existe que sur `jobs`, et
+        -- SQL ne garantit aucune evaluation court-circuitee d'un `AND`.
+        IF v_status = 'purging' AND TG_TABLE_NAME = 'jobs' THEN
+            IF NEW.job_type = '{ORGANIZATION_JOB}' THEN
+                RETURN NEW;
+            END IF;
+        END IF;
+
         IF v_status IS NOT NULL AND v_status <> 'active' THEN
             RAISE EXCEPTION USING
                 ERRCODE = 'restrict_violation',
@@ -363,6 +413,26 @@ _LOCK = ("PERFORM pg_catalog.pg_advisory_xact_lock("
 #: le principal de service, deja PROUVE existant et autorise par la garde.
 _SERVICE = ("(SELECT u.id FROM public.users u "
             "WHERE u.kind = 'service' AND u.idp_subject = 'service:' || session_user)")
+
+#: BARRIERE DE DRAIN (D-068). Rien n'est detruit tant qu'un AUTRE travail du locataire est en
+#: vol. Elle repare une contradiction entre deux clauses ratifiees: D-066 I1 GARANTIT qu'un
+#: travail `queued` ou `running` survit a la purge, et la barriere des pierres tombales
+#: INTERDISAIT qu'il survive -- si bien que la purge detruisait tout, puis echouait
+#: DEFINITIVEMENT, laissant l'organisation `purging` et le sel detruit. Les cinq types de
+#: travaux reproduisaient ce blocage, pas seulement `purge_store`.
+#:
+#: TRANSITOIRE, donc `{TRANSIENT_ERRCODE}`: la condition depend d'un autre travail, pas de la
+#: demande. La cloture ayant deja ferme l'entree (aucun `INSERT` n'est plus accepte hors reprise),
+#: l'ensemble des travaux actifs ne peut plus que DECROITRE: le drain est donc borne, et ce
+#: controle n'est pas une fenetre TOCTOU -- ce qu'il observe vide reste vide.
+_DRAIN = f"""
+        IF EXISTS (SELECT 1 FROM public.jobs j
+                   WHERE j.organization_id = v_job.organization_id AND j.id <> v_job.id
+                     AND j.status IN ('queued', 'running')) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '{TRANSIENT_ERRCODE}',
+                MESSAGE = 'jobs are still in flight: nothing is destroyed yet';
+        END IF;"""
 
 CLOSE_ORGANIZATION = f"""
     CREATE FUNCTION public.app_close_organization(p_job_id uuid)
@@ -504,6 +574,20 @@ DESTROY_IDENTITY_KEY = f"""
         -- l'`organization_id`, et une organisation sans boutique reste vivante.
         v_job := public.app_purge_guard(p_job_id, '{ORGANIZATION_JOB}');
 
+        -- D-069: LE SEL NE SE DETRUIT QUE DANS UNE ORGANISATION DEJA CLOSE. Sans cette ligne,
+        -- cette fonction detruisait le sel d'une organisation restee `active` -- mesure --,
+        -- la ou `app_purge_tenant_data` refusait deja dans la meme situation. L'asymetrie
+        -- etait un defaut, pas une nuance: elle privait aussi la barriere ci-dessous de sa
+        -- premisse (l'entree fermee), donc de sa surete.
+        IF NOT EXISTS (SELECT 1 FROM public.organizations o
+                       WHERE o.id = v_job.organization_id AND o.status = 'purging') THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'restrict_violation',
+                MESSAGE = 'the organization must be closed before its identity salt is destroyed';
+        END IF;
+        -- PREMIERE destruction irreversible de la sequence: la barriere est ici, pas plus loin.
+        {_DRAIN}
+
         -- D-053: le sel ne se DETRUIT, jamais ne se supprime -- le declencheur de `0011`
         -- interdit le `DELETE`, fige `master_key_id` et rend immuable une ligne deja detruite.
         -- Le rejeu est donc sans effet, et c'est la seule facon d'etre idempotent ici.
@@ -600,6 +684,9 @@ PURGE_TENANT_DATA = f"""
                     ERRCODE = 'restrict_violation',
                     MESSAGE = 'the organization must be closed before its data is destroyed';
             END IF;
+            -- D-068, portee ORGANISATION seulement: une purge de BOUTIQUE ne porte pas la
+            -- barriere des pierres tombales, donc ne produit pas le blocage qu'elle repare.
+            {_DRAIN}
         ELSE
             IF NOT EXISTS (SELECT 1 FROM public.stores s
                            WHERE s.organization_id = v_job.organization_id
@@ -686,6 +773,11 @@ TOMBSTONE_ORGANIZATION_STORES = f"""
                 ERRCODE = 'restrict_violation',
                 MESSAGE = 'raw objects remain: their bytes must be destroyed first';
         END IF;
+        -- D-068: deux causes, deux natures. Un travail EN VOL est transitoire et se reprend;
+        -- un travail TERMINAL oublie est une faute d'ORDRE (le nettoyage aurait du preceder)
+        -- et reste definitif. Les confondre sous `restrict_violation`, comme avant, rendait
+        -- la premiere irrattrapable. L'ordre compte: le cas transitoire se teste d'abord.
+        {_DRAIN}
         IF EXISTS (SELECT 1 FROM public.jobs j
                    WHERE j.organization_id = v_job.organization_id AND j.id <> v_job.id) THEN
             RAISE EXCEPTION USING
@@ -749,6 +841,8 @@ TOMBSTONE_ORGANIZATION = f"""
                 ERRCODE = 'restrict_violation',
                 MESSAGE = 'raw objects remain: their bytes must be destroyed first';
         END IF;
+        -- Meme scission qu'au-dessus: en vol -> reprise, terminal oublie -> faute d'ordre.
+        {_DRAIN}
         IF EXISTS (SELECT 1 FROM public.jobs j
                    WHERE j.organization_id = v_job.organization_id AND j.id <> v_job.id) THEN
             RAISE EXCEPTION USING
@@ -884,6 +978,38 @@ def _drop_tenant_state(table: str) -> None:
     op.execute(f"ALTER TABLE public.{table} DROP COLUMN status")
 
 
+#: D-067. AU PLUS UNE purge tenant active par organisation -- `purge_store` ET
+#: `purge_organization` partagent la MEME cle, c'est ce qui les rend mutuellement exclusives
+#: sans qu'aucune n'ait a connaitre l'autre. Sans cela, deux purges concurrentes detruisaient
+#: toutes deux, puis echouaient toutes deux a la pierre tombale: chacune voyait survivre le
+#: travail de l'autre, protege par D-066 I1.
+#:
+#: POURQUOI UN INDEX, ET PAS UNE GARDE APPLICATIVE: l'unicite est imposee par le MOTEUR DE
+#: STOCKAGE, donc en amont de la RLS, des politiques et des declencheurs, et sans fenetre
+#: TOCTOU -- la ou `SELECT ... IF EXISTS ... INSERT` en laisse une. Aucun role ne la contourne,
+#: pas meme un superutilisateur. Mesure: 30 courses simultanees, un seul gagnant a chaque fois.
+#:
+#: CLE = le SEUL `organization_id`: une violation ne peut donc naitre que dans l'organisation
+#: de l'appelant, jamais servir d'oracle d'existence sur le travail d'un autre tenant (meme
+#: propriete que `jobs_idempotency_uniq`, `0004`).
+#:
+#: `status` quitte l'index avec l'etat terminal: un travail `succeeded`, `failed` ou
+#: `cancelled` ne bloque plus rien.
+#:
+#: COUT ASSUME: deux purges de BOUTIQUES DIFFERENTES d'une meme organisation deviennent
+#: sequentielles. D-063 les serialise deja pas a pas sur le meme verrou d'organisation; l'index
+#: ne fait que remonter cette serialisation de l'etape au travail.
+#:
+#: PRODUCTION (meme reserve que `0012` pour `jobs_ready_idx`): la creation verrouille `jobs` en
+#: ACCESS EXCLUSIVE le temps d'un parcours. Sans effet ici -- avant cette revision, le `CHECK`
+#: de `0004` interdit la valeur `purge_organization`, donc aucune ligne ne peut entrer dans le
+#: predicat et l'index ne peut rencontrer aucun doublon preexistant.
+ORGANIZATION_PURGE_UNIQ = f"""
+    CREATE UNIQUE INDEX {ORGANIZATION_PURGE_INDEX} ON public.jobs (organization_id)
+        WHERE job_type IN ({_in_list(PURGE_JOB_TYPES)}) AND status IN ('queued', 'running')
+"""
+
+
 def upgrade() -> None:
     # 1. etat des tenants. Aucun `GRANT UPDATE` sur ces colonnes: `mervio_app` ne peut donc pas
     #    ouvrir l'exception D-066 lui-meme, et c'est ce qui la borne.
@@ -895,8 +1021,11 @@ def upgrade() -> None:
         # restent inchanges, et `UPDATE (name)` / `UPDATE (name, currency)` ne sont pas touches.
         _restrict_lifecycle_insert(table)
 
-    # 2. types de travaux, EN BASE SEULEMENT (voir le contrat de sequence en tete)
+    # 2. types de travaux, EN BASE SEULEMENT (voir le contrat de sequence en tete), puis
+    #    l'unicite D-067 qui les gouverne. L'ordre n'est pas indifferent: le predicat de
+    #    l'index nomme des valeurs que le domaine doit deja accepter.
     _replace_check("jobs", "job_type", JOB_TYPES + PURGE_JOB_TYPES, validated=True)
+    op.execute(ORGANIZATION_PURGE_UNIQ)
 
     # 3. motifs de purge: la semantique `customer_erasure` est INCHANGEE
     _replace_purge_reason(PURGE_REASONS + TENANT_PURGE_REASONS, validated=True)
@@ -950,6 +1079,7 @@ def downgrade() -> None:
 
     _replace_check("audit_events", "action", BASE_ACTIONS, validated=False)
     _replace_purge_reason(PURGE_REASONS, validated=False)
+    op.execute(f"DROP INDEX public.{ORGANIZATION_PURGE_INDEX}")
     _replace_check("jobs", "job_type", JOB_TYPES, validated=False)
 
     for table in ("stores", "organizations"):

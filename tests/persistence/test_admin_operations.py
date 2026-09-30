@@ -231,7 +231,9 @@ def test_concurrent_org_creation_creates_exactly_one_organization(db, pg, eviden
 
 def test_org_list_shows_only_the_actor_memberships(admin, world):
     listed = admin.ok("org", "list", "--as", VIEWER_A)["organizations"]
-    assert listed == [{"id": world["a"], "name": "Org A", "role": "viewer"}]
+    # D-071: `status` accompagne desormais chaque ligne -- une organisation `purging` dont plus
+    # rien ne s'occupe doit se voir des la liste, sans commande supplementaire.
+    assert listed == [{"id": world["a"], "name": "Org A", "role": "viewer", "status": "active"}]
     assert admin.ok("org", "list", "--as", OUTSIDER) == {"organizations": []}
 
 

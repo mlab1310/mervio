@@ -124,5 +124,11 @@ def test_claiming_stays_cheap_whatever_the_queue_depth(filled_queue, owner):
 def test_only_the_queue_index_serves_the_queued_predicate(owner):
     """Deux index partiels concurrents sur `queued` feraient hesiter le planificateur."""
     partials = owner.execute(
-        "SELECT indexname FROM pg_indexes WHERE tablename = 'jobs' AND indexdef LIKE '%queued%'").fetchall()
-    assert [row[0] for row in partials] == ["jobs_ready_idx"]
+        "SELECT indexname, indexdef FROM pg_indexes "
+        "WHERE tablename = 'jobs' AND indexdef LIKE '%queued%'").fetchall()
+    # UN SEUL index sert la file. D-067 en ajoute un second qui mentionne `queued`, mais son
+    # predicat epingle aussi un `job_type`, que la requete de prise (`job_type = ANY($n)`,
+    # parametre) n'implique JAMAIS: le planificateur ne peut donc pas le substituer. Verifie
+    # par `test_claiming_stays_cheap_whatever_the_queue_depth`, qui reste vert.
+    assert [name for name, definition in partials if "job_type" not in definition] == ["jobs_ready_idx"]
+    assert {name for name, _ in partials} == {"jobs_ready_idx", "jobs_tenant_purge_active_uniq"}

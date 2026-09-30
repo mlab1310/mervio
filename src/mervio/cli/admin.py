@@ -113,6 +113,17 @@ def add_admin_parser(sub) -> None:
     parser.add_argument("--name", required=True)
     leaf(orgs, "list", "org_list", "organisations dont --as est membre", [actor])
     leaf(orgs, "show", "org_show", "etat operationnel d'une organisation (boutiques, file, services)", [scoped])
+    parser = leaf(orgs, "reconcile-purges", "org_reconcile",
+                  "reprend les purges d'organisation figees en 'purging' (SIMULATION par defaut)",
+                  [actor])
+    # `--org` est OPTIONNEL ici, contrairement aux autres commandes d'organisation: sans lui,
+    # toutes les organisations de --as sont inspectees, ce qui est l'usage de surveillance.
+    parser.add_argument("--org", type=_uuid, metavar="UUID",
+                        help="une seule organisation; par defaut, toutes celles de --as")
+    parser.add_argument("--execute", action="store_true",
+                        help="met REELLEMENT en file les reprises; sans lui, rien n'est ecrit")
+    parser.add_argument("--limit", type=_bounded(1, 1000), default=50,
+                        help="organisations inspectees au plus (sans --org)")
 
     members = group("member", "membres d'une organisation (proprietaire)")
     parser = leaf(members, "add", "member_add", "ajoute un humain existant (idempotent si meme role)", [scoped])
@@ -169,6 +180,15 @@ def add_admin_parser(sub) -> None:
     parser.add_argument("--as-of", dest="as_of", metavar="AAAA-MM-JJ", help="date de reference")
     parser.add_argument("--label")
     leaf(job_group, "enqueue-purge", "job_purge", "met en file une purge de retention (politique par defaut)",
+         [scoped, idempotent])
+    # 004.4.6: purges de LOCATAIRE (D-051), sans rapport avec la purge de RETENTION ci-dessus.
+    # `enqueue-purge-organization` est aussi le chemin de reprise MANUELLE d'une purge figee:
+    # aucune garde anti-boucle ne s'y applique (elle appartient a `org reconcile-purges`).
+    parser = leaf(job_group, "enqueue-purge-store", "job_purge_store",
+                  "met en file la purge d'UNE boutique (proprietaire)", [scoped, idempotent])
+    parser.add_argument("--store", required=True, type=_uuid, metavar="UUID")
+    leaf(job_group, "enqueue-purge-organization", "job_purge_organization",
+         "met en file la purge de l'ORGANISATION entiere (proprietaire); reprise manuelle incluse",
          [scoped, idempotent])
     parser = leaf(job_group, "enqueue-redact", "job_redact",
                   "met en file l'effacement d'UN client, designe par une reference DEJA resolue",
@@ -244,6 +264,14 @@ HANDLERS: Dict[str, Callable[[Any, Any, Any], Dict[str, Any]]] = {
         grain=a.grain, as_of=a.as_of, label=a.label, priority=a.priority, idempotency_key=a.idempotency_key),
     "job_purge": lambda ops, db, a: ops.enqueue_purge(db, actor=a.actor, organization=a.org, priority=a.priority,
                                                       idempotency_key=a.idempotency_key),
+    "job_purge_store": lambda ops, db, a: ops.enqueue_purge_store(
+        db, actor=a.actor, organization=a.org, store=a.store, priority=a.priority,
+        idempotency_key=a.idempotency_key),
+    "job_purge_organization": lambda ops, db, a: ops.enqueue_purge_organization(
+        db, actor=a.actor, organization=a.org, priority=a.priority,
+        idempotency_key=a.idempotency_key),
+    "org_reconcile": lambda ops, db, a: ops.reconcile_purges(
+        db, actor=a.actor, organization=a.org, execute=a.execute, limit=a.limit),
     "job_redact": lambda ops, db, a: ops.enqueue_redact(db, actor=a.actor, organization=a.org,
                                                         customer_ref=a.customer_ref, priority=a.priority,
                                                         idempotency_key=a.idempotency_key),
@@ -293,8 +321,13 @@ def cmd_admin(args, *, environ=None, stdout=None, database_factory=None) -> int:
     finally:
         if database is not None:
             database.close()
-    _print_result(result, as_json, stdout)
-    return EXIT_OK
+    # Une commande d'INSPECTION peut aboutir tout en rapportant des obstacles: `reconcile-purges`
+    # rend alors le code le PLUS SEVERE dans son document. Lever a la place perdrait le rapport,
+    # c'est-a-dire precisement ce que l'operateur est venu chercher. `ok` suit le code de sortie,
+    # pour que la sortie JSON ne se contredise jamais.
+    code = int(result.get("exit_code", EXIT_OK)) if isinstance(result, dict) else EXIT_OK
+    _print_result(result, as_json, stdout, code=code)
+    return code
 
 
 def _fail(error: AdminError, as_json: bool, stdout) -> int:
@@ -309,9 +342,10 @@ def _fail(error: AdminError, as_json: bool, stdout) -> int:
 # Affichage
 # =============================================================================================
 
-def _print_result(result: Dict[str, Any], as_json: bool, stdout) -> None:
+def _print_result(result: Dict[str, Any], as_json: bool, stdout, *, code: int = EXIT_OK) -> None:
     if as_json:
-        print(json.dumps({"ok": True, "result": result}, sort_keys=True, ensure_ascii=False), file=stdout)
+        print(json.dumps({"ok": code == EXIT_OK, "result": result}, sort_keys=True, ensure_ascii=False),
+              file=stdout)
         return
     for line in render_text(result):
         print(line, file=stdout)

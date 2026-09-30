@@ -32,12 +32,18 @@ magasin d'objets -- dont le confinement est la propriete de securite (D-055, D-0
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 from uuid import UUID
 
-from .jobs import JobRecord, lease_token
+from .errors import NotFound
+from .jobs import _JOB_COLUMNS, JobRecord, JobType, lease_token
 from .raw_objects import RawObject, _COLUMNS
 from .tenancy import Permission, TenantSession
+
+#: Les deux types de purge TENANT. D-067 n'en tolere qu'un seul actif par organisation, et
+#: l'index `jobs_tenant_purge_active_uniq` (revision 0016) l'impose a l'insertion.
+TENANT_PURGE_TYPES = (JobType.PURGE_STORE.value, JobType.PURGE_ORGANIZATION.value)
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,62 @@ class PurgeCounts:
             "customer_redactions": self.customer_redactions,
             "jobs": self.jobs,
         }
+
+
+@dataclass(frozen=True)
+class PurgeState:
+    """Etat de purge d'UNE organisation, tel que l'inspection d'administration le lit.
+
+    Lecture SEULE, dans le contexte du locataire: aucune requete inter-locataire, aucune
+    fonction privilegiee, aucun droit nouveau. Tout vient de `organizations` et de `jobs`,
+    que la RLS borne deja a l'organisation de la session.
+    """
+
+    status: str
+    purged_at: Optional[datetime]
+    active_purge: Optional[UUID]
+    latest_purge: Optional[JobRecord]
+    failed_purges: int
+
+    @property
+    def purging(self) -> bool:
+        return self.status == "purging"
+
+    @property
+    def purged(self) -> bool:
+        return self.status == "purged"
+
+
+def organization_purge_state(session: TenantSession) -> PurgeState:
+    """Statut du locataire, purge tenant en vol, derniere purge d'organisation et son historique.
+
+    `active_purge` couvre les DEUX types de purge tenant: D-067 n'en tolere qu'un seul actif,
+    et c'est cette unicite qui rend une reprise sure. `failed_purges` compte les purges
+    d'ORGANISATION echouees, y compris celle d'origine -- c'est le compteur de la garde
+    anti-boucle, et il ne demande aucune colonne nouvelle.
+    """
+    with session.transaction(Permission.READ) as conn:
+        row = conn.execute("SELECT status, purged_at FROM organizations WHERE id = %s",
+                           (session.organization_id,)).fetchone()
+        if row is None:  # pragma: no cover - l'appartenance verifiee implique l'organisation
+            raise NotFound("organization")
+        active = conn.execute(
+            "SELECT id FROM jobs WHERE organization_id = %s AND job_type = ANY(%s) "
+            "AND status IN ('queued', 'running') LIMIT 1",
+            (session.organization_id, list(TENANT_PURGE_TYPES)),
+        ).fetchone()
+        latest = conn.execute(
+            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE organization_id = %s AND job_type = %s "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (session.organization_id, JobType.PURGE_ORGANIZATION.value),
+        ).fetchone()
+        failed = conn.execute(
+            "SELECT count(*) FROM jobs WHERE organization_id = %s AND job_type = %s "
+            "AND status = 'failed'",
+            (session.organization_id, JobType.PURGE_ORGANIZATION.value),
+        ).fetchone()[0]
+    return PurgeState(row[0], row[1], active[0] if active else None,
+                      JobRecord(*latest) if latest else None, int(failed))
 
 
 def _declare_holder(conn, job: JobRecord) -> None:
@@ -175,6 +237,7 @@ def tombstone_store(session: TenantSession, job: JobRecord) -> bool:
     return bool(_call(session, job, "SELECT app_tombstone_store(%s)")[0])
 
 
-__all__ = ["ClosureResult", "PurgeCounts", "close_organization", "close_store",
-           "destroy_identity_key", "purge_tenant_data", "purging_objects", "remove_object",
+__all__ = ["TENANT_PURGE_TYPES", "ClosureResult", "PurgeCounts", "PurgeState",
+           "close_organization", "close_store", "destroy_identity_key",
+           "organization_purge_state", "purge_tenant_data", "purging_objects", "remove_object",
            "tombstone_organization", "tombstone_store", "tombstone_stores"]

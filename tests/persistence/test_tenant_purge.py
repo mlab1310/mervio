@@ -29,6 +29,9 @@ from .test_customer_erasure import ALICE, Claimed, _raw_object, _sealed_snapshot
 
 ORG_JOB = "purge_organization"
 STORE_JOB = "purge_store"
+#: Un travail QUELCONQUE du meme locataire. Ces tests ont besoin d'UN travail, pas d'une
+#: SECONDE purge tenant -- que D-067 refuse desormais a l'insertion (`23505`).
+OTHER_JOB = "redact_customer"
 
 #: les sept operations privilegiees de `0016`, avec leur signature
 PURGE_FUNCTIONS = (
@@ -250,7 +253,7 @@ def test_the_erasure_functions_are_untouched(owner):
 def test_closing_an_organization_cancels_queued_jobs_and_marks_objects(victim, owner, worker_sql):
     """D-065 Q7: la cloture, l'annulation et le marquage tiennent dans UNE transaction."""
     tenant, objects = victim
-    idle = _enqueue(owner, tenant, ORG_JOB, store_id=None)          # restera `queued`
+    idle = _enqueue(owner, tenant, OTHER_JOB, store_id=None)        # restera `queued`
     job = _enqueue(owner, tenant, ORG_JOB, store_id=None)
     claimed = _claim(owner, tenant, job)
 
@@ -270,7 +273,7 @@ def test_closing_an_organization_cancels_queued_jobs_and_marks_objects(victim, o
 def test_a_running_job_is_never_cancelled_by_the_closure(victim, owner, worker_sql):
     """D-065 Q7: un `redact_customer` deja pris n'est pas annule -- D-063 le serialise."""
     tenant, _ = victim
-    other = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None), worker_id="worker-9")
+    other = _claim(owner, tenant, _enqueue(owner, tenant, OTHER_JOB, store_id=None), worker_id="worker-9")
     job = _enqueue(owner, tenant, ORG_JOB, store_id=None)
     claimed = _claim(owner, tenant, job)
     _call(worker_sql, tenant, claimed, "SELECT * FROM app_close_organization(%s)", (claimed.id,))
@@ -282,7 +285,7 @@ def test_a_running_job_is_never_cancelled_by_the_closure(victim, owner, worker_s
 def test_a_rolled_back_closure_leaves_nothing_behind(victim, owner, pg):
     """BEGIN -> cloture -> erreur -> ROLLBACK: aucun etat partiel, aucun travail annule."""
     tenant, _ = victim
-    idle = _enqueue(owner, tenant, ORG_JOB, store_id=None)
+    idle = _enqueue(owner, tenant, OTHER_JOB, store_id=None)
     claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
     with psycopg.connect(pg.url("worker")) as conn:          # PAS autocommit: on controle la transaction
         conn.execute("SELECT set_config('app.organization_id', %s, false), "
@@ -299,7 +302,14 @@ def test_a_rolled_back_closure_leaves_nothing_behind(victim, owner, pg):
 
 
 def test_a_closed_organization_accepts_no_new_business_record(victim, owner, worker_sql):
-    """Le declencheur de cloture: plus aucune ecriture metier, et aucun nouveau travail."""
+    """Le declencheur de cloture: plus aucune ecriture metier, ni aucun travail -- SAUF UN.
+
+    D-068 ouvre une exception, et une seule: la REPRISE de la purge d'organisation elle-meme.
+    Sans elle, une purge definitivement echouee apres la cloture figeait l'organisation pour
+    toujours, alors que D-066 qualifie `purging` d'etat "signalant une purge a reprendre".
+    L'exception est bornee au type `purge_organization`, a la table `jobs`, et au statut
+    `purging`; D-067 garantit par ailleurs qu'il n'y en aura jamais deux actives.
+    """
     tenant, _ = victim
     claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
     _call(worker_sql, tenant, claimed, "SELECT * FROM app_close_organization(%s)", (claimed.id,))
@@ -308,7 +318,13 @@ def test_a_closed_organization_accepts_no_new_business_record(victim, owner, wor
             _ctx(owner, tenant)
             owner.execute("INSERT INTO stores (id, organization_id, name) VALUES (%s, %s, 'tardive')",
                           (uuid.uuid4(), tenant.organization_id))
-    with pytest.raises(psycopg.errors.RestrictViolation, match="closed and accepts no new record"):
+    # tous les AUTRES types de travaux restent refuses: l'intention de D-065 Q7 est intacte
+    for kind in (STORE_JOB, OTHER_JOB, "import", "analysis", "purge"):
+        store = tenant.store_id if kind in (STORE_JOB, "import", "analysis") else None
+        with pytest.raises(psycopg.errors.RestrictViolation, match="closed and accepts no new record"):
+            _enqueue(owner, tenant, kind, store_id=store)
+    # la purge en cours interdit la reprise: c'est D-067, pas le declencheur
+    with pytest.raises(psycopg.errors.UniqueViolation, match="jobs_tenant_purge_active_uniq"):
         _enqueue(owner, tenant, ORG_JOB, store_id=None)
 
 
@@ -402,7 +418,7 @@ def test_d066_a_purged_organization_closes_the_window_again(victim, owner):
 def test_d066_never_makes_queued_or_running_jobs_deletable(victim, owner):
     """13 et 14: I1 n'est PAS amendee. C'est ce qui protege le travail de purge lui-meme."""
     tenant, _ = victim
-    queued = _enqueue(owner, tenant, ORG_JOB, store_id=None)
+    queued = _enqueue(owner, tenant, OTHER_JOB, store_id=None)
     running = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
     _set_status(owner, tenant, "purging")
     assert _try_delete(owner, tenant, queued) == 0, "un travail en file reste indestructible"
@@ -600,10 +616,15 @@ def test_destroying_the_salt_requires_an_organization_purge(victim, owner, worke
 
 
 def test_an_organization_purge_destroys_the_salt_once_and_only_once(victim, owner, worker_sql):
-    """D-053: le sel se DETRUIT, jamais ne se supprime; le rejeu est sans effet et sans erreur."""
+    """D-053: le sel se DETRUIT, jamais ne se supprime; le rejeu est sans effet et sans erreur.
+
+    D-069: la cloture PRECEDE desormais la destruction du sel, comme elle precedait deja celle
+    des donnees. La sequence ci-dessous n'est donc plus un raccourci de test: c'est l'ordre.
+    """
     tenant, _ = victim
     _seed_identity_key(owner, tenant)
     claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _call(worker_sql, tenant, claimed, "SELECT * FROM app_close_organization(%s)", (claimed.id,))
     assert _call(worker_sql, tenant, claimed, "SELECT app_destroy_identity_key(%s)",
                  (claimed.id,))[0] is True
     assert _call(worker_sql, tenant, claimed, "SELECT app_destroy_identity_key(%s)",
@@ -619,7 +640,7 @@ def test_an_organization_purge_destroys_the_salt_once_and_only_once(victim, owne
 def test_a_store_purge_keeps_the_customer_redaction_proofs(victim, owner, worker_sql):
     """Q5: `customer_redactions` est organization-scoped -- une boutique ne l'emporte pas."""
     tenant, _ = victim
-    proof_job = _enqueue(owner, tenant, ORG_JOB, store_id=None)
+    proof_job = _enqueue(owner, tenant, OTHER_JOB, store_id=None)
     with owner.transaction():
         _ctx(owner, tenant)
         owner.execute(
@@ -1016,3 +1037,155 @@ def test_no_other_grant_was_withdrawn(pg, owner):
         assert owner.execute("SELECT has_column_privilege(%s, %s, %s, 'UPDATE')",
                              (pg.role("app"), f"public.{table}", column)).fetchone()[0] is True, \
             (table, column)
+
+
+# -- 9. D-067: au plus UNE purge tenant active par organisation -----------------------------------
+
+def test_two_organization_purges_cannot_coexist(victim, owner):
+    """D-067. Sans elle, les deux detruisaient, puis echouaient toutes deux a la pierre tombale."""
+    _enqueue(owner, tenant := victim[0], ORG_JOB, store_id=None)
+    with pytest.raises(psycopg.errors.UniqueViolation, match="jobs_tenant_purge_active_uniq"):
+        _enqueue(owner, tenant, ORG_JOB, store_id=None)
+
+
+def test_a_store_purge_and_an_organization_purge_exclude_each_other(victim, owner):
+    """C2, dans LES DEUX ORDRES: les deux types partagent la meme cle de reservation."""
+    tenant, _ = victim
+    _enqueue(owner, tenant, STORE_JOB)
+    with pytest.raises(psycopg.errors.UniqueViolation, match="jobs_tenant_purge_active_uniq"):
+        _enqueue(owner, tenant, ORG_JOB, store_id=None)
+
+
+def test_an_organization_purge_excludes_a_later_store_purge(victim, owner):
+    tenant, _ = victim
+    _enqueue(owner, tenant, ORG_JOB, store_id=None)
+    with pytest.raises(psycopg.errors.UniqueViolation, match="jobs_tenant_purge_active_uniq"):
+        _enqueue(owner, tenant, STORE_JOB)
+
+
+@pytest.mark.parametrize("terminal", ["succeeded", "failed", "cancelled"])
+def test_a_terminal_tenant_purge_frees_the_reservation(victim, owner, terminal):
+    """Le predicat porte sur le STATUT: un travail termine ne bloque plus rien."""
+    tenant, _ = victim
+    job_id = _enqueue(owner, tenant, ORG_JOB, store_id=None)
+    if terminal == "cancelled":
+        with owner.transaction():
+            _ctx(owner, tenant)
+            owner.execute("UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = %s",
+                          (job_id,))
+    else:
+        claimed = _claim(owner, tenant, job_id)
+        with owner.transaction():
+            _ctx(owner, tenant)
+            owner.execute("SELECT set_config('app.job_lease_token', %s, true)",
+                          (f"{claimed.attempts}:{claimed.locked_by}",))
+            owner.execute("UPDATE jobs SET status = %s, finished_at = now(), locked_at = NULL, "
+                          "locked_by = NULL, lease_expires_at = NULL WHERE id = %s", (terminal, job_id))
+    assert _enqueue(owner, tenant, ORG_JOB, store_id=None) is not None
+
+
+def test_the_reservation_is_not_global(victim, bystander, owner):
+    """La cle est le SEUL `organization_id`: une organisation n'en contraint jamais une autre."""
+    _enqueue(owner, victim[0], ORG_JOB, store_id=None)
+    assert _enqueue(owner, bystander[0], ORG_JOB, store_id=None) is not None
+
+
+def test_non_tenant_purge_jobs_are_never_constrained(victim, owner):
+    """`redact_customer`, `import`, `analysis` et la purge de RETENTION restent libres."""
+    tenant, _ = victim
+    for kind in (OTHER_JOB, OTHER_JOB, "import", "import", "analysis", "purge"):
+        store = tenant.store_id if kind in ("import", "analysis") else None
+        assert _enqueue(owner, tenant, kind, store_id=store) is not None
+    assert _enqueue(owner, tenant, ORG_JOB, store_id=None) is not None
+
+
+def test_even_a_superuser_cannot_bypass_the_reservation(victim, owner, pg):
+    """L'unicite est imposee par le MOTEUR DE STOCKAGE: aucune politique, aucun role ne la leve."""
+    tenant, _ = victim
+    _enqueue(owner, tenant, ORG_JOB, store_id=None)
+    with psycopg.connect(pg.admin_conninfo, dbname=pg.database, autocommit=True) as god:
+        assert god.execute("SELECT rolsuper OR rolbypassrls FROM pg_roles "
+                           "WHERE rolname = current_user").fetchone()[0] is True
+        with pytest.raises(psycopg.errors.UniqueViolation, match="jobs_tenant_purge_active_uniq"):
+            god.execute(
+                "INSERT INTO jobs (id, organization_id, job_type, status, correlation_id, "
+                "available_at, payload) VALUES (%s, %s, %s, 'queued', %s, now(), '{}')",
+                (uuid.uuid4(), tenant.organization_id, ORG_JOB, uuid.uuid4()))
+
+
+# -- 10. D-068: rien n'est detruit tant qu'un travail est en vol ----------------------------------
+
+#: `purge_store` est volontairement ABSENT: D-067 l'empeche desormais de coexister avec une
+#: purge d'organisation, et c'est teste plus haut. Les quatre autres types, eux, coexistent
+#: legitimement -- D-065 Q7 l'exige pour `redact_customer`, D-063 pour l'import -- et ce sont
+#: donc eux qui exercent la barriere de drain.
+@pytest.mark.parametrize("intruder", ["redact_customer", "import", "analysis", "purge"])
+def test_nothing_is_destroyed_while_another_job_is_in_flight(victim, owner, worker_sql, intruder):
+    """D-068. Le blocage ne venait PAS de `purge_store`: les cinq types le produisaient.
+
+    D-066 I1 GARANTIT qu'un travail `running` survit a la purge; la barriere des pierres
+    tombales INTERDISAIT qu'il survive. La purge detruisait donc tout, puis echouait
+    definitivement. Le refus est desormais transitoire, et il arrive AVANT la destruction.
+    """
+    tenant, _ = victim
+    _seed_identity_key(owner, tenant)
+    store = tenant.store_id if intruder in ("import", "analysis") else None
+    _claim(owner, tenant, _enqueue(owner, tenant, intruder, store_id=store), worker_id="intrus")
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _call(worker_sql, tenant, claimed, "SELECT * FROM app_close_organization(%s)", (claimed.id,))
+
+    for operation in ("SELECT app_destroy_identity_key(%s)", "SELECT * FROM app_purge_tenant_data(%s)"):
+        with pytest.raises(psycopg.errors.ObjectInUse, match="still in flight"):
+            _call(worker_sql, tenant, claimed, operation, (claimed.id,))
+    with owner.transaction():
+        _ctx(owner, tenant)
+        assert owner.execute("SELECT salt IS NOT NULL FROM organization_identity_keys "
+                             "WHERE organization_id = %s", (tenant.organization_id,)).fetchone()[0], \
+            "le sel doit etre INTACT"
+        assert owner.execute("SELECT count(*) FROM data_snapshots").fetchone()[0] == 1, \
+            "les donnees doivent etre INTACTES"
+
+
+def test_the_in_flight_refusal_is_classified_retryable():
+    """`55006` est DEJA transitoire dans `retry.py`: aucune ligne de Python ne change."""
+    from mervio.persistence.retry import RETRYABLE_SQLSTATES
+
+    assert "55006" in RETRYABLE_SQLSTATES
+
+
+def test_a_forgotten_terminal_job_stays_a_permanent_refusal(victim, owner, worker_sql):
+    """La scission ne relache rien: un travail TERMINAL oublie reste une faute d'ORDRE."""
+    tenant, _ = victim
+    _terminal_job(owner, tenant, age="1 minute")
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _call(worker_sql, tenant, claimed, "SELECT * FROM app_close_organization(%s)", (claimed.id,))
+    _finalize_all(worker_sql, tenant, claimed, owner)
+    with pytest.raises(psycopg.errors.RestrictViolation, match="jobs remain"):
+        _call(worker_sql, tenant, claimed, "SELECT app_tombstone_organization(%s)", (claimed.id,))
+
+
+# -- 11. D-069: le sel ne se detruit que dans une organisation close ------------------------------
+
+def test_the_salt_is_not_destroyed_before_the_closure(victim, owner, worker_sql):
+    """D-069. Cette fonction detruisait le sel d'une organisation restee `active`."""
+    tenant, _ = victim
+    _seed_identity_key(owner, tenant)
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    assert _status(owner, tenant, "organizations")[0] == "active"
+    with pytest.raises(psycopg.errors.RestrictViolation, match="must be closed"):
+        _call(worker_sql, tenant, claimed, "SELECT app_destroy_identity_key(%s)", (claimed.id,))
+    with owner.transaction():
+        _ctx(owner, tenant)
+        assert owner.execute("SELECT salt IS NOT NULL FROM organization_identity_keys "
+                             "WHERE organization_id = %s", (tenant.organization_id,)).fetchone()[0]
+
+
+def test_the_salt_is_not_destroyed_after_the_tombstone(victim, owner, worker_sql):
+    """`purged` referme la fenetre: la meme precondition refuse dans l'autre sens."""
+    tenant, _ = victim
+    _seed_identity_key(owner, tenant)
+    claimed = _claim(owner, tenant, _enqueue(owner, tenant, ORG_JOB, store_id=None))
+    _call(worker_sql, tenant, claimed, "SELECT * FROM app_close_organization(%s)", (claimed.id,))
+    _set_status(owner, tenant, "purged")
+    with pytest.raises(psycopg.errors.RestrictViolation, match="must be closed"):
+        _call(worker_sql, tenant, claimed, "SELECT app_destroy_identity_key(%s)", (claimed.id,))

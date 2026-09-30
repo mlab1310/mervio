@@ -144,7 +144,10 @@ def test_the_store_purge_keeps_the_salt_and_the_redaction_proofs(purgeable, work
     """D-065 Q4 et Q5, par le chemin reel: ni le sel ni les preuves ne bougent."""
     tenant, _ = purgeable
     _seed_identity_key(owner, tenant)
-    proof_job = jobs.enqueue_job(tenant.session, job_type=JobType.PURGE_ORGANIZATION, payload={})
+    # l'ancre de cle etrangere d'une PREUVE d'effacement est un travail d'effacement: une
+    # seconde purge tenant serait refusee par D-067, et n'avait de toute facon aucun sens ici.
+    proof_job = jobs.enqueue_job(tenant.session, job_type=JobType.REDACT_CUSTOMER,
+                                 payload={"customer_ref": ALICE})
     with owner.transaction():
         owner.execute("SELECT set_config('app.organization_id', %s, true)",
                       (str(tenant.organization_id),))

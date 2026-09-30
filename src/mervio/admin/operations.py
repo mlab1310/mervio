@@ -37,7 +37,8 @@ from ..application.workspace import is_sample_path
 from ..identity import REF_PATTERN
 from ..observability.logging import get_event_logger, scrub
 from ..observability.redaction import redact_text
-from ..persistence import audit, jobs, raw_objects, service, snapshots, stores, tenancy
+from ..persistence import (audit, jobs, raw_objects, service, snapshots, stores, tenancy,
+                           tenant_purge)
 from ..persistence.audit import Action, ActorType, Outcome, ResourceType
 from ..persistence.database import Database
 from ..persistence.errors import (
@@ -53,8 +54,8 @@ from ..synthetic.evaluation import analysis_day
 from ..workers import worker as job_commands
 from ..workers.retention import RetentionPolicy
 from .errors import (
-    AdminError, ConfigurationRefused, Conflict, DatabaseUnavailable, Forbidden, InvalidInput, NotFoundError,
-    SchemaMissing,
+    EXIT_CONFLICT, EXIT_DENIED, EXIT_OK, AdminError, ConfigurationRefused, Conflict, DatabaseUnavailable,
+    Forbidden, InvalidInput, NotFoundError, SchemaMissing,
 )
 
 #: Roles qu'un proprietaire peut attribuer par la CLI. `owner` est exclu: la co-propriete et le
@@ -71,6 +72,51 @@ DEMO_CONNECTION = "Demo CSV imports (synthetic)"
 DEMO_DATASET = {"orders": 1500, "days": 56, "seed": 7}
 DEMO_FILES = {"shopify_orders": "shopify_orders.csv", "shopify_products": "shopify_products.csv",
               "stripe": "stripe_transactions.csv", "google_ads": "google_ads.csv"}
+
+# -- reprise d'une purge d'organisation figee (D-068) -----------------------------------------
+#
+# GARDE ANTI-BOUCLE D + B + A, DELIBEREMENT HORS BASE. Aucune contrainte PostgreSQL ne la
+# porte, et c'est la propriete qui compte: une garde en base creerait un nouveau dead-end,
+# alors qu'ici `mervio admin job enqueue-purge-organization` reste ouvert quoi qu'elle decide.
+# Elle ne demande aucune colonne: son etat entier se relit depuis `jobs`, donc elle survit a
+# un arret brutal du processus comme a un changement de machine.
+#
+#: D -- FAIL-CLOSED. `55006` (`object_in_use`) est le SEUL refus transitoire: il signale un
+#: travail encore en vol, condition qui disparait d'elle-meme. Tout autre code -- y compris un
+#: code inconnu d'aujourd'hui -- arrete la reprise automatique. Mieux vaut cesser et rapporter
+#: que rejouer une cause qui ne changera pas.
+PURGE_RECOVERY_TRANSIENT_CODES = frozenset({"sqlstate_55006"})
+#: B -- plafond d'echecs. La purge D'ORIGINE compte, donc au plus DEUX reprises automatiques.
+PURGE_RECOVERY_MAX_FAILURES = 3
+#: A -- delai minimal entre deux reprises, ancre sur `finished_at` du dernier echec. Valeur
+#: REPRISE du depot (`jobs.BACKOFF_CAP_SECONDS`), jamais inventee: c'est deja le plafond
+#: d'attente d'une reprise de travail.
+PURGE_RECOVERY_MIN_DELAY_SECONDS = jobs.BACKOFF_CAP_SECONDS
+#: Budget de tentatives d'une purge d'organisation. Au-dela du defaut de 3 (90 s d'attente
+#: cumulee), parce qu'un intrus dont le worker est mort n'est repris qu'apres son bail: 3 x
+#: (300 s + 30 s) = 990 s au pire, aux valeurs par defaut, que seul un budget de 7 domine
+#: (1890 s). CE N'EST PAS une garantie generale -- aucune valeur admise par le schema (20 au
+#: plus) ne couvre un bail configure au maximum -- ET CE N'EST PAS la reponse a une purge
+#: devenue `failed`, qui releve de la reprise ci-dessus.
+PURGE_RECOVERY_MAX_ATTEMPTS = 7
+
+#: Issues d'une reconciliation, une par organisation inspectee.
+RECOVERY_RECOVERED = "recovered"
+RECOVERY_WOULD_RECOVER = "would_recover"
+RECOVERY_ALREADY_ACTIVE = "already_active"
+RECOVERY_NOT_PURGING = "not_purging"
+RECOVERY_TERMINAL = "terminal"
+RECOVERY_OWNER_INVALID = "owner_invalid"
+RECOVERY_PERMISSION_DENIED = "permission_denied"
+RECOVERY_GUARD_EXHAUSTED = "guard_exhausted"
+RECOVERY_DETERMINISTIC_FAILURE = "deterministic_failure"
+RECOVERY_NO_REQUESTER = "no_requester"
+RECOVERY_TOO_SOON = "too_soon"
+
+#: Issues qui ne sont pas un succes, avec l'erreur publiable qui porte leur code de sortie.
+_RECOVERY_DENIED = (RECOVERY_OWNER_INVALID, RECOVERY_PERMISSION_DENIED)
+_RECOVERY_CONFLICT = (RECOVERY_GUARD_EXHAUSTED, RECOVERY_DETERMINISTIC_FAILURE,
+                      RECOVERY_NO_REQUESTER, RECOVERY_TOO_SOON)
 
 _SERVICE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,62}$")
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
@@ -410,8 +456,11 @@ def list_organizations(database: Database, *, actor: Any) -> Dict[str, Any]:
     rows = []
     for organization_id in tenancy.organizations_of(database, user_id):
         session = TenantSession(database, TenantContext(organization_id, user_id))
+        # D-071: le cycle de vie, des la LISTE. Une organisation `purging` dont plus rien ne
+        # s'occupe etait jusqu'ici invisible: l'effacement demande restait inacheve en silence.
         rows.append({**_organization(organization_id, tenancy.organization_name(session)),
-                     "role": session.role().value})
+                     "role": session.role().value,
+                     "status": tenant_purge.organization_purge_state(session).status})
     return {"organizations": rows}
 
 
@@ -419,9 +468,15 @@ def show_organization(database: Database, *, actor: Any, organization: Any) -> D
     """Etat operationnel d'UNE organisation, pour un membre. Aucune ligne canonique n'est lue."""
     session = _session(database, actor, organization)
     role = session.role()
+    state = tenant_purge.organization_purge_state(session)
     document: Dict[str, Any] = {
         "organization": _organization(session.organization_id, tenancy.organization_name(session)),
         "role": role.value,
+        # D-071: de quoi decider si une reprise est due, sans lancer aucune commande.
+        # `blocked_reason` est calcule par la MEME garde que la reconciliation, pour qu'une
+        # inspection et une reprise ne puissent jamais se contredire.
+        "purge": _purge_report(session.organization_id, _observed_outcome(state), state,
+                               blocked_reason=_observed_blocker(state)),
         "stores": [],
         "jobs": jobs.queue_statistics(session),
     }
@@ -593,11 +648,18 @@ def list_service_authorizations(database: Database, *, actor: Any, organization:
 # =============================================================================================
 
 def _enqueue(session: TenantSession, job_type: JobType, payload: Dict[str, Any], *, store_id: Optional[UUID],
-             priority: int, idempotency_key: Optional[str]) -> Dict[str, Any]:
-    """Mise en file auditee (`job.enqueued`, acteur humain). Entrees deja validees par l'appelant."""
-    correlation_id = uuid.uuid4()
+             priority: int, idempotency_key: Optional[str],
+             max_attempts: int = jobs.DEFAULT_MAX_ATTEMPTS,
+             correlation_id: Optional[UUID] = None) -> Dict[str, Any]:
+    """Mise en file auditee (`job.enqueued`, acteur humain). Entrees deja validees par l'appelant.
+
+    `correlation_id` explicite: la reprise d'une purge poursuit la CORRELATION de la purge
+    d'origine, pour qu'une purge menee en plusieurs actes se relise comme un seul fil.
+    """
+    correlation_id = correlation_id or uuid.uuid4()
     job = job_commands.enqueue(session, job_type=job_type, payload=payload, store_id=store_id,
                                priority=priority, idempotency_key=idempotency_key,
+                               max_attempts=max_attempts,
                                correlation_id=correlation_id, log=get_event_logger("admin"))
     # un rejeu de cle d'idempotence renvoie le travail existant, avec SA correlation
     status = "created" if job.correlation_id == correlation_id else "existing"
@@ -769,6 +831,193 @@ def enqueue_redact(database: Database, *, actor: Any, organization: Any, custome
     # l'effacement porte sur l'organisation entiere, toutes boutiques confondues (D-056)
     return _enqueue(session, JobType.REDACT_CUSTOMER, {"customer_ref": reference}, store_id=None,
                     priority=priority, idempotency_key=idempotency_key)
+
+
+def enqueue_purge_store(database: Database, *, actor: Any, organization: Any, store: Any,
+                        priority: Any = 0, idempotency_key: Any = None) -> Dict[str, Any]:
+    """Purge d'UNE boutique (D-051, D-065). Rang `owner` exige (D-065 Q6), relu par la base.
+
+    La boutique vient de `jobs.store_id`, contraint par une cle etrangere: la charge utile ne
+    porte rien, et le worker ne recoit donc aucun parametre de portee.
+    """
+    store_id = validate_uuid(store, "store")
+    priority, idempotency_key = validate_priority(priority), validate_idempotency_key(idempotency_key)
+    session = _session(database, actor, organization)
+    _require(session, Permission.PURGE_TENANT)
+    with session.transaction(Permission.PURGE_TENANT) as conn:
+        stores.fetch_store(conn, session, store_id)  # appartenance reelle, sinon NotFound
+    return _enqueue(session, JobType.PURGE_STORE, {}, store_id=store_id, priority=priority,
+                    idempotency_key=idempotency_key)
+
+
+def enqueue_purge_organization(database: Database, *, actor: Any, organization: Any,
+                               priority: Any = 0, idempotency_key: Any = None) -> Dict[str, Any]:
+    """Purge de l'ORGANISATION entiere (D-051). Rang `owner` exige, relu par la base.
+
+    C'est AUSSI le chemin de reprise MANUELLE d'une purge figee: D-068 autorise la mise en
+    file d'un `purge_organization` -- et de lui seul -- dans une organisation `purging`. Cette
+    commande ne porte DELIBEREMENT aucune garde anti-boucle: la garde appartient a la
+    reconciliation automatique, et un proprietaire doit conserver un chemin qu'aucun compteur
+    n'epuise. D-067 continue d'interdire une seconde purge tenant active.
+    """
+    priority, idempotency_key = validate_priority(priority), validate_idempotency_key(idempotency_key)
+    session = _session(database, actor, organization)
+    _require(session, Permission.PURGE_TENANT)
+    return _enqueue(session, JobType.PURGE_ORGANIZATION, {}, store_id=None, priority=priority,
+                    idempotency_key=idempotency_key,
+                    max_attempts=PURGE_RECOVERY_MAX_ATTEMPTS)
+
+
+def _purge_guard(state: tenant_purge.PurgeState, now: datetime):
+    """Garde anti-boucle D + B + A. Rend `(issue, raison)` si elle bloque, sinon `None`.
+
+    L'ordre n'est pas indifferent: une cause deterministe arrete AVANT que le plafond ne soit
+    consomme, sans quoi la garde B brulerait deux reprises inutiles et deux traces d'audit.
+    """
+    latest = state.latest_purge
+    code = latest.last_error_code
+    if code is not None and code not in PURGE_RECOVERY_TRANSIENT_CODES:
+        return RECOVERY_DETERMINISTIC_FAILURE, f"derniere cause non transitoire ({code})"
+    if state.failed_purges >= PURGE_RECOVERY_MAX_FAILURES:
+        return (RECOVERY_GUARD_EXHAUSTED,
+                f"{state.failed_purges} echecs, plafond {PURGE_RECOVERY_MAX_FAILURES}")
+    if latest.finished_at is not None:
+        waited = int((now - latest.finished_at).total_seconds())
+        if waited < PURGE_RECOVERY_MIN_DELAY_SECONDS:
+            return (RECOVERY_TOO_SOON,
+                    f"{waited}s depuis le dernier echec, minimum {PURGE_RECOVERY_MIN_DELAY_SECONDS}s")
+    return None
+
+
+def _observed_outcome(state: tenant_purge.PurgeState) -> str:
+    """Ce que la RECONCILIATION dirait de cette organisation, sans rien executer."""
+    if state.purged:
+        return RECOVERY_TERMINAL
+    if not state.purging:
+        return RECOVERY_NOT_PURGING
+    if state.active_purge is not None:
+        return RECOVERY_ALREADY_ACTIVE
+    if state.latest_purge is None:
+        return RECOVERY_NO_REQUESTER
+    blocked = _purge_guard(state, datetime.now(timezone.utc))
+    return blocked[0] if blocked is not None else RECOVERY_WOULD_RECOVER
+
+
+def _observed_blocker(state: tenant_purge.PurgeState) -> Optional[str]:
+    if not state.purging or state.active_purge is not None or state.latest_purge is None:
+        return None
+    blocked = _purge_guard(state, datetime.now(timezone.utc))
+    return blocked[1] if blocked is not None else None
+
+
+def _purge_report(organization_id: UUID, outcome: str, state=None, *, blocked_reason=None,
+                  enqueued=None) -> Dict[str, Any]:
+    """Une ligne de rapport. Aucune donnee d'un autre tenant, aucun nom, aucun secret."""
+    document: Dict[str, Any] = {"organization_id": str(organization_id), "outcome": outcome,
+                                "blocked_reason": blocked_reason}
+    if state is not None:
+        document.update({
+            "status": state.status, "purged_at": _text(state.purged_at),
+            "active_purge": _text(state.active_purge), "recoveries": state.failed_purges,
+            "latest_purge_job": (render_job(state.latest_purge) if state.latest_purge else None),
+        })
+    if enqueued is not None:
+        document["enqueued"] = enqueued
+    return document
+
+
+def reconcile_purges(database: Database, *, actor: Any, organization: Any = None,
+                     execute: Any = False, limit: Any = 50,
+                     now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Reprend les purges d'organisation figees. SANS EFFET tant que `execute` est faux.
+
+    UNE organisation reste `purging` quand sa purge a echoue definitivement apres la cloture:
+    les donnees sont intactes -- la barriere de drain de D-068 les protege -- mais l'effacement
+    demande n'est pas honore, et rien ne le signale. Cette commande le voit, le dit, et le
+    reprend.
+
+    CE QU'ELLE N'EST PAS. Elle n'usurpe l'identite de personne: la purge remise en file est
+    autorisee par l'acteur `--as`, dont le rang `owner` est relu en base ici PUIS par
+    `app_purge_guard` a l'execution. Le demandeur d'origine ne sert qu'a l'historique et a la
+    correlation. C'est aussi pourquoi elle vit dans `admin` et non dans le worker: `0007`
+    (SEC-06) interdit au role de service de creer le moindre travail, et cette interdiction
+    n'est ni contournee ni amendee.
+
+    D-067 arbitre les courses: deux administrateurs simultanes produisent une seule purge, le
+    perdant recevant une violation d'unicite que l'on rend ici comme `already_active`.
+    """
+    execute = bool(execute)
+    limit = validate_limit(limit)
+    now = now or datetime.now(timezone.utc)
+    user_id = resolve_actor(database, actor)
+    if organization is not None:
+        # organisation explicite: une non-appartenance reste INDISCERNABLE d'une absence (5)
+        targets = [validate_uuid(organization, "org")]
+    else:
+        targets = tenancy.organizations_of(database, user_id)[:limit]
+
+    rows: List[Dict[str, Any]] = []
+    for organization_id in targets:
+        session = TenantSession(database, TenantContext(organization_id, user_id))
+        try:
+            state = tenant_purge.organization_purge_state(session)
+        except NotFound:
+            if organization is not None:
+                raise
+            # appartenance retiree entre l'enumeration et la lecture: on passe, sans bruit
+            rows.append(_purge_report(organization_id, RECOVERY_PERMISSION_DENIED,
+                                      blocked_reason="appartenance retiree"))
+            continue
+        rows.append(_reconcile_one(session, state, execute=execute, now=now))
+    return {"reconciled": rows, "executed": execute, "exit_code": _recovery_exit(rows)}
+
+
+def _reconcile_one(session: TenantSession, state, *, execute: bool, now: datetime) -> Dict[str, Any]:
+    organization_id = session.organization_id
+    if state.purged:
+        return _purge_report(organization_id, RECOVERY_TERMINAL, state)
+    if not state.purging:
+        return _purge_report(organization_id, RECOVERY_NOT_PURGING, state)
+    if state.active_purge is not None:
+        return _purge_report(organization_id, RECOVERY_ALREADY_ACTIVE, state)
+    if state.latest_purge is None:
+        # Rien n'est usurpe et rien n'est devine: ce qui manque n'est pas l'autorisation --
+        # l'acteur l'a -- mais l'HISTORIQUE sur lequel la garde s'appuie. Fail-closed.
+        return _purge_report(organization_id, RECOVERY_NO_REQUESTER, state,
+                             blocked_reason="aucune purge d'organisation dans l'historique: "
+                                            "reprise manuelle par un proprietaire requise")
+    blocked = _purge_guard(state, now)
+    if blocked is not None:
+        return _purge_report(organization_id, blocked[0], state, blocked_reason=blocked[1])
+    if not execute:
+        return _purge_report(organization_id, RECOVERY_WOULD_RECOVER, state)
+
+    try:
+        _require(session, Permission.PURGE_TENANT)
+    except (PermissionDenied, NotFound) as exc:
+        return _purge_report(organization_id, RECOVERY_OWNER_INVALID, state,
+                             blocked_reason=redact_text(str(exc)))
+    try:
+        enqueued = _enqueue(session, JobType.PURGE_ORGANIZATION, {}, store_id=None, priority=0,
+                            idempotency_key=None, max_attempts=PURGE_RECOVERY_MAX_ATTEMPTS,
+                            correlation_id=state.latest_purge.correlation_id)
+    except Exception as exc:  # noqa: BLE001 - trie par le code SQLSTATE ci-dessous
+        if database_error_code(exc) == "sqlstate_23505":
+            # D-067: une autre reprise a gagne la course entre la lecture et l'insertion
+            return _purge_report(organization_id, RECOVERY_ALREADY_ACTIVE, state,
+                                 blocked_reason="une autre purge tenant a gagne la course")
+        raise
+    return _purge_report(organization_id, RECOVERY_RECOVERED, state, enqueued=enqueued["job"])
+
+
+def _recovery_exit(rows: List[Dict[str, Any]]) -> int:
+    """Le code le PLUS SEVERE rencontre. Une inspection reussit tout en rapportant des obstacles."""
+    outcomes = {row["outcome"] for row in rows}
+    if outcomes & set(_RECOVERY_DENIED):
+        return EXIT_DENIED
+    if outcomes & set(_RECOVERY_CONFLICT):
+        return EXIT_CONFLICT
+    return EXIT_OK
 
 
 def list_jobs(database: Database, *, actor: Any, organization: Any, status: Optional[List[str]] = None,
