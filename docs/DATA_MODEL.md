@@ -68,6 +68,69 @@ son commit, et toute opération destructrice prend le **même** verrou en exclus
 opérations sont donc totalement ordonnées, dans un sens ou dans l'autre, et les deux ordres
 donnent le bon résultat final.
 
+**Cycle de vie du locataire (004.4.6, D-051, D-065 à D-069, révision `0016`)** : `organizations` et
+`stores` portent chacune `status` — domaine `active → purging → purged`, fixé par la contrainte
+`<table>_status_known` — et `purged_at`, les deux liées par `<table>_purge_consistent`
+(`(status = 'purged') = (purged_at IS NOT NULL)`). Ce sont les **colonnes de cycle de vie**, et le
+rôle applicatif ne peut **ni** les écrire (**aucun `GRANT UPDATE`**) **ni** les renseigner à la
+création (elles sont exclues de son `GRANT INSERT` de colonne) : seule une fonction privilégiée les
+écrit. Cette propriété n'est pas cosmétique — `organizations.status` est l'**unique ancre** de
+l'exception de rétention de D-066 et de la précondition de D-069, et un `GRANT UPDATE` futur sur ces
+colonnes briserait les deux **en silence**.
+
+Le déclencheur `tenant_closure_guard` ferme l'écriture dès la clôture : une organisation ou une
+boutique qui n'est plus `active` **n'accepte plus aucun nouvel enregistrement**. Une seule exception,
+volontairement étroite (D-068) : dans une organisation `purging`, la table `jobs` accepte un travail
+`purge_organization` — et lui seul — afin qu'une purge définitivement échouée puisse être **reprise**.
+`purged` reste **terminal** : rien n'y entre, pas même une purge.
+
+**Pierres tombales (D-051).** La purge ne supprime **pas** la ligne de l'organisation ni celle d'une
+boutique : elle la **vide** et la marque `purged`. La raison est portée par le schéma — ces lignes
+sont la cible de clés étrangères RESTRICT depuis `audit_events`, `memberships` et
+`service_authorizations` ; les supprimer rendrait l'audit illisible, ce que D-051 a explicitement
+refusé. Une organisation purgée conserve donc des `memberships` et des `service_authorizations`
+révoquées — des identifiants, **sans donnée personnelle**.
+
+**Au plus une purge tenant active par organisation (D-067).** L'index unique partiel
+`jobs_tenant_purge_active_uniq` porte sur `jobs (organization_id)` pour les seuls `job_type`
+`purge_store` et `purge_organization` en statut `queued` ou `running`. La clé étant
+l'`organization_id` **seul**, les deux types sont **mutuellement exclusifs** sans qu'aucun n'ait à
+connaître l'autre, et la course est tranchée **à l'insertion** (`23505`), au seul point où rien n'est
+encore détruit. Les autres types de travaux ne sont pas contraints ; un travail terminal sort du
+prédicat, ce qui rend une reprise possible.
+
+**Relation avec `jobs` (D-066).** Pendant `organizations.status = 'purging'`, et pour les seuls
+travaux de cette organisation, le **plancher temporel** d'une heure de `jobs_purge_terminal_only` ne
+s'applique plus. Les deux autres garanties de `0004` restent **entières** : un travail `queued` ou
+`running` n'est **jamais** supprimable, et un travail terminal doit avoir `finished_at` renseigné. Le
+travail de purge étant lui-même `running`, il n'est jamais supprimable par sa propre exception —
+l'exigence de D-051 « travaux **autres que** la purge en cours » est satisfaite par construction.
+L'exception se **referme** au passage à `purged`, d'où l'ordre normatif : nettoyer les travaux
+**avant** la pierre tombale.
+
+**Relation avec `raw_objects`.** `0016` ajoute deux motifs au domaine `purge_reason` — `store_purge`
+et `organization_purge` — à côté du `customer_erasure` de `0014`. La différence avec l'effacement
+client est assumée : l'effacement **conserve** sa ligne en `purged`, avec ses métadonnées non
+sensibles, tandis qu'une purge tenant **retire** la ligne, comme D-051 l'exige. L'ordre reste celui
+de D-065 Q3, et il est absolu : ligne `available` → `purging` avec son motif → destruction physique
+des octets → **et seulement après succès**, suppression de la ligne. Supprimer la ligne d'abord
+transformerait un échec récupérable en octets **orphelins que plus rien ne désigne**.
+
+**Relation avec la destruction de l'identité (D-053, D-069).** `app_destroy_identity_key` met
+`organization_identity_keys.salt` à `NULL` et renseigne `destroyed_at` — le sel se **détruit**, il
+ne se supprime jamais (le déclencheur de `0011` interdit le `DELETE`). Cette destruction n'a lieu
+que dans une purge d'**organisation** (D-065 Q4) — **jamais** dans une purge de boutique, même la
+dernière, le sel ayant pour clé primaire l'`organization_id` — et uniquement si l'organisation est
+déjà `purging` (D-069) : `active` → refus, `purged` → refus. Le sel est détruit **avant** les
+données, délibérément : les références client encore présentes deviennent définitivement non
+réversibles avant d'être supprimées.
+
+**Barrière de drain (D-068).** Aucune destruction irréversible ne commence tant qu'un **autre**
+travail de l'organisation est `queued` ou `running` : le refus est `object_in_use` (`55006`), donc
+**transitoire et repris**, là où un travail **terminal** oublié reste un refus définitif
+(`restrict_violation`, `23001`). Le drain est **borné** — la clôture ayant fermé l'entrée, l'ensemble
+des travaux actifs ne peut plus que décroître.
+
 ## Définitions qui engagent les chiffres
 
 **CA avant ajustements** (D-048, anciennement « CA net ») = `Order.subtotal` (D-041).
