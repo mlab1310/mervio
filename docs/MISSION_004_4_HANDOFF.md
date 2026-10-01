@@ -1,5 +1,10 @@
 # Mission 004.4 — Handoff (document de départ de Mission 004.5)
 
+> **État au 30/09/2026 — à lire en premier.**
+> **004.4.6 = CLOSED** · **004.4.7 / D-070 = IMPLEMENTED + VALIDATED** ·
+> `HEAD = aec8ddd49f2da37c247ce2bcf0920781fc13627a` · tête de migration **`0017`** ·
+> **3036 tests passés / 0 ignoré** · **004.5 : non commencée.**
+
 > **Objet.** Ce document permet de reprendre Mervio **sans aucun contexte conversationnel**. Il
 > couvre l'intégralité de la mission 004.4 — *Data Protection & Safe Ingestion* — de sa première
 > sous-mission à sa clôture, et il énonce les résiduels **sans les masquer**. Les arbitrages sont
@@ -12,11 +17,12 @@
 |---|---|
 | Dépôt | `/Users/mlab/Projects/mervio` |
 | Branche | `mission-004.4` — identique à `origin/mission-004.4` |
-| Commit final | `e1a68efa8d591f7058eba1235297a7d934e9567f` — `feat(persistence): finalize tenant purge recovery` |
+| Commit final | `aec8ddd49f2da37c247ce2bcf0920781fc13627a` — `feat(004.4.7): audit purge recovery refusals (D-070)` |
+| Dernier commit de 004.4.6 | `e1a68efa8d591f7058eba1235297a7d934e9567f` — `feat(persistence): finalize tenant purge recovery` |
 | Arbre de travail | propre |
-| Tête de migration | **`0016_tenant_purge`** |
-| CI | **run #32, `36793763636`, `success`** — 4 jobs sur 4 (`lint`, `test`, `security`, `docker`) |
-| Tests | **2982 passés · 0 ignoré · 0 échec · 0 erreur** (`MERVIO_EXPECTED_TESTS = 2982`, égalité **exacte** imposée par la CI) |
+| Tête de migration | **`0017_purge_recovery_audit`** (revises `0016_tenant_purge`) |
+| CI | **run #32, `36793763636`, `success`** sur `e1a68ef` — 4 jobs sur 4. 004.4.7 est validée localement sur PostgreSQL 17 réel ; sa CI reste à exécuter |
+| Tests | **3036 passés · 0 ignoré · 0 échec · 0 erreur** (`MERVIO_EXPECTED_TESTS = 3036`, égalité **exacte** imposée par la CI) |
 | Environnement | Python 3.11.16 · pytest 9.1.1 · PostgreSQL 17.11 (épinglé par digest) · psycopg 3.3.5 · Alembic 1.20.0 |
 | Moteur | **ENGINE_VERSION 0.1.0 · contrat LLM 1.0 — inchangés.** Aucune formule, aucun seuil, aucune clé de rapport modifiés par 004.4 |
 
@@ -35,6 +41,7 @@ ligne sous RLS forcée — jamais un module Python, jamais un privilège élevé
 | **004.4.4** — frontière d'import sans chemin, `ObjectStore`, `raw_objects` | `0013` | D-054, D-055, D-061 | `252daa2` — `fix(container): prepare named volumes for image user` | [`MERVIO_004_4_4_ACCEPTANCE.md`](MERVIO_004_4_4_ACCEPTANCE.md) |
 | **004.4.5** — effacement client : désignation, concurrence, destruction réelle | `0014`, `0015` | D-062, D-063, D-064, achèvement de D-056 | `720404d` — `fix(004.4.5): assert ratified customer erasure audit event` | [`MERVIO_004_4_5_ACCEPTANCE.md`](MERVIO_004_4_5_ACCEPTANCE.md) |
 | **004.4.6** — purge de boutique et d'organisation, reprise | `0016` | D-065 à D-069, D-071 ; **D-070 non traitée ici** | `e1a68ef` — `feat(persistence): finalize tenant purge recovery` | [`MERVIO_004_4_6_ACCEPTANCE.md`](MERVIO_004_4_6_ACCEPTANCE.md) |
+| **004.4.7** — audit des refus de reprise, et clôture du défaut d'enum de `0016` | `0017` | **D-070** | `aec8ddd` — `feat(004.4.7): audit purge recovery refusals (D-070)` | [`MERVIO_004_4_7_ACCEPTANCE.md`](MERVIO_004_4_7_ACCEPTANCE.md) |
 
 **Protocole observé, et à conserver :** toute décision d'architecture est **ratifiée par un commit
 documentaire avant** son implémentation (D-062, D-063, D-064, D-065, D-066 l'ont été ainsi).
@@ -175,16 +182,19 @@ transaction**, et chaque opération privilégiée est **sa propre** transaction.
 
 ## 4. Tête de migration
 
-**`0016_tenant_purge`** (revises `0015_raw_object_purge`).
+**`0017_purge_recovery_audit`** (revises `0016_tenant_purge`).
 
 ```
 0001 tenancy          0007 service_identity        0013 raw_objects
 0002 snapshots        0008 admin_audit             0014 customer_erasure
 0003 analysis_reports 0009 qualify_security_fn     0015 raw_object_purge
-0004 jobs             0010 qualify_residual_sec    0016 tenant_purge  ← tête
-0005 audit            0011 identity_pii_schema
+0004 jobs             0010 qualify_residual_sec    0016 tenant_purge
+0005 audit            0011 identity_pii_schema     0017 purge_recovery_audit  ← tête
 0006 job_leases       0012 dispatch_probe_plan
 ```
+
+`0017` (004.4.7, D-070) élargit **une seule** contrainte — `audit_events_action_check` — d'une
+seule valeur. Aucune table, colonne, index, politique, rôle, privilège, fonction ni déclencheur.
 
 Règles : `0001`–`0005` **ne sont plus modifiées** ; tout changement de schéma = **nouvelle
 révision**, montée **et** descente testées, `test_persistence_migrations.py` étendu ; la CI exerce
@@ -288,7 +298,14 @@ même une purge, et aucune commande ne propose de l'outrepasser.
 2. **Historique supprimé → `no_requester`** : la fenêtre D-066 permet de supprimer la purge
    d'origine pendant `purging` ; l'organisation reste alors `purging` **sans demandeur
    identifiable**, et la réconciliation refuse. Seul le chemin manuel reste ouvert.
-3. **D-070 non implémentée** : aucune trace durable d'une reprise **refusée**. **Ratifiée le 30/09/2026**, rattachée à **004.4.7** ; implémentation non commencée, `0017` non créée. **La couverture prévue est PARTIELLE** : `owner_invalid` et `permission_denied` resteront définitivement non journalisés, et les quatre classes de garde ne le seront que pour un acteur `owner`. D-070 ne journalisera donc pas 100 % des tentatives de reprise.
+3. **D-070 : implémentée et validée en 004.4.7** (`aec8ddd`, révision `0017`). Un refus d'une
+   tentative **réelle** de reprise est désormais tracé par `organization.purge_recovery_refused`.
+   **La couverture est PARTIELLE, et le reste définitivement** : `owner_invalid` n'est pas
+   journalisé — l'écriture se fait sous `PURGE_TENANT`, la permission de l'action décrite, que
+   cet acteur n'a précisément pas — et `permission_denied` ne l'est pas davantage, par
+   impossibilité technique sous RLS. Les quatre classes de garde ne sont auditées que pour un
+   acteur `owner`. **D-070 ne journalise pas 100 % des tentatives de reprise**, et ne doit jamais
+   être présentée comme le faisant. Voir [`MERVIO_004_4_7_ACCEPTANCE.md`](MERVIO_004_4_7_ACCEPTANCE.md) §I.2.
 4. **`max_attempts = 7` n'est dominant qu'aux valeurs par défaut** de bail ; aucune valeur admise par
    le schéma (≤ 20) ne couvre `MERVIO_JOB_LEASE_SECONDS` au maximum (86400).
 5. **Trois batteries de gardes D-052** à maintenir équivalentes : risque de dérive réduit, non annulé.
@@ -301,11 +318,11 @@ même une purge, et aucune commande ne propose de l'outrepasser.
    de la même organisation ; `memberships` et `service_authorizations` révoquées conservées après
    purge ; coût d'évaluation de la politique non mesuré.
 
-10. **Quatre actions d'audit de purge tenant écrites mais non filtrables par la CLI.** Mesuré :
-    l'enum Python `Action` porte 23 valeurs, la contrainte DB 27 ; `audit list --action
-    organization.purged` est donc refusé (`InvalidInput`, code 2) alors que ces événements existent.
-    Les événements sont corrects ; seul le filtre de lecture est en cause. **Correction prévue en
-    004.4.7**, avec le test de cohérence que `0013` et `0014` avaient et que `0016` a omis.
+10. ~~Quatre actions d'audit de purge tenant écrites mais non filtrables par la CLI.~~
+    **FERMÉ en 004.4.7** (`aec8ddd`). L'enum `Action` porte désormais 28 valeurs et est
+    **exactement égal** à la contrainte ; `audit list --action organization.purged` est accepté.
+    Le test de cohérence que `0013` et `0014` avaient, et que `0016` avait omis, est restauré —
+    c'est son absence qui avait laissé passer le défaut.
 
 ### Hérités, inchangés
 
@@ -342,21 +359,20 @@ déclarées — `stores.timezone` et l'identité client — sont livrées depuis
 entièrement écrit : onze défauts tabulés (AN-01, AN-02, AN-05, AN-06, AN-14 à AN-19), JSON Schema de
 rapport versionné, `ENGINE_VERSION` 0.2.0, **aucune migration**.
 
-**Cette mission documentaire ferme d'abord la Definition of Done de 004.4**, qui exigeait
-nommément « ADR identité/PII, ADR stockage objet, politique de rétention v0, **handoff** ; CI
-verte » — le handoff est le présent document. **004.5 n'est pas commencée**, et rien de ce qui
-précède ne l'entame.
+**La Definition of Done de 004.4 est satisfaite** : elle exigeait nommément « ADR identité/PII,
+ADR stockage objet, politique de rétention v0, **handoff** ; CI verte » — le handoff est le présent
+document, produit par la clôture documentaire de 004.4.6. **004.5 n'est pas commencée**, et rien de
+ce qui précède ne l'entame.
 
 ### Premières actions recommandées pour la conversation suivante
 
 1. Vérifier la baseline : `git status --short`, `git rev-parse HEAD` vs `origin/mission-004.4`.
 2. Lire [`MERVIO_004_4_6_ACCEPTANCE.md`](MERVIO_004_4_6_ACCEPTANCE.md) §I, puis D-065 à D-071 dans
    [`DECISIONS.md`](DECISIONS.md).
-3. **D-070 est arbitrée** : ratifiée le 30/09/2026, rattachée à **004.4.7**, implémentation non
-   commencée. La prochaine étape sur ce sujet est l'implémentation telle que la décision la
-   spécifie — révision `0017` limitée à `audit_events_action_check`, correction de l'enum `Action`,
-   écriture par `audit.record_event` sous `Permission.PURGE_TENANT`, et les vingt-cinq tests
-   d'acceptance. Lire D-070 dans [`DECISIONS.md`](DECISIONS.md) **avant** d'écrire une ligne.
+3. **D-070 est close** : ratifiée puis implémentée et validée en 004.4.7 (`41f5f34`, `aec8ddd`).
+   Il n'y a rien à reprendre sur ce sujet. La seule chose à ne pas perdre de vue est sa
+   **couverture partielle** (§8.2–8.3) : deux classes de refus ne sont jamais journalisées, par
+   conception et par impossibilité technique.
 4. Ne pas toucher à la purge tenant sans avoir lu §3.10 et §5 : le statut, non le verrou, sérialise
    les étapes, et deux propriétés d'ordre ne sont protégées que par des tests.
 5. Pour 004.5, se rappeler que toute modification du rapport impose une **version de contrat**

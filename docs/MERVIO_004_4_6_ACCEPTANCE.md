@@ -504,12 +504,13 @@ Aucun n'est une exigence non tenue ; **une CI verte n'en referme aucun.**
    pendant `purging`), l'organisation reste `purging` **sans demandeur identifiable**, et
    `reconcile-purges` refuse. Le chemin **manuel** reste ouvert, mais il exige un humain `owner`
    qui sache qu'il doit agir. État atteignable, non théorique.
-3. **D-070 n'est pas implémentée.** Aucune trace durable d'une tentative de reprise **refusée**.
+3. **D-070 n'est pas implémentée par cette mission.** Aucune trace durable d'une tentative de reprise **refusée**.
    Une revue de conformité portant sur « qu'a-t-on tenté pour honorer cet effacement » ne trouverait
    que les purges **mises en file**, jamais les refus. Deux tests figent ce comportement pour qu'il
    ne change pas sans décision.
-   *(Mise à jour du 30/09/2026 : **D-070 est désormais RATIFIÉE** et rattachée à **004.4.7** ; son
-   implémentation n'a pas commencé, et ce résiduel reste donc entier pour 004.4.6. **La couverture
+   *(Mise à jour du 01/10/2026 : **D-070 est ratifiée, implémentée et validée** en **004.4.7**
+   (`41f5f34`, `aec8ddd`, révision `0017`). Ce résiduel reste néanmoins **entier pour 004.4.6** :
+   la présente acceptance ne le referme pas, elle constate qu'une mission ultérieure l'a fait. **La couverture
    prévue est PARTIELLE, et ne doit jamais être présentée comme totale** : `owner_invalid` et
    `permission_denied` resteront définitivement non journalisés — le premier par le modèle
    d'autorisation, le second par impossibilité technique sous RLS — et les quatre classes de garde
@@ -558,8 +559,10 @@ Aucun n'est une exigence non tenue ; **une CI verte n'en referme aucun.**
     existent en base. `0013` et `0014` avaient chacune ajouté leurs actions à l'enum **et**
     verrouillé l'inclusion par un test ; `0016` n'a fait ni l'un ni l'autre, et c'est l'absence de
     ce test qui a laissé passer le défaut. Les événements eux-mêmes sont corrects et complets — seul
-    le filtre de lecture est en cause. **Correction prévue en 004.4.7**, dans le même changement que
-    D-070, avec le test de cohérence restauré.
+    le filtre de lecture est en cause. **Corrigé en 004.4.7** (`aec8ddd`), dans le même changement
+    que D-070 : l'enum porte désormais 28 valeurs, exactement égales à la contrainte, et le test
+    de cohérence que `0013` et `0014` avaient — et dont l'absence ici a laissé passer le défaut —
+    est restauré. Le défaut reste imputable à **004.4.6**, et cette ligne le consigne comme tel.
 15. **Résiduels hérités, inchangés par cette mission** : ramassage des orphelins et expiration de
     `retain_until` (**004.9**) ; absence de garantie de non-écrasement de `put` (D-055, 004.9) ;
     politique IAM `s3:DeleteObject` non implémentée, donc `delete_capability()` de S3 rend
@@ -584,7 +587,7 @@ Ces points ne sont **pas** validés par cette acceptance et ne doivent pas être
 - **Couverture de code.** Aucune mesure produite ni revendiquée ; les comptes cités sont des
   nombres de **tests**.
 - **Reprise automatique.** Non livrée (§I.1). La présence de `reconcile-purges` n'en est pas une.
-- **D-070.** **Ratifiée le 30/09/2026** et rattachée à **004.4.7** ; **non implémentée**, **aucune migration `0017` créée**, enum `Action` non modifié, `reconcile_purges` non touché. Rien de ce qu'elle prévoit n'est validé par la présente acceptance.
+- **D-070.** Ratifiée, puis **implémentée et validée en 004.4.7** (`41f5f34`, `aec8ddd`, révision `0017`). **Rien de ce qu'elle prévoit n'est validé par la présente acceptance** : 004.4.6 n'a créé ni `0017`, ni l'action d'audit, ni le chemin d'écriture. Les preuves de D-070 sont dans [`MERVIO_004_4_7_ACCEPTANCE.md`](MERVIO_004_4_7_ACCEPTANCE.md).
 - **Validation juridique des durées** ⚖️ (rétention d'audit à 365 jours, objets bruts à 30 jours,
   rôles de traitement) : **004.9**.
 
@@ -598,7 +601,7 @@ Ces points ne sont **pas** validés par cette acceptance et ne doivent pas être
 | D-066 ratifiée, la politique livrée dans la forme prescrite | ✅ `75ebf81` → `60505e1`, §G |
 | D-067, D-068, D-069 ratifiées **et** implémentées | ✅ `e1a68ef`, §D |
 | D-071 implémentée | ✅ `e1a68ef`, §H |
-| D-070 — **non implémentée** par cette mission ; ratifiée depuis, rattachée à 004.4.7 | ✅ déclarée telle, §I.3, §J |
+| D-070 — **non implémentée** par cette mission ; ratifiée, implémentée et validée depuis, en 004.4.7 | ✅ déclarée telle, §I.3, §J |
 | D-063 intacte — aucune portée de verrou, aucune primitive ajoutée | ✅ §D.1 |
 | Aucun `SET ROLE` ajouté — vérifié, zéro occurrence dans `src/` | ✅ §C.7 |
 | Aucun `INSERT` direct dans `jobs` par le worker ; SEC-06 non amendée | ✅ §E.1, test de forme |
@@ -612,8 +615,8 @@ Ces points ne sont **pas** validés par cette acceptance et ne doivent pas être
 | CI verte sur `test`, `security`, `lint`, `docker` | ✅ run #32 `36793763636` |
 
 **D-051 : achevée.** **D-053 : achevée, et resserrée par D-069.** **D-065, D-066, D-067, D-068,
-D-069, D-071 : implémentées.** **D-070 : ouverte, non implémentée.** **004.4.6 : close et
-ratifiée, avec résiduels.**
+D-069, D-071 : implémentées.** **D-070 : hors périmètre de cette mission — ratifiée, implémentée
+et validée depuis, en 004.4.7.** **004.4.6 : close et ratifiée, avec résiduels.**
 
 **Prochaine mission prévue par la roadmap : 004.5 — Report Contract 2.0 & Analytics Correctness.**
 Ses dépendances (`stores.timezone`, identité client) sont livrées depuis 004.4.2 / `0011`. Voir

@@ -196,11 +196,23 @@ transaction du changement, avec `actor_type = worker` et le demandeur en `on_beh
 portent que des identifiants, `job_id` et des compteurs : jamais de nom, de devise, de clé d'objet ni
 de référence client. Elles **survivent** à la purge — c'est l'objet de la pierre tombale (D-051).
 
-⚠️ **Limite à connaître avant d'exploiter ce chemin.** Rien ne **surveille** les purges : aucune
-alerte, aucune reprise périodique, aucune sonde. Une organisation peut rester `purging`, **sel
-détruit**, indéfiniment, tant que personne ne lance `reconcile-purges`. Par ailleurs, une
-réconciliation **refusée** n'écrit **aucun** événement d'audit (D-070, non implémentée) : le refus
-n'existe que sur la sortie de la commande.
+**Audit des refus (004.4.7, D-070).** Une réconciliation **refusée** écrit
+`organization.purge_recovery_refused` — `outcome = failed`, acteur = l'humain `--as`, métadonnées
+`{outcome, reason, recoveries, purge_job_id}` — **mais seulement** si la tentative était **réelle**
+(`--execute`) **et** si l'acteur est `owner`. La simulation n'écrit rien, par principe : un journal
+d'audit enregistre ce qui est arrivé, pas ce qu'on a regardé.
+
+⚠️ **Deux limites à connaître avant d'exploiter ce chemin.**
+
+1. **Rien ne surveille les purges** : aucune alerte, aucune reprise périodique, aucune sonde. Une
+   organisation peut rester `purging`, **sel détruit**, indéfiniment, tant que personne ne lance
+   `reconcile-purges`.
+2. **L'audit des refus est PARTIEL, et le reste.** Deux refus ne sont **jamais** journalisés :
+   `owner_invalid` — l'écriture se fait sous la permission de l'action, `PURGE_TENANT`, que cet
+   acteur n'a précisément pas — et `permission_denied`, par impossibilité technique sous RLS.
+   Un `viewer` ou un `analyst` lançant `--execute` obtient un refus de garde sur sa sortie et
+   **n'écrit aucun événement**. Ne lisez donc pas le journal comme la liste exhaustive des
+   tentatives.
 
 ## Démonstration (données synthétiques)
 
