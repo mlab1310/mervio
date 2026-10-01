@@ -34,7 +34,7 @@ ligne sous RLS forcée — jamais un module Python, jamais un privilège élevé
 | **004.4.3** — plans du répartiteur sous RLS | `0012` | D-060, D-050 | `aed66b0` — `perf(jobs): robust dispatcher probe and claim plans under RLS` | [`MERVIO_D060_ACCEPTANCE.md`](MERVIO_D060_ACCEPTANCE.md) |
 | **004.4.4** — frontière d'import sans chemin, `ObjectStore`, `raw_objects` | `0013` | D-054, D-055, D-061 | `252daa2` — `fix(container): prepare named volumes for image user` | [`MERVIO_004_4_4_ACCEPTANCE.md`](MERVIO_004_4_4_ACCEPTANCE.md) |
 | **004.4.5** — effacement client : désignation, concurrence, destruction réelle | `0014`, `0015` | D-062, D-063, D-064, achèvement de D-056 | `720404d` — `fix(004.4.5): assert ratified customer erasure audit event` | [`MERVIO_004_4_5_ACCEPTANCE.md`](MERVIO_004_4_5_ACCEPTANCE.md) |
-| **004.4.6** — purge de boutique et d'organisation, reprise | `0016` | D-065 à D-069, D-071 ; **D-070 ouverte** | `e1a68ef` — `feat(persistence): finalize tenant purge recovery` | [`MERVIO_004_4_6_ACCEPTANCE.md`](MERVIO_004_4_6_ACCEPTANCE.md) |
+| **004.4.6** — purge de boutique et d'organisation, reprise | `0016` | D-065 à D-069, D-071 ; **D-070 non traitée ici** | `e1a68ef` — `feat(persistence): finalize tenant purge recovery` | [`MERVIO_004_4_6_ACCEPTANCE.md`](MERVIO_004_4_6_ACCEPTANCE.md) |
 
 **Protocole observé, et à conserver :** toute décision d'architecture est **ratifiée par un commit
 documentaire avant** son implémentation (D-062, D-063, D-064, D-065, D-066 l'ont été ainsi).
@@ -288,7 +288,7 @@ même une purge, et aucune commande ne propose de l'outrepasser.
 2. **Historique supprimé → `no_requester`** : la fenêtre D-066 permet de supprimer la purge
    d'origine pendant `purging` ; l'organisation reste alors `purging` **sans demandeur
    identifiable**, et la réconciliation refuse. Seul le chemin manuel reste ouvert.
-3. **D-070 non implémentée** : aucune trace durable d'une reprise **refusée**.
+3. **D-070 non implémentée** : aucune trace durable d'une reprise **refusée**. **Ratifiée le 30/09/2026**, rattachée à **004.4.7** ; implémentation non commencée, `0017` non créée. **La couverture prévue est PARTIELLE** : `owner_invalid` et `permission_denied` resteront définitivement non journalisés, et les quatre classes de garde ne le seront que pour un acteur `owner`. D-070 ne journalisera donc pas 100 % des tentatives de reprise.
 4. **`max_attempts = 7` n'est dominant qu'aux valeurs par défaut** de bail ; aucune valeur admise par
    le schéma (≤ 20) ne couvre `MERVIO_JOB_LEASE_SECONDS` au maximum (86400).
 5. **Trois batteries de gardes D-052** à maintenir équivalentes : risque de dérive réduit, non annulé.
@@ -300,6 +300,12 @@ même une purge, et aucune commande ne propose de l'outrepasser.
    expiration ; annulation commitée irréversible ; purge de boutique refusée pendant une autre purge
    de la même organisation ; `memberships` et `service_authorizations` révoquées conservées après
    purge ; coût d'évaluation de la politique non mesuré.
+
+10. **Quatre actions d'audit de purge tenant écrites mais non filtrables par la CLI.** Mesuré :
+    l'enum Python `Action` porte 23 valeurs, la contrainte DB 27 ; `audit list --action
+    organization.purged` est donc refusé (`InvalidInput`, code 2) alors que ces événements existent.
+    Les événements sont corrects ; seul le filtre de lecture est en cause. **Correction prévue en
+    004.4.7**, avec le test de cohérence que `0013` et `0014` avaient et que `0016` a omis.
 
 ### Hérités, inchangés
 
@@ -346,9 +352,11 @@ précède ne l'entame.
 1. Vérifier la baseline : `git status --short`, `git rev-parse HEAD` vs `origin/mission-004.4`.
 2. Lire [`MERVIO_004_4_6_ACCEPTANCE.md`](MERVIO_004_4_6_ACCEPTANCE.md) §I, puis D-065 à D-071 dans
    [`DECISIONS.md`](DECISIONS.md).
-3. Décider du sort de **D-070** : l'arbitrer, ou la reporter avec une échéance nommée. Toute
-   implémentation exige une révision `0017` (contrainte `CHECK` de `0005_audit`) et une ratification
-   documentaire **préalable**.
+3. **D-070 est arbitrée** : ratifiée le 30/09/2026, rattachée à **004.4.7**, implémentation non
+   commencée. La prochaine étape sur ce sujet est l'implémentation telle que la décision la
+   spécifie — révision `0017` limitée à `audit_events_action_check`, correction de l'enum `Action`,
+   écriture par `audit.record_event` sous `Permission.PURGE_TENANT`, et les vingt-cinq tests
+   d'acceptance. Lire D-070 dans [`DECISIONS.md`](DECISIONS.md) **avant** d'écrire une ligne.
 4. Ne pas toucher à la purge tenant sans avoir lu §3.10 et §5 : le statut, non le verrou, sérialise
    les étapes, et deux propriétés d'ordre ne sont protégées que par des tests.
 5. Pour 004.5, se rappeler que toute modification du rapport impose une **version de contrat**

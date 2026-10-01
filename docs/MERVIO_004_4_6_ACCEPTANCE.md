@@ -508,6 +508,13 @@ Aucun n'est une exigence non tenue ; **une CI verte n'en referme aucun.**
    Une revue de conformité portant sur « qu'a-t-on tenté pour honorer cet effacement » ne trouverait
    que les purges **mises en file**, jamais les refus. Deux tests figent ce comportement pour qu'il
    ne change pas sans décision.
+   *(Mise à jour du 30/09/2026 : **D-070 est désormais RATIFIÉE** et rattachée à **004.4.7** ; son
+   implémentation n'a pas commencé, et ce résiduel reste donc entier pour 004.4.6. **La couverture
+   prévue est PARTIELLE, et ne doit jamais être présentée comme totale** : `owner_invalid` et
+   `permission_denied` resteront définitivement non journalisés — le premier par le modèle
+   d'autorisation, le second par impossibilité technique sous RLS — et les quatre classes de garde
+   ne seront auditées que lorsque l'acteur est `owner`. Voir D-070 dans
+   [`DECISIONS.md`](DECISIONS.md).)*
 4. **`max_attempts = 7` n'est dominant qu'aux paramètres par défaut.** Le calcul de §E.4 vaut pour
    un bail de 300 s et un renouvellement de 30 s. **Aucune valeur admise par le schéma**
    (`max_attempts BETWEEN 1 AND 20`) ne couvre un bail configuré au maximum
@@ -542,7 +549,18 @@ Aucun n'est une exigence non tenue ; **une CI verte n'en referme aucun.**
     tombale subsiste tant que l'audit est retenu (365 jours ⚖️).
 13. **Le coût d'évaluation de la politique de suppression n'est pas mesuré** : chaque `DELETE` de
     travail lit désormais `organizations`. **Aucune campagne de charge n'est revendiquée.**
-14. **Résiduels hérités, inchangés par cette mission** : ramassage des orphelins et expiration de
+14. **Les quatre actions d'audit de purge tenant sont écrites mais NON FILTRABLES par la CLI.**
+    Défaut **mesuré** sur le SHA figé : la contrainte `audit_events_action_check` porte 27 valeurs,
+    l'enum Python `Action` en porte 23, et `store.purge_started`, `store.purged`,
+    `organization.purge_started`, `organization.purged` en sont **absentes**. Comme
+    `list_audit_events` valide `--action` contre cet enum, `mervio admin audit list --action
+    organization.purged` est **refusé** (`InvalidInput`, code 2) alors que de tels événements
+    existent en base. `0013` et `0014` avaient chacune ajouté leurs actions à l'enum **et**
+    verrouillé l'inclusion par un test ; `0016` n'a fait ni l'un ni l'autre, et c'est l'absence de
+    ce test qui a laissé passer le défaut. Les événements eux-mêmes sont corrects et complets — seul
+    le filtre de lecture est en cause. **Correction prévue en 004.4.7**, dans le même changement que
+    D-070, avec le test de cohérence restauré.
+15. **Résiduels hérités, inchangés par cette mission** : ramassage des orphelins et expiration de
     `retain_until` (**004.9**) ; absence de garantie de non-écrasement de `put` (D-055, 004.9) ;
     politique IAM `s3:DeleteObject` non implémentée, donc `delete_capability()` de S3 rend
     `undetermined` (D-064, 004.9) ; TOCTOU du pilote filesystem réduit par `O_NOFOLLOW`, non annulé ;
@@ -566,7 +584,7 @@ Ces points ne sont **pas** validés par cette acceptance et ne doivent pas être
 - **Couverture de code.** Aucune mesure produite ni revendiquée ; les comptes cités sont des
   nombres de **tests**.
 - **Reprise automatique.** Non livrée (§I.1). La présence de `reconcile-purges` n'en est pas une.
-- **D-070.** Non arbitrée, non implémentée, **aucune migration `0017` créée**.
+- **D-070.** **Ratifiée le 30/09/2026** et rattachée à **004.4.7** ; **non implémentée**, **aucune migration `0017` créée**, enum `Action` non modifié, `reconcile_purges` non touché. Rien de ce qu'elle prévoit n'est validé par la présente acceptance.
 - **Validation juridique des durées** ⚖️ (rétention d'audit à 365 jours, objets bruts à 30 jours,
   rôles de traitement) : **004.9**.
 
@@ -580,7 +598,7 @@ Ces points ne sont **pas** validés par cette acceptance et ne doivent pas être
 | D-066 ratifiée, la politique livrée dans la forme prescrite | ✅ `75ebf81` → `60505e1`, §G |
 | D-067, D-068, D-069 ratifiées **et** implémentées | ✅ `e1a68ef`, §D |
 | D-071 implémentée | ✅ `e1a68ef`, §H |
-| D-070 — **non implémentée**, consignée comme ouverte | ✅ déclarée telle, §I.3 |
+| D-070 — **non implémentée** par cette mission ; ratifiée depuis, rattachée à 004.4.7 | ✅ déclarée telle, §I.3, §J |
 | D-063 intacte — aucune portée de verrou, aucune primitive ajoutée | ✅ §D.1 |
 | Aucun `SET ROLE` ajouté — vérifié, zéro occurrence dans `src/` | ✅ §C.7 |
 | Aucun `INSERT` direct dans `jobs` par le worker ; SEC-06 non amendée | ✅ §E.1, test de forme |
