@@ -67,6 +67,21 @@ class Action(str, Enum):
     # 004.4.5 (revision 0014): effacement client execute par le chemin privilegie.
     # La trace designe la ligne de preuve; elle ne porte NI l'identite, NI la valeur effacee.
     CUSTOMER_REDACTED = "customer.redacted"
+    # 004.4.6 (revision 0016, D-065 Q1): purge de LOCATAIRE, vocabulaire DEDIE -- a ne pas
+    # confondre avec `purge.started`/`purge.completed`, qui appartiennent a la purge de
+    # RETENTION. Ces quatre traces sont ecrites par les fonctions privilegiees, en SQL, et
+    # rien ne les ecrit depuis Python. Elles figuraient dans la contrainte `CHECK` depuis
+    # `0016` mais PAS ici, et `list_audit_events` validant `--action` contre cet enum,
+    # `audit list --action organization.purged` etait refuse alors que de tels evenements
+    # existaient en base: ecrites, et non filtrables. 004.4.7 ferme cet ecart.
+    STORE_PURGE_STARTED = "store.purge_started"
+    STORE_PURGED = "store.purged"
+    ORGANIZATION_PURGE_STARTED = "organization.purge_started"
+    ORGANIZATION_PURGED = "organization.purged"
+    # 004.4.7 (revision 0017, D-070): refus d'une tentative REELLE de reprise de purge.
+    # Ecrite par le chemin d'administration, sous `Permission.PURGE_TENANT` -- la permission
+    # de l'action decrite. Une consultation et une simulation n'ecrivent rien.
+    ORGANIZATION_PURGE_RECOVERY_REFUSED = "organization.purge_recovery_refused"
 
 
 class ResourceType(str, Enum):

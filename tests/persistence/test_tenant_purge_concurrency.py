@@ -36,6 +36,7 @@ from dataclasses import dataclass
 import psycopg
 import pytest
 
+from mervio.admin import operations
 from mervio.persistence import jobs
 from mervio.persistence.concurrency import organization_scope_key
 from mervio.persistence.database import Database
@@ -48,6 +49,8 @@ from mervio.workers.handlers import (JobContext, make_purge_organization_handler
 from .persistence_support import make_tenant
 from .test_customer_erasure import ALICE, BOB, _raw_object, _sealed_snapshot_with_orders
 from .test_customer_erasure_handler import PAYLOAD_BYTES, Store, _NullLog, _key_of
+from .test_tenant_purge import ORG_JOB, _ctx
+from .test_tenant_purge_recovery import OWNER, stall
 
 #: toute course doit se terminer: un `join` sans borne masquerait un interblocage en CI
 JOIN_TIMEOUT = 30
@@ -302,3 +305,88 @@ def test_c3_two_concurrent_purges_of_the_same_store(victim, pg, principal, store
     assert set(state["stores"]) == {"purged"}
     assert state["organization"][1] == "active", "une purge de boutique ne clot pas l'organisation"
 
+
+
+# -- C4: deux administrateurs reprennent la MEME purge figee (D-070, 004.4.7) ---------------------
+#
+# Deux `org reconcile-purges --execute` simultanes sur une organisation figee. Les deux passent
+# le pre-controle -- aucune purge n'est en vol -- puis D-067 tranche A L'INSERTION. Ce qui est
+# mesure ici n'est pas l'arbitrage (C1 le fait deja) mais ce que D-070 exige de lui:
+#   - UN seul gagnant, qui ecrit `job.enqueued`;
+#   - UN seul perdant, dont la trace de refus EXISTE alors meme que sa transaction de mise en
+#     file a ete ANNULEE par la `23505`. C'est la propriete non evidente de D-070: la trace est
+#     ecrite APRES le `except`, dans une transaction neuve -- sinon elle disparaitrait avec le
+#     rollback, et la classe de refus la plus interessante serait silencieusement vide.
+
+REFUSAL_ACTION = "organization.purge_recovery_refused"
+
+
+@pytest.fixture
+def stalled(db, owner, worker_conn, principal, store):
+    """Une organisation figee en `purging`, sa purge DEFINITIVEMENT echouee et ANTIDATEE.
+
+    Chemin reel de bout en bout: mise en file, prise, cloture par la fonction privilegiee de
+    `0016`, puis echec antidate pour que la garde `A` (delai minimal) n'oppose pas `too_soon`.
+    """
+    tenant = _tenant_with_bytes(db, owner, principal, store, "conc-stalled")
+    with owner.transaction():
+        _ctx(owner, tenant)
+        owner.execute("UPDATE users SET idp_subject = %s WHERE id = %s", (OWNER, tenant.owner_id))
+    stall(owner, worker_conn, tenant, age="2 hours")
+    return tenant
+
+
+def _reconcile(pg, tenant):
+    """Un administrateur qui reprend, sur SA PROPRE connexion -- deux fils, deux connexions."""
+    database = operations.connect(pg.url("app"))
+    return lambda: operations.reconcile_purges(
+        database, actor=OWNER, organization=tenant.organization_id, execute=True)
+
+
+def _audit(owner, tenant, action):
+    with owner.transaction():
+        _ctx(owner, tenant)
+        return owner.execute(
+            "SELECT count(*) FROM audit_events WHERE organization_id = %s AND action = %s",
+            (tenant.organization_id, action)).fetchone()[0]
+
+
+@pytest.mark.parametrize("attempt", range(REPEATS))
+def test_c4_two_administrators_resume_the_same_stalled_purge(pg, owner, stalled, attempt):
+    """Un gagnant, un perdant, et le refus du perdant EST trace."""
+    outcomes = _race(("A", _reconcile(pg, stalled)), ("B", _reconcile(pg, stalled)))
+
+    # Aucun fil ne leve: `reconcile-purges` est une commande d'INSPECTION, elle RAPPORTE.
+    assert not any(o.failed for o in outcomes), [str(o.error) for o in outcomes]
+    issues = [o.result["reconciled"][0]["outcome"] for o in outcomes]
+    assert sorted(issues) == ["already_active", "recovered"], issues
+
+    # UNE seule purge en file: D-067 a tranche a l'insertion, comme en C1.
+    with owner.transaction():
+        _ctx(owner, stalled)
+        active = owner.execute(
+            "SELECT count(*) FROM jobs WHERE organization_id = %s AND job_type = %s "
+            "AND status IN ('queued', 'running')",
+            (stalled.organization_id, ORG_JOB)).fetchone()[0]
+    assert active == 1, "D-067 n'a pas tranche: deux purges actives"
+
+    # D-070: le gagnant trace sa mise en file, le perdant trace son refus. Un chacun.
+    assert _audit(owner, stalled, "job.enqueued") == 1
+    assert _audit(owner, stalled, REFUSAL_ACTION) == 1, \
+        "la trace du perdant a disparu avec le rollback de la 23505"
+
+
+def test_c4_the_loser_reports_the_race_as_the_reason(pg, owner, stalled):
+    """Le motif enregistre nomme la course, et non une cause inventee."""
+    outcomes = _race(("A", _reconcile(pg, stalled)), ("B", _reconcile(pg, stalled)))
+    loser = next(o for o in outcomes
+                 if o.result["reconciled"][0]["outcome"] == "already_active")
+    assert "course" in loser.result["reconciled"][0]["blocked_reason"]
+    assert loser.result["reconciled"][0].get("audit_error") is None, "la trace a bien ete ecrite"
+    with owner.transaction():
+        _ctx(owner, stalled)
+        metadata = owner.execute(
+            "SELECT metadata FROM audit_events WHERE organization_id = %s AND action = %s",
+            (stalled.organization_id, REFUSAL_ACTION)).fetchone()[0]
+    assert metadata["outcome"] == "already_active"
+    assert "course" in metadata["reason"]

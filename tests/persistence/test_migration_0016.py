@@ -13,6 +13,9 @@ import pytest
 from mervio.persistence import migrate
 
 PREVIOUS = "0015_raw_object_purge"
+#: 004.4.7: `0016` n'est plus la tete. Ces tests DOIVENT la viser explicitement -- sans cela
+#: `upgrade()` irait jusqu'a la tete et l'aller-retour porterait sur une autre revision.
+REVISION = "0016_tenant_purge"
 
 PURGE_FUNCTIONS = ("app_close_organization", "app_close_store", "app_destroy_identity_key",
                    "app_purge_finalize_raw_object", "app_purge_tenant_data",
@@ -91,9 +94,9 @@ def _policy(url):
             "FROM pg_policy p WHERE p.polname = 'jobs_purge_terminal_only'").fetchone()
 
 
-def test_0016_is_the_head_and_follows_0015():
-    assert migrate.revisions()[-1] == "0016_tenant_purge"
-    assert migrate.revisions()[-2] == PREVIOUS
+def test_0016_follows_0015_in_the_chain():
+    """`0016` n'est plus la tete depuis `0017` (D-070): seul son RANG est verifie ici."""
+    assert migrate.revisions().index(REVISION) == migrate.revisions().index(PREVIOUS) + 1
 
 
 def test_the_roundtrip_restores_the_catalogue(staged):
@@ -109,11 +112,11 @@ def test_the_roundtrip_restores_the_catalogue(staged):
     # garde-fou: une base reellement montee jusqu'a 0015 porte plusieurs centaines de lignes
     # d'empreinte. Sans cela, un aller-retour sur une base vide passerait trivialement.
     assert len(base) > 500, f"la base de depart n'est pas migree: {len(base)} lignes"
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, REVISION)
     up1 = _fingerprint(staged)
-    migrate.downgrade(staged)
+    migrate.downgrade(staged, PREVIOUS)
     down = _fingerprint(staged)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, REVISION)
     up2 = _fingerprint(staged)
 
     assert up1 == up2, "la montee doit etre deterministe"
@@ -130,10 +133,10 @@ def test_the_downgrade_restores_the_0004_policy_verbatim(staged):
     """Exigence DURE de D-066: la politique revient au caractere pres."""
     before = _policy(staged)
     assert before == (False, "d", "PUBLIC", ORIGINAL_POLICY)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, REVISION)
     during = _policy(staged)
     assert during[3] != ORIGINAL_POLICY and "purging" in during[3]
-    migrate.downgrade(staged)
+    migrate.downgrade(staged, PREVIOUS)
     assert _policy(staged) == before
 
 
@@ -143,7 +146,7 @@ def test_the_d066_disjunction_covers_only_the_time_floor(staged):
     Si la disjonction remontait d'un cran, `queued` et `running` deviendraient supprimables
     pendant une purge -- et le travail de purge pourrait se detruire lui-meme.
     """
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, REVISION)
     qual = _policy(staged)[3]
     head, _, tail = qual.partition(" AND ((finished_at < ")
     assert tail, f"la disjonction doit s'ouvrir APRES les deux invariants: {qual}"
@@ -160,7 +163,7 @@ def test_the_purge_functions_and_the_guard_disappear_on_downgrade(staged):
     fonctions privilegiees pointer dans le vide. Le test verifie donc l'ETAT FINAL, et
     l'absence de dependance enregistree -- pour que personne ne croie le moteur protecteur.
     """
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, REVISION)
     with psycopg.connect(staged) as conn:
         present = {r[0] for r in conn.execute(
             "SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace").fetchall()}
@@ -171,7 +174,7 @@ def test_the_purge_functions_and_the_guard_disappear_on_downgrade(staged):
             "WHERE src.proname = ANY(%s) AND tgt.proname = 'app_purge_guard'",
             (list(PURGE_FUNCTIONS),)).fetchone()[0]
         assert recorded == 0, "aucune dependance n'est enregistree: l'ordre est notre affaire"
-    migrate.downgrade(staged)
+    migrate.downgrade(staged, PREVIOUS)
     with psycopg.connect(staged) as conn:
         remaining = {r[0] for r in conn.execute(
             "SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace").fetchall()}
@@ -183,7 +186,7 @@ def test_the_purge_functions_and_the_guard_disappear_on_downgrade(staged):
 
 def test_the_closure_trigger_covers_the_entry_points_and_not_the_canonical_tables(staged):
     """Les canoniques sont protegees TRANSITIVEMENT: pas de declencheur par ligne sur l'import."""
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, REVISION)
     with psycopg.connect(staged) as conn:
         guarded = {r[0] for r in conn.execute(
             "SELECT c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
@@ -214,14 +217,14 @@ def test_the_downgrade_restores_the_table_level_insert_grant(staged):
                                 (f"public.{table}", column)).fetchone()[0]
 
     before = acl(staged)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, REVISION)
     for table in ("organizations", "stores"):
         assert insertable(staged, table, "status") is False, table
         assert insertable(staged, table, "purged_at") is False, table
     assert insertable(staged, "organizations", "name") is True
     assert insertable(staged, "stores", "currency") is True
 
-    migrate.downgrade(staged)
+    migrate.downgrade(staged, PREVIOUS)
     assert acl(staged) == before, "l'ACL de table doit revenir a l'identique"
     for table in ("organizations", "stores"):
         assert insertable(staged, table, "name") is True, table

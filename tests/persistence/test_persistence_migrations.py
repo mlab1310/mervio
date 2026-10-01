@@ -40,8 +40,9 @@ def test_revisions_are_linear_and_versioned():
                                    "0009_qualify_security_functions", "0010_qualify_residual_security",
                                    "0011_identity_pii_schema", "0012_dispatch_probe_plan",
                                    "0013_raw_objects", "0014_customer_erasure",
-                                   "0015_raw_object_purge", "0016_tenant_purge"]
-    assert migrate.head_revision() == "0016_tenant_purge"
+                                   "0015_raw_object_purge", "0016_tenant_purge",
+                                   "0017_purge_recovery_audit"]
+    assert migrate.head_revision() == "0017_purge_recovery_audit"
 
 
 def test_empty_database_upgrades_to_head(empty_database):
@@ -84,6 +85,9 @@ def test_each_revision_upgrades_and_downgrades_step_by_step(empty_database):
         # 004.4.6: statuts, cloture et sept operations privilegiees -- aucune table nouvelle,
         # la pierre tombale de D-051 etant portee par des COLONNES sur `organizations`/`stores`
         "0016_tenant_purge": set(),
+        # 004.4.7 (D-070): une seule contrainte elargie (`audit_events_action_check`), aucune
+        # table, aucune colonne, aucun index, aucune politique, aucun role, aucun privilege
+        "0017_purge_recovery_audit": set(),
     }
     present = {"alembic_version"}
     for revision in migrate.revisions():

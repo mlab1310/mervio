@@ -111,6 +111,22 @@ def active_purges(owner, org) -> int:
             (org.organization_id, [STORE_JOB, ORG_JOB])).fetchone()[0]
 
 
+def audit_rows(owner, org, action=None):
+    """Journal de l'organisation, du plus recent au plus ancien. `audit_events` est sous RLS."""
+    with owner.transaction():
+        _ctx(owner, org)
+        return owner.execute(
+            "SELECT action, actor_type, actor_id, on_behalf_of, resource_type, resource_id, "
+            "       outcome, correlation_id, metadata, store_id "
+            "FROM audit_events WHERE organization_id = %s "
+            "  AND (%s::text IS NULL OR action = %s::text) "
+            "ORDER BY created_at DESC, id DESC", (org.organization_id, action, action)).fetchall()
+
+
+#: D-070 (004.4.7): le refus d'une tentative REELLE de reprise.
+REFUSAL = "organization.purge_recovery_refused"
+
+
 # =============================================================================================
 # 1. Simulation: voir sans agir
 # =============================================================================================
@@ -409,7 +425,7 @@ def test_the_recovery_path_uses_no_privileged_shortcut():
 
     body = "".join(inspect.getsource(function) for function in (
         operations.reconcile_purges, operations._reconcile_one, operations._purge_guard,
-        operations.enqueue_purge_organization))
+        operations._trace_refusal, operations.enqueue_purge_organization))
     assert "SET ROLE" not in body
     assert "SECURITY DEFINER" not in body
     assert "INSERT INTO" not in body
@@ -452,33 +468,325 @@ def test_org_show_leaks_nothing_about_another_tenant(pg, db, owner, principal, o
 
 
 # =============================================================================================
-# 8. Audit: le vocabulaire existant, et lui seul
+# 8. Audit d'une reprise REUSSIE: le vocabulaire existant, et lui seul
 # =============================================================================================
 
 def test_a_successful_recovery_records_the_existing_enqueue_event(pg, owner, worker_conn, org):
-    """D-070 n'est PAS implementee ici: aucune action d'audit nouvelle n'est creee."""
+    """Une reprise qui ABOUTIT n'emet aucune action nouvelle: `job.enqueued`, comme avant.
+
+    D-070 ne trace que les REFUS. Un succes n'est pas un refus, et ne doit donc produire
+    aucun `organization.purge_recovery_refused` -- sans quoi le journal deviendrait illisible.
+    """
     stall(owner, worker_conn, org, age="2 hours")
     run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
-    with owner.transaction():
-        _ctx(owner, org)
-        rows = owner.execute(
-            "SELECT action, actor_type, actor_id FROM audit_events WHERE organization_id = %s "
-            "ORDER BY created_at DESC LIMIT 1", (org.organization_id,)).fetchall()
+    rows = audit_rows(owner, org)
     assert rows[0][0] == "job.enqueued" and rows[0][1] == "user"
     assert rows[0][2] == org.owner_id, "l'acteur est l'humain qui a repris"
+    assert audit_rows(owner, org, REFUSAL) == [], "un succes n'est pas un refus"
 
 
-def test_a_blocked_reconciliation_writes_no_audit_event(pg, owner, worker_conn, org):
-    """Constat ASSUME, et non un oubli: le tracer releve de D-070, decision separee."""
-    stall(owner, worker_conn, org, error="object_delete_failed",
-          age="2 hours")
+# =============================================================================================
+# 9. D-070: audit des refus d'une tentative REELLE
+# =============================================================================================
+#
+# CE QUI EST TRACE: le refus d'une tentative REELLE (`--execute`) par un acteur que la base
+# reconnait encore `owner`. CE QUI NE L'EST PAS: une consultation, une simulation, et deux
+# refus que D-070 declare explicitement non auditables. La couverture est PARTIELLE, et les
+# tests d'ABSENCE ci-dessous ne sont pas optionnels: sans eux, la portee ne serait pas bornee.
+
+
+def _refusal(owner, org):
+    """L'unique evenement de refus de cette organisation, decompose."""
+    rows = audit_rows(owner, org, REFUSAL)
+    assert len(rows) == 1, f"attendu un seul refus, trouve {len(rows)}"
+    (action, actor_type, actor_id, on_behalf_of, resource_type, resource_id,
+     result, correlation_id, metadata, store_id) = rows[0]
+    return {"action": action, "actor_type": actor_type, "actor_id": actor_id,
+            "on_behalf_of": on_behalf_of, "resource_type": resource_type,
+            "resource_id": resource_id, "outcome": result, "correlation_id": correlation_id,
+            "metadata": metadata, "store_id": store_id}
+
+
+# -- 9.1 les quatre refus de garde, et la course --------------------------------------------
+
+def test_too_soon_is_audited(pg, owner, worker_conn, org):
+    stall(owner, worker_conn, org)                        # `finished_at` = maintenant
+    code, result = run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    assert code == 7 and outcome(result, org)[0] == operations.RECOVERY_TOO_SOON
+    event = _refusal(owner, org)
+    assert event["metadata"]["outcome"] == operations.RECOVERY_TOO_SOON
+    assert "minimum" in event["metadata"]["reason"]
+
+
+def test_guard_exhausted_is_audited(pg, owner, worker_conn, org):
+    stall(owner, worker_conn, org, age="2 hours")
+    for _ in range(operations.PURGE_RECOVERY_MAX_FAILURES - 1):
+        run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+        with owner.transaction():
+            _ctx(owner, org)
+            job_id = owner.execute(
+                "SELECT id FROM jobs WHERE organization_id = %s AND status = 'queued' "
+                "ORDER BY created_at DESC LIMIT 1", (org.organization_id,)).fetchone()[0]
+        claimed = _claim(owner, org, job_id)
+        with owner.transaction():
+            _ctx(owner, org)
+            owner.execute("SELECT set_config('app.job_lease_token', %s, true)",
+                          (f"{claimed.attempts}:{claimed.locked_by}",))
+            owner.execute(_FAILED_SQL.format(age="2 hours"), ("sqlstate_55006", job_id))
+    code, result = run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    assert code == 7 and outcome(result, org)[0] == operations.RECOVERY_GUARD_EXHAUSTED
+    event = _refusal(owner, org)
+    assert event["metadata"]["outcome"] == operations.RECOVERY_GUARD_EXHAUSTED
+    assert event["metadata"]["recoveries"] == operations.PURGE_RECOVERY_MAX_FAILURES
+
+
+def test_deterministic_failure_is_audited(pg, owner, worker_conn, org):
+    stall(owner, worker_conn, org, error="object_delete_failed", age="2 hours")
+    code, result = run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    assert code == 7 and outcome(result, org)[0] == operations.RECOVERY_DETERMINISTIC_FAILURE
+    event = _refusal(owner, org)
+    assert event["metadata"]["outcome"] == operations.RECOVERY_DETERMINISTIC_FAILURE
+    assert "object_delete_failed" in event["metadata"]["reason"]
+
+
+def test_no_requester_is_audited(pg, owner, worker_conn, org):
+    """Historique supprime: l'organisation reste `purging` SANS demandeur identifiable.
+
+    La fenetre D-066 permet precisement cette suppression pendant `purging`. L'etat est
+    atteignable, et c'est celui ou une trace vaut le plus: plus rien ne dit ce qui a ete tente.
+    """
+    stall(owner, worker_conn, org)
     with owner.transaction():
         _ctx(owner, org)
-        before = owner.execute("SELECT count(*) FROM audit_events WHERE organization_id = %s",
-                               (org.organization_id,)).fetchone()[0]
+        owner.execute("DELETE FROM jobs WHERE organization_id = %s", (org.organization_id,))
+    code, result = run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    assert code == 7 and outcome(result, org)[0] == operations.RECOVERY_NO_REQUESTER
+    event = _refusal(owner, org)
+    assert event["metadata"]["outcome"] == operations.RECOVERY_NO_REQUESTER
+    # aucun travail de purge ne subsiste: la correlation est NEUVE, et le travail absent
+    assert event["metadata"].get("purge_job_id") is None
+    assert event["metadata"]["recoveries"] == 0
+
+
+def test_the_already_active_precheck_audits_nothing(pg, owner, worker_conn, org, db):
+    """`already_active` vu par le PRE-CONTROLE: une observation, pas une tentative.
+
+    La course `23505` porte la MEME issue mais n'est pas le meme fait, et elle EST auditee:
+    voir `test_tenant_purge_concurrency.py`. C'est pourquoi `_reconcile_one` rend un drapeau
+    explicite au lieu de laisser relire l'issue -- qui confondrait les deux.
+    """
+    stall(owner, worker_conn, org, age="2 hours")
+    # une purge tenant deja en file: l'index D-067 refusera la seconde a l'insertion
+    with owner.transaction():
+        _ctx(owner, org)
+        owner.execute(
+            "INSERT INTO jobs (id, organization_id, job_type, status, correlation_id, "
+            "enqueued_by, available_at, payload) "
+            "VALUES (%s, %s, %s, 'queued', %s, %s, now(), '{}')",
+            (uuid.uuid4(), org.organization_id, ORG_JOB, uuid.uuid4(), org.owner_id))
+    code, result = run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    state, row = outcome(result, org)
+    # le pre-controle voit la purge en vol: c'est une OBSERVATION, donc aucune trace
+    assert state == operations.RECOVERY_ALREADY_ACTIVE and code == 0
+    assert audit_rows(owner, org, REFUSAL) == [], "le pre-controle n'est pas une tentative"
+
+
+# -- 9.2 la forme de l'evenement ------------------------------------------------------------
+
+def test_the_refusal_event_has_the_ratified_shape(pg, owner, worker_conn, org):
+    """Action dediee, ressource organisation, `failed`, acteur humain, `on_behalf_of` NUL."""
+    stall(owner, worker_conn, org, error="object_delete_failed", age="2 hours")
     run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    event = _refusal(owner, org)
+    assert event["action"] == REFUSAL
+    assert event["resource_type"] == "organization"
+    assert event["resource_id"] == org.organization_id
+    assert event["outcome"] == "failed", "aucune valeur `refused` n'est creee (D-070)"
+    assert event["actor_type"] == "user" and event["actor_id"] == org.owner_id
+    assert event["on_behalf_of"] is None, "l'humain agit pour lui-meme"
+    assert event["store_id"] is None, "la portee est l'organisation"
+
+
+def test_the_refusal_keeps_the_correlation_of_the_original_purge(pg, owner, worker_conn, org):
+    """Une purge menee en plusieurs actes se relit comme UN SEUL fil."""
+    claimed = stall(owner, worker_conn, org, error="object_delete_failed", age="2 hours")
     with owner.transaction():
         _ctx(owner, org)
-        after = owner.execute("SELECT count(*) FROM audit_events WHERE organization_id = %s",
-                              (org.organization_id,)).fetchone()[0]
-    assert after == before
+        correlation_id = owner.execute("SELECT correlation_id FROM jobs WHERE id = %s",
+                                       (claimed.id,)).fetchone()[0]
+    run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    event = _refusal(owner, org)
+    assert event["correlation_id"] == correlation_id, "le fil de la purge d'origine est conserve"
+    assert event["metadata"]["purge_job_id"] == str(claimed.id)
+
+
+def test_the_refusal_metadata_carries_no_pii_and_is_scrubbed(pg, owner, worker_conn, org):
+    """Des identifiants, des nombres, un motif: jamais un nom, un chemin ni un secret."""
+    stall(owner, worker_conn, org, error="object_delete_failed", age="2 hours")
+    run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    metadata = _refusal(owner, org)["metadata"]
+    assert set(metadata) <= {"outcome", "reason", "recoveries", "purge_job_id"}
+    blob = json.dumps(metadata, ensure_ascii=False)
+    assert "@" not in blob and "/" not in blob.replace("\\/", "")
+    assert org.name not in blob if getattr(org, "name", None) else True
+    assert "[redacted]" not in blob, "aucune cle de D-070 ne doit tomber sous le filtre"
+
+
+# -- 9.3 ce qui n'ecrit RIEN ----------------------------------------------------------------
+
+def test_the_dry_run_audits_nothing_whatever_the_refusal(pg, owner, worker_conn, org):
+    """Une SIMULATION n'est pas une tentative. Regle non negociable de D-070."""
+    for error, age in (("sqlstate_55006", "0 seconds"),         # too_soon
+                       ("object_delete_failed", "2 hours")):     # deterministic_failure
+        other = org
+        stall(owner, worker_conn, other, error=error, age=age)
+        run(pg, "org", "reconcile-purges", "--as", OWNER)        # sans --execute
+        assert audit_rows(owner, other, REFUSAL) == [], f"{error} audite en simulation"
+        break   # une seule mise en scene suffit: l'etat `purging` n'est pas reversible
+
+
+def test_a_terminal_organization_audits_nothing(pg, owner, worker_conn, org):
+    stall(owner, worker_conn, org)
+    with owner.transaction():
+        _ctx(owner, org)
+        owner.execute("UPDATE organizations SET status = 'purged', purged_at = now() "
+                      "WHERE id = %s", (org.organization_id,))
+    code, result = run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    assert code == 0 and outcome(result, org)[0] == operations.RECOVERY_TERMINAL
+    assert audit_rows(owner, org, REFUSAL) == []
+
+
+def test_an_active_organization_audits_nothing(pg, owner, org):
+    code, result = run(pg, "org", "reconcile-purges", "--as", OWNER, "--execute")
+    assert code == 0 and outcome(result, org)[0] == operations.RECOVERY_NOT_PURGING
+    assert audit_rows(owner, org, REFUSAL) == []
+
+
+def test_owner_invalid_is_not_auditable(pg, owner, worker_conn, org):
+    """NON AUDITABLE, et ce n'est pas un oubli (D-070).
+
+    L'ecriture se fait sous `PURGE_TENANT`, la permission de l'ACTION DECRITE -- regle que le
+    depot applique a ses six autres ecritures d'audit. Un acteur a qui l'on vient de refuser
+    cette permission ne peut donc pas tracer son refus, et AUCUN privilege inferieur ni aucun
+    bypass n'est invente pour y parvenir. La couverture de D-070 est partielle, par conception.
+    """
+    stall(owner, worker_conn, org, age="2 hours")
+    code, result = run(pg, "org", "reconcile-purges", "--as", ANALYST,
+                       "--org", str(org.organization_id), "--execute")
+    assert code == 6 and outcome(result, org)[0] == operations.RECOVERY_OWNER_INVALID
+    assert audit_rows(owner, org, REFUSAL) == []
+
+
+def test_a_guard_refusal_by_a_non_owner_is_not_audited(pg, owner, worker_conn, org):
+    """Consequence MESUREE de l'ordre des gardes, et non une hypothese.
+
+    `_require(PURGE_TENANT)` est evaluee APRES les gardes de reprise: un `analyst` lancant
+    `--execute` atteint donc `too_soon`, et non `owner_invalid`. Il n'ecrit rien pour autant --
+    `record_event` relit son rang en base. Sans cette garde, un membre incapable de LIRE le
+    journal (`READ_AUDIT` exige `admin`) pourrait y ECRIRE, dans un journal en ajout seul que
+    le plancher de retention rend indestructible 30 jours.
+    """
+    stall(owner, worker_conn, org)                        # too_soon, pas owner_invalid
+    code, result = run(pg, "org", "reconcile-purges", "--as", ANALYST,
+                       "--org", str(org.organization_id), "--execute")
+    assert outcome(result, org)[0] == operations.RECOVERY_TOO_SOON and code == 7
+    assert audit_rows(owner, org, REFUSAL) == [], "un non-owner n'ecrit aucun evenement"
+
+
+def test_permission_denied_is_technically_unauditable(pg, db, owner, worker_conn, org):
+    """IMPOSSIBILITE technique, pas un arbitrage -- et le test le dit.
+
+    L'appartenance est retiree entre l'enumeration et la lecture: `TenantSession` releve
+    l'absence et leve, et la politique `audit_events_tenant_isolation` refuserait l'insertion
+    dans une organisation dont l'acteur n'est plus membre. Aucune ecriture n'est possible, et
+    aucun contournement ne sera cree pour la rendre possible.
+    """
+    stall(owner, worker_conn, org, age="2 hours")
+    stranger = ensure_user(db, "op|evicted")
+    add_member(org.session, user_id=stranger, role=Role.VIEWER)
+    with owner.transaction():
+        _ctx(owner, org)
+        owner.execute("DELETE FROM memberships WHERE organization_id = %s AND user_id = %s",
+                      (org.organization_id, stranger))
+    code, error = run(pg, "org", "reconcile-purges", "--as", "op|evicted",
+                      "--org", str(org.organization_id), "--execute")
+    assert code == 5 and error["code"] == "not_found", "indiscernable d'une absence"
+    assert audit_rows(owner, org, REFUSAL) == []
+
+
+# -- 9.4 isolation locative -----------------------------------------------------------------
+
+def test_the_refusal_stays_inside_its_organization(pg, db, owner, worker_conn, org, principal):
+    """Une organisation voisine ne recoit aucune trace, et n'en voit aucune."""
+    neighbour = make_tenant(db, "recovery-audited-neighbour")
+    authorize_service(neighbour.session, principal.id)
+    stall(owner, worker_conn, org, error="object_delete_failed", age="2 hours")
+    run(pg, "org", "reconcile-purges", "--as", OWNER, "--org", str(org.organization_id),
+        "--execute")
+    assert len(audit_rows(owner, org, REFUSAL)) == 1
+    with owner.transaction():
+        _ctx(owner, neighbour)
+        assert owner.execute(
+            "SELECT count(*) FROM audit_events WHERE action = %s", (REFUSAL,)).fetchone()[0] == 0
+
+
+# -- 9.5 Q3: l'echec d'ECRITURE de l'audit --------------------------------------------------
+
+def test_an_audit_write_failure_is_reported_and_hardens_the_exit(pg, owner, worker_conn, org,
+                                                                 monkeypatch):
+    """Fail-closed sur l'INTEGRITE, best-effort sur la BOUCLE (D-070, Q3).
+
+    Un refus non trace ne doit jamais se lire comme une execution propre: la ligne porte
+    `audit_error`, le code de sortie durcit, et rien n'est masque. L'echec est simule au seul
+    endroit qui compte -- l'ecriture -- et par une erreur qui N'EST PAS un refus d'autorisation.
+    """
+    stall(owner, worker_conn, org, error="object_delete_failed", age="2 hours")
+
+    def boom(*_args, **_kwargs):
+        raise psycopg.errors.DeadlockDetected("deadlock simule")
+
+    monkeypatch.setattr(operations.audit, "record_event", boom)
+    database = operations.connect(pg.url("app"))
+    report = operations.reconcile_purges(database, actor=OWNER, organization=org.organization_id,
+                                         execute=True)
+    row = report["reconciled"][0]
+    assert row["outcome"] == operations.RECOVERY_DETERMINISTIC_FAILURE, "le refus reste le refus"
+    assert row["audit_error"] == "sqlstate_40P01", "l'echec est nomme, jamais masque"
+    assert report["exit_code"] == 7, "un refus non trace ne rend pas 0"
+
+
+def test_an_audit_write_failure_does_not_stop_the_loop(pg, db, owner, worker_conn, org,
+                                                       principal, monkeypatch):
+    """La boucle multi-organisations continue: les suivantes sont inspectees malgre l'echec."""
+    neighbour = make_tenant(db, "recovery-loop-neighbour")
+    authorize_service(neighbour.session, principal.id)
+    add_member(neighbour.session, user_id=org.owner_id, role=Role.ADMIN)
+    stall(owner, worker_conn, org, error="object_delete_failed", age="2 hours")
+
+    def boom(*_args, **_kwargs):
+        raise psycopg.errors.DeadlockDetected("deadlock simule")
+
+    monkeypatch.setattr(operations.audit, "record_event", boom)
+    database = operations.connect(pg.url("app"))
+    report = operations.reconcile_purges(database, actor=OWNER, execute=True)
+    inspected = {row["organization_id"] for row in report["reconciled"]}
+    assert str(org.organization_id) in inspected
+    assert str(neighbour.organization_id) in inspected, "la boucle s'est arretee au premier echec"
+    assert report["exit_code"] == 7
+
+
+def test_the_audited_classes_are_exactly_the_ratified_ones():
+    """La liste ratifiee par D-070, figee: une classe ajoutee en silence fait echouer ce test.
+
+    Cinq classes, et cinq seulement. `terminal`, `not_purging`, `would_recover`,
+    `owner_invalid` et `permission_denied` n'en font PAS partie -- les deux dernieres parce que
+    D-070 les declare non auditables, les trois premieres parce qu'aucune tentative n'a eu lieu.
+    """
+    assert set(operations.RECOVERY_AUDITED) == {
+        operations.RECOVERY_NO_REQUESTER, operations.RECOVERY_TOO_SOON,
+        operations.RECOVERY_GUARD_EXHAUSTED, operations.RECOVERY_DETERMINISTIC_FAILURE,
+        operations.RECOVERY_ALREADY_ACTIVE}
+    for excluded in (operations.RECOVERY_TERMINAL, operations.RECOVERY_NOT_PURGING,
+                     operations.RECOVERY_WOULD_RECOVER, operations.RECOVERY_OWNER_INVALID,
+                     operations.RECOVERY_PERMISSION_DENIED, operations.RECOVERY_RECOVERED):
+        assert excluded not in operations.RECOVERY_AUDITED, excluded

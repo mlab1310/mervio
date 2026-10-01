@@ -30,7 +30,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple, TypeVar
 from uuid import UUID
 
 from ..application.workspace import is_sample_path
@@ -117,6 +117,32 @@ RECOVERY_TOO_SOON = "too_soon"
 _RECOVERY_DENIED = (RECOVERY_OWNER_INVALID, RECOVERY_PERMISSION_DENIED)
 _RECOVERY_CONFLICT = (RECOVERY_GUARD_EXHAUSTED, RECOVERY_DETERMINISTIC_FAILURE,
                       RECOVERY_NO_REQUESTER, RECOVERY_TOO_SOON)
+
+# -- audit des refus d'une tentative REELLE (D-070, 004.4.7) ----------------------------------
+#
+# CE QUI EST TRACE, et rien d'autre: le refus d'une tentative REELLE (`--execute`) de reprise,
+# par un acteur que la base reconnait encore `owner`. Une consultation n'est pas une tentative;
+# une SIMULATION n'en est pas une non plus -- un journal d'audit enregistre ce qui EST ARRIVE,
+# et l'auditer rendrait le journal incapable de distinguer "on a tente et on a ete refuse" de
+# "on a regarde". C'est le meme arbitrage que D-065 Q1 sur le vocabulaire dedie.
+#
+# COUVERTURE PARTIELLE, ASSUMEE ET DOCUMENTEE (D-070). Deux refus ne sont JAMAIS traces:
+#   `owner_invalid`     l'acteur n'a pas `PURGE_TENANT`, donc ne peut pas ecrire l'evenement --
+#                       l'ecriture se fait sous la permission de l'ACTION DECRITE, comme pour
+#                       les six autres ecritures d'audit du produit. Aucun privilege inferieur,
+#                       aucun bypass n'est cree pour le tracer.
+#   `permission_denied` l'appartenance a ete retiree: `TenantSession` leve, et la politique
+#                       `audit_events_tenant_isolation` refuserait l'insertion. Impossibilite
+#                       technique, pas un arbitrage.
+# Un `viewer` ou un `analyst` lancant `--execute` atteint les refus de garde (ils precedent la
+# porte `_require`) et n'ecrit donc AUCUN evenement: `record_event` relit son rang en base.
+#
+# DEUX conditions, et elles ne disent pas la meme chose. Le drapeau rendu par `_reconcile_one`
+# dit "une tentative REELLE a eu lieu"; la liste ci-dessous dit "cette CLASSE de refus est
+# ratifiee comme auditable". Les deux doivent tenir. Une classe ajoutee au drapeau sans etre
+# ratifiee ici n'ecrit donc rien -- fail-closed, et dans le sens qui protege le journal.
+RECOVERY_AUDITED = (RECOVERY_NO_REQUESTER, RECOVERY_TOO_SOON, RECOVERY_GUARD_EXHAUSTED,
+                    RECOVERY_DETERMINISTIC_FAILURE, RECOVERY_ALREADY_ACTIVE)
 
 _SERVICE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,62}$")
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
@@ -926,6 +952,48 @@ def _purge_report(organization_id: UUID, outcome: str, state=None, *, blocked_re
     return document
 
 
+def _trace_refusal(session: TenantSession, row: Dict[str, Any], state) -> None:
+    """Ecrit `organization.purge_recovery_refused` (D-070). Annote `row` si l'ecriture echoue.
+
+    TRANSACTION PROPRE, et c'est la propriete qui compte. Un refus ne decrit AUCUN changement
+    d'etat: il n'y a rien a atomiser avec lui, contrairement a un evenement de succes. Surtout,
+    le refus `already_active` par course nait d'une `23505` qui a ANNULE la transaction de mise
+    en file -- un audit ecrit dedans serait perdu avec elle. L'ecriture doit donc venir APRES,
+    et `record_event` est le helper que le depot porte deja pour exactement ce cas.
+
+    AUTORISATION: `PURGE_TENANT`, la permission de l'action decrite -- jamais une permission
+    inferieure. `record_event` relit le rang EN BASE, dans la transaction de l'insertion. Un
+    acteur qui n'est plus (ou n'a jamais ete) `owner` n'ecrit donc rien, et ce n'est PAS une
+    erreur: c'est la couverture partielle que D-070 assume. Tout AUTRE echec est remonte.
+    """
+    if row["outcome"] not in RECOVERY_AUDITED:
+        # Classe non ratifiee par D-070: rien n'est ecrit, et c'est la liste qui tranche.
+        return
+    latest = state.latest_purge if state is not None else None
+    try:
+        audit.record_event(
+            session,
+            action=Action.ORGANIZATION_PURGE_RECOVERY_REFUSED,
+            resource_type=ResourceType.ORGANIZATION,
+            resource_id=session.organization_id,
+            correlation_id=latest.correlation_id if latest is not None else uuid.uuid4(),
+            outcome=Outcome.FAILED,
+            actor_type=ActorType.USER,
+            actor_id=session.user_id,
+            metadata={"outcome": row["outcome"], "reason": row.get("blocked_reason"),
+                      "recoveries": state.failed_purges if state is not None else 0,
+                      "purge_job_id": str(latest.id) if latest is not None else None},
+            permission=Permission.PURGE_TENANT,
+        )
+    except (PermissionDenied, NotFound):
+        # rang insuffisant ou appartenance retiree: AUCUNE trace, par conception (D-070).
+        return
+    except Exception as exc:  # noqa: BLE001 - l'integrite de l'audit est fail-closed
+        # Jamais masque, jamais transforme en succes: le refus reste le refus, et l'echec de
+        # sa trace apparait dans la ligne et durcit le code de sortie (`_recovery_exit`).
+        row["audit_error"] = database_error_code(exc)
+
+
 def reconcile_purges(database: Database, *, actor: Any, organization: Any = None,
                      execute: Any = False, limit: Any = 50,
                      now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -968,54 +1036,84 @@ def reconcile_purges(database: Database, *, actor: Any, organization: Any = None
             rows.append(_purge_report(organization_id, RECOVERY_PERMISSION_DENIED,
                                       blocked_reason="appartenance retiree"))
             continue
-        rows.append(_reconcile_one(session, state, execute=execute, now=now))
+        row, auditable = _reconcile_one(session, state, execute=execute, now=now)
+        # D-070: la trace vient APRES la decision, jamais dedans -- et son echec n'interrompt
+        # pas l'inspection des organisations suivantes (best-effort sur la boucle).
+        if auditable:
+            _trace_refusal(session, row, state)
+        rows.append(row)
     return {"reconciled": rows, "executed": execute, "exit_code": _recovery_exit(rows)}
 
 
-def _reconcile_one(session: TenantSession, state, *, execute: bool, now: datetime) -> Dict[str, Any]:
+def _reconcile_one(session: TenantSession, state, *, execute: bool,
+                   now: datetime) -> Tuple[Dict[str, Any], bool]:
+    """Decide, et ne trace rien. Rend `(ligne de rapport, cette ligne est-elle a auditer)`.
+
+    D-070: la DECISION d'auditer appartient ici -- elle depend de l'issue et de `execute` --,
+    mais l'ECRITURE appartient a l'appelant. Deux raisons: le point d'ecriture reste unique et
+    relisable, et la trace d'un refus ne au sein d'une transaction ANNULEE (la `23505`) ne peut
+    etre ecrite qu'apres le retour.
+
+    `already_active` porte les DEUX cas et ils ne sont pas equivalents: le pre-controle est une
+    OBSERVATION (une purge est en vol, rien n'a ete tente) et n'est jamais audite; la course
+    `23505` est une TENTATIVE reelle qui a perdu, et elle l'est. D'ou le drapeau explicite,
+    plutot qu'une relecture de l'issue -- qui les confondrait.
+    """
     organization_id = session.organization_id
     if state.purged:
-        return _purge_report(organization_id, RECOVERY_TERMINAL, state)
+        return _purge_report(organization_id, RECOVERY_TERMINAL, state), False
     if not state.purging:
-        return _purge_report(organization_id, RECOVERY_NOT_PURGING, state)
+        return _purge_report(organization_id, RECOVERY_NOT_PURGING, state), False
     if state.active_purge is not None:
-        return _purge_report(organization_id, RECOVERY_ALREADY_ACTIVE, state)
+        # OBSERVATION, pas une tentative: une purge est en vol, rien n'a ete demande.
+        return _purge_report(organization_id, RECOVERY_ALREADY_ACTIVE, state), False
     if state.latest_purge is None:
         # Rien n'est usurpe et rien n'est devine: ce qui manque n'est pas l'autorisation --
         # l'acteur l'a -- mais l'HISTORIQUE sur lequel la garde s'appuie. Fail-closed.
         return _purge_report(organization_id, RECOVERY_NO_REQUESTER, state,
                              blocked_reason="aucune purge d'organisation dans l'historique: "
-                                            "reprise manuelle par un proprietaire requise")
+                                            "reprise manuelle par un proprietaire requise"), execute
     blocked = _purge_guard(state, now)
     if blocked is not None:
-        return _purge_report(organization_id, blocked[0], state, blocked_reason=blocked[1])
+        return _purge_report(organization_id, blocked[0], state, blocked_reason=blocked[1]), execute
     if not execute:
-        return _purge_report(organization_id, RECOVERY_WOULD_RECOVER, state)
+        return _purge_report(organization_id, RECOVERY_WOULD_RECOVER, state), False
 
     try:
         _require(session, Permission.PURGE_TENANT)
     except (PermissionDenied, NotFound) as exc:
+        # NON AUDITABLE (D-070): l'acteur n'a pas la permission de l'action, donc pas celle de
+        # tracer son refus. Aucun privilege inferieur n'est invente pour y parvenir.
         return _purge_report(organization_id, RECOVERY_OWNER_INVALID, state,
-                             blocked_reason=redact_text(str(exc)))
+                             blocked_reason=redact_text(str(exc))), False
     try:
         enqueued = _enqueue(session, JobType.PURGE_ORGANIZATION, {}, store_id=None, priority=0,
                             idempotency_key=None, max_attempts=PURGE_RECOVERY_MAX_ATTEMPTS,
                             correlation_id=state.latest_purge.correlation_id)
     except Exception as exc:  # noqa: BLE001 - trie par le code SQLSTATE ci-dessous
         if database_error_code(exc) == "sqlstate_23505":
-            # D-067: une autre reprise a gagne la course entre la lecture et l'insertion
+            # D-067: une autre reprise a gagne la course entre la lecture et l'insertion.
+            # TENTATIVE REELLE, donc auditee -- et sa transaction vient d'etre annulee, d'ou
+            # une trace ecrite par l'appelant, apres ce retour (D-070).
             return _purge_report(organization_id, RECOVERY_ALREADY_ACTIVE, state,
-                                 blocked_reason="une autre purge tenant a gagne la course")
+                                 blocked_reason="une autre purge tenant a gagne la course"), True
         raise
-    return _purge_report(organization_id, RECOVERY_RECOVERED, state, enqueued=enqueued["job"])
+    return _purge_report(organization_id, RECOVERY_RECOVERED, state, enqueued=enqueued["job"]), False
 
 
 def _recovery_exit(rows: List[Dict[str, Any]]) -> int:
-    """Le code le PLUS SEVERE rencontre. Une inspection reussit tout en rapportant des obstacles."""
+    """Le code le PLUS SEVERE rencontre. Une inspection reussit tout en rapportant des obstacles.
+
+    D-070: un echec d'ECRITURE d'audit est fail-closed. La boucle continue -- best-effort sur
+    les organisations suivantes -- mais le code de sortie ne peut pas rester `0`: un refus non
+    trace ne doit jamais se lire comme une execution propre.
+    """
     outcomes = {row["outcome"] for row in rows}
     if outcomes & set(_RECOVERY_DENIED):
         return EXIT_DENIED
     if outcomes & set(_RECOVERY_CONFLICT):
+        return EXIT_CONFLICT
+    if any(row.get("audit_error") for row in rows):
         return EXIT_CONFLICT
     return EXIT_OK
 

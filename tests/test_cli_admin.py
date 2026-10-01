@@ -361,3 +361,65 @@ def test_a_local_source_that_is_well_formed_but_absent_is_still_refused(tmp_path
         operations.validate_local_source(str(tmp_path / "absent.csv"))
     with pytest.raises(admin_errors.InvalidInput):
         operations.validate_local_source(str(tmp_path))  # un repertoire n'est pas un fichier
+
+
+# =============================================================================================
+# `audit list --action`: le filtre accepte TOUT le vocabulaire de la base (004.4.7, D-070)
+# =============================================================================================
+#
+# `list_audit_events` valide `--action` contre l'enum Python `Action`. Si une action existe dans
+# la contrainte `CHECK` sans etre dans l'enum, ses traces sont ECRITES et NON FILTRABLES -- et
+# c'est exactement ce que `0016` avait laisse: quatre actions de purge tenant inaccessibles au
+# filtre. 004.4.7 ferme l'ecart, et ces tests le verrouillent.
+
+def test_the_audit_filter_accepts_the_tenant_purge_actions_of_0016():
+    """Defaut PROUVE de `0016`, ferme ici: ces quatre traces existaient sans etre filtrables."""
+    from mervio.persistence.audit import Action
+
+    for action in ("store.purge_started", "store.purged",
+                   "organization.purge_started", "organization.purged"):
+        assert operations._choices([action], [a.value for a in Action], "action") == [action]
+
+
+def test_the_audit_filter_accepts_the_purge_recovery_refusal():
+    from mervio.persistence.audit import Action
+
+    action = "organization.purge_recovery_refused"
+    assert operations._choices([action], [a.value for a in Action], "action") == [action]
+
+
+def test_the_audit_filter_still_refuses_an_unknown_action():
+    """Le filtre reste ferme: l'elargissement n'ouvre pas la porte a n'importe quelle valeur."""
+    from mervio.persistence.audit import Action
+
+    with pytest.raises(admin_errors.InvalidInput):
+        operations._choices(["organization.purged.oops"], [a.value for a in Action], "action")
+
+
+def test_the_audit_filter_covers_every_action_the_schema_accepts():
+    """L'enum et la contrainte de `0017` disent la MEME chose -- ni plus, ni moins.
+
+    Sans cette egalite, deux defauts symetriques redeviennent possibles: une action insérable
+    mais non filtrable (le defaut de `0016`), ou une action filtrable mais insérable nulle part.
+    """
+    import sys
+    import types
+    import importlib.util as importer
+
+    from mervio.persistence.audit import Action
+
+    saved = sys.modules.get("alembic")
+    sys.modules["alembic"] = types.ModuleType("alembic")
+    sys.modules["alembic"].op = None
+    try:
+        path = (ROOT / "src" / "mervio" / "persistence" / "migrations" / "versions"
+                / "0017_purge_recovery_audit.py")
+        spec = importer.spec_from_file_location("_m0017", path)
+        module = importer.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        if saved is None:
+            del sys.modules["alembic"]
+        else:
+            sys.modules["alembic"] = saved
+    assert {a.value for a in Action} == set(module.CURRENT_ACTIONS)
