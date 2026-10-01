@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -227,18 +228,159 @@ def test_a_second_request_forces_the_stop_immediately(pg, tmp_path, authorized):
     assert jobs.get_job(authorized.session, job.id).last_error_code == "worker_shutdown"
 
 
-def test_a_handler_that_never_yields_triggers_the_hard_exit(pg, tmp_path, authorized):
-    job = enqueue_scripted(authorized, mode="cpu", seconds=3)
+#: Les trois lignes que le runtime emet le long de la chaine de sortie forcee. Leur PRESENCE ou
+#: leur ABSENCE identifie le point de rupture exact, sans avoir a lire un attribut prive:
+#:   `stopping` seule            -> la porte 1 (`_grace_expired`: `busy`) n'a pas passe;
+#:   `stopping` + `shutdown_forced` -> la porte 1 a passe, mais la sortie forcee manque. DEUX
+#:                                  voies le produisent, et `missing_forced_exit_cause` les
+#:                                  separe: PORTE 2 (le minuteur a tire, `busy` faux) ou
+#:                                  TIMER-ANNULE (le `finally` de `run()` l'a devance);
+#:   les trois                   -> la sortie forcee a bien eu lieu; la rupture est ailleurs.
+FORCED_CHAIN = ("worker.stopping", "worker.shutdown_forced", "worker.exit_forced")
+
+
+def forced_chain_timeline(records) -> str:
+    """Les jalons de la chaine, en millisecondes depuis le PREMIER d'entre eux.
+
+    C'est ce qui distingue une marge epuisee par un blocage AVANT la sortie forcee (ecart
+    anormal entre `stopping` et `shutdown_forced` -- typiquement `force_release` qui attend la
+    base) d'un blocage AILLEURS. Sans ces deltas, `depuis request_stop` ne mesure que
+    l'expiration du timeout d'observation, pas la cause.
+    """
+    stamps = [(e["event"], e["timestamp"]) for e in records
+              if e.get("event") in FORCED_CHAIN and e.get("timestamp")]
+    if not stamps:
+        return "(aucun jalon journalise)"
+    origin = datetime.fromisoformat(stamps[0][1])
+    return "  ".join(
+        f"{name.removeprefix('worker.')}+{int((datetime.fromisoformat(stamp) - origin).total_seconds() * 1000)}ms"
+        for name, stamp in stamps)
+
+
+#: Ligne emise a la toute fin de `run()`, APRES le `finally` qui annule les minuteurs.
+STOPPED_EVENT = "worker.stopped"
+
+
+def _stamp(records, event):
+    """Horodatage du PREMIER enregistrement portant cet evenement, ou None."""
+    for record in records:
+        if record.get("event") == event and record.get("timestamp"):
+            return datetime.fromisoformat(record["timestamp"])
+    return None
+
+
+def missing_forced_exit_cause(running, records) -> str:
+    """Distingue les DEUX voies par lesquelles la sortie forcee peut manquer.
+
+    Elles produisent des observables IDENTIQUES -- ni `worker.exit_forced`, ni entree dans
+    `exits` -- mais ne designent pas le meme defaut:
+
+        PORTE 2        le minuteur a TIRE, et `_hard_exit_if_stuck` a trouve `busy` faux:
+                       le handler etait deja revenu, et `_active` remis a None.
+        TIMER-ANNULE   le minuteur n'a JAMAIS tire: `_loop` est sorti et le `finally` de
+                       `run()` l'a annule avant son echeance.
+
+    L'ETAT DU MINUTEUR NE LES SEPARE PAS, et c'est contre-intuitif: `Timer.cancel()` pose
+    `finished`, et un tir normal la pose aussi en fin de `run()`. Les deux cas laissent donc
+    `finished` posee et le fil mort (verifie sur l'implementation CPython). Le seul
+    discriminateur observable depuis le test est donc TEMPOREL:
+
+        echeance du minuteur = `shutdown_forced` + `forced_exit_delay`
+        instant de l'annulation ~ `worker.stopped` (journalisee juste APRES le `finally`)
+
+    Si `run()` s'est termine AVANT l'echeance, le minuteur a ete annule. Sinon il a eu
+    l'occasion de tirer, donc il a tire et c'est la porte 2. La borne est CONSERVATRICE:
+    `worker.stopped` vient un peu apres l'annulation, ce qui penche vers la porte 2 et
+    n'invente jamais une annulation.
+    """
+    timers = list(getattr(running.runtime, "_timers", []))
+    if not timers:
+        return "INDETERMINE -- aucun minuteur n'a ete arme"
+    if timers[-1].is_alive():
+        return "INDETERMINE -- le dernier minuteur est ENCORE en attente (diagnostic trop tot)"
+    forced_at = _stamp(records, "worker.shutdown_forced")
+    if forced_at is None:
+        return "INDETERMINE -- `shutdown_forced` n'est pas journalisee"
+    deadline = forced_at + timedelta(seconds=running.runtime.forced_exit_delay)
+    stopped_at = _stamp(records, STOPPED_EVENT)
+    if stopped_at is None:
+        return ("PORTE 2 -- `run()` n'est pas encore termine, le minuteur ne peut donc pas avoir"
+                " ete annule: il a tire et a trouve `busy` faux")
+    margin_ms = int((stopped_at - deadline).total_seconds() * 1000)
+    if stopped_at < deadline:
+        return (f"TIMER-ANNULE -- `run()` s'est termine {abs(margin_ms)} ms AVANT l'echeance du"
+                " minuteur: le `finally` l'a annule avant qu'il ne tire")
+    return (f"PORTE 2 -- le minuteur a tire {margin_ms} ms avant la fin de `run()`,"
+            " et a trouve `busy` faux (handler deja revenu)")
+
+
+def forced_exit_diagnostic(running, buffer, tenant, job, *, asked_at, budget) -> str:
+    """Instantané lisible de la chaine de sortie forcee, pour un echec de ce test.
+
+    N'est evalue QU'EN CAS D'ECHEC: la construction lit la base et le journal, ce qui serait
+    du bruit -- et un cout -- sur le chemin nominal.
+    """
+    records = log_events(buffer)
+    events = [e.get("event") for e in records]
+    seen = [name for name in FORCED_CHAIN if name in events]
+    elapsed = time.monotonic() - asked_at
+    try:
+        status = jobs.get_job(tenant.session, job.id).status
+    except Exception as exc:  # noqa: BLE001 - un diagnostic ne doit jamais masquer l'echec initial
+        status = f"<illisible: {type(exc).__name__}>"
+    lines = [
+        f"chaine observee     : {' -> '.join(seen) if seen else '(aucune)'}",
+        f"chaine manquante    : {[n for n in FORCED_CHAIN if n not in events] or '(aucune)'}",
+        f"sorties forcees     : {running.exits}",
+        f"busy au diagnostic  : {running.runtime.busy}",
+        f"etats traverses     : {[s.value for s in running.runtime.lifecycle.history]}",
+        f"statut du travail   : {status}",
+        f"depuis request_stop : {elapsed:.3f} s   (budget du handler: {budget} s,"
+        f" delai de sortie forcee: {running.runtime.forced_exit_delay} s)",
+        f"jalons de la chaine : {forced_chain_timeline(records)}",
+    ]
+    if "worker.shutdown_forced" in events and "worker.exit_forced" not in events:
+        lines.append(f"VERDICT: {missing_forced_exit_cause(running, records)}")
+    elif "worker.stopping" in events and "worker.shutdown_forced" not in events:
+        lines.append("VERDICT: porte 1 -- `busy` etait faux des l'expiration du delai de grace.")
+    elif all(name in events for name in FORCED_CHAIN):
+        lines.append("VERDICT: la sortie forcee A EU LIEU; la rupture est en aval"
+                     " (join, statut du travail, ou audit).")
+    else:
+        lines.append("VERDICT: indetermine -- `request_stop` n'a meme pas ete journalise.")
+    return "\n".join(lines)
+
+
+def test_a_handler_that_never_yields_triggers_the_hard_exit(pg, tmp_path, authorized, json_logs):
+    """Instrumente (004.4.7+): ce test est un flake connu, sensible au temps.
+
+    Le budget du handler est son `seconds`: la boucle `cpu` n'appelle JAMAIS `checkpoint()`,
+    donc rien ne l'interrompt et `run()` ne peut pas revenir avant la fin. La sortie forcee
+    exige que `busy` soit ENCORE vrai quand `_hard_exit_if_stuck` tire, soit
+    `forced_exit_delay` apres l'expiration du delai de grace. La marge est donc
+    `seconds - forced_exit_delay`, et un blocage de plusieurs secondes la consomme.
+
+    AUCUN parametre n'est modifie ici: seule l'OBSERVABILITE est ajoutee, pour qu'un echec
+    nomme son point de rupture au lieu de rendre `aucune sortie forcee` sans contexte.
+    """
+    budget = 3
+    job = enqueue_scripted(authorized, mode="cpu", seconds=budget)
     running = Running(settings_for(pg, tmp_path, MERVIO_WORKER_SHUTDOWN_GRACE_SECONDS=0), forced_exit_delay=0.5)
     running.wait_state(S.BUSY)
     running.runtime.request_stop("SIGTERM")
-    wait_until(lambda: running.exits, timeout=5, message="aucune sortie forcee")
-    assert running.exits == [EXIT_FORCED]
-    result = running.join()
-    assert result.exit_code == EXIT_FORCED
-    stored = jobs.get_job(authorized.session, job.id)
-    assert (stored.status, stored.last_error_code) == ("queued", "worker_shutdown")
-    assert not any(action == "job.succeeded" for action, *_ in audit_trail(authorized, job.id))
+    asked_at = time.monotonic()
+    try:
+        wait_until(lambda: running.exits, timeout=5, message="aucune sortie forcee")
+        assert running.exits == [EXIT_FORCED]
+        result = running.join()
+        assert result.exit_code == EXIT_FORCED
+        stored = jobs.get_job(authorized.session, job.id)
+        assert (stored.status, stored.last_error_code) == ("queued", "worker_shutdown")
+        assert not any(action == "job.succeeded" for action, *_ in audit_trail(authorized, job.id))
+    except AssertionError as failure:
+        diagnostic = forced_exit_diagnostic(running, json_logs, authorized, job,
+                                            asked_at=asked_at, budget=budget)
+        raise AssertionError(f"{failure}\n\n--- diagnostic de la sortie forcee ---\n{diagnostic}") from failure
 
 
 def test_an_unreachable_database_ends_the_startup(pg, tmp_path):
