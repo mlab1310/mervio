@@ -18,7 +18,7 @@ from ..domain.models import Dataset
 from ..identity import CustomerIdentity
 from ..domain.quality import DataQualityReport, QualityStatus
 from . import kpi as kpi_module
-from .anomaly import Anomaly, detect_anomalies
+from .anomaly import Anomaly, baseline_points, detect_anomalies
 from .health import compute_business_health
 from .insights import build_insights
 from .kpi import campaign_performance, compute_kpis, product_performance
@@ -217,7 +217,11 @@ def analyze_loaded_dataset(
         anomalies.extend(detect_anomalies(name, points, cfg.anomaly))
 
     comparisons = compare_all(dataset, period, SERIES_METRICS)
-    root_cause = analyse_revenue_change(dataset, period, prior)
+    # AN-01: la decomposition recoit la baseline DECLAREE par le detecteur, elle ne la
+    # recalcule jamais. `baseline_points` est la source unique de la definition de la fenetre:
+    # une periode sans donnee ne peut donc pas faire divergier les deux referentiels.
+    revenue_baseline = [point.period for point in baseline_points(series["revenue"], cfg.anomaly)]
+    root_cause = analyse_revenue_change(dataset, period, prior, baseline=revenue_baseline or None)
     health = compute_business_health(kpis, comparisons, profitability, window, dataset.quality, cfg.health)
     insights = build_insights(kpis, anomalies, root_cause, profitability, window,
                               dataset.currency, cfg)

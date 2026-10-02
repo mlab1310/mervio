@@ -44,9 +44,16 @@ from mervio.identity import CustomerIdentity
 
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLE = ROOT / "data" / "sample"
-#: empreinte du rapport `data/sample` MESUREE A 7580ad4, avant toute centralisation de seuil.
-#: Elle ne doit pas changer: AN-16 deplace des seuils, il n'en modifie aucune valeur.
-DIGEST_BEFORE_AN16 = "9ae20682408336b9e85207b77f652f68f43c7148a87d5400d13fca365911cdf4"
+#: La neutralite d'AN-16 a d'abord ete verrouillee par une empreinte ABSOLUE, mesuree a `7580ad4`
+#: (sha256 9ae20682...). Cette preuve est faite et figee dans l'historique: le commit
+#: `refactor(config): centralise analytical thresholds (AN-16)` etait vert avec ce verrou.
+#:
+#: Elle est desormais exprimee RELATIVEMENT, parce que chaque defaut suivant de 004.5 (AN-01 et
+#: la suite) deplace legitimement le rapport: un verrou absolu echouerait alors pour une raison
+#: ETRANGERE a ce que ce module affirme, ce qui est la pire espece de test rouge.
+#:
+#: Ce qui reste asserte, et qui est l'essentiel: la configuration par defaut se comporte
+#: exactement comme l'absence de configuration, et chaque seuil deplace est REELLEMENT actif.
 IDENTITY = CustomerIdentity(bytes.fromhex("ab" * 32))
 TODAY = date(2026, 9, 14)
 
@@ -75,17 +82,39 @@ def _digest(report: dict) -> str:
 
 
 # -- A-16: l'empreinte par defaut ne bouge pas ------------------------------
-def test_the_default_report_is_byte_identical_to_the_pre_centralisation_one():
+def test_the_explicit_default_config_behaves_like_no_config_at_all():
     """Preuve de non-regression d'AN-16, et sa raison d'etre.
 
-    Si ce test echoue, un seuil a ete deplace AVEC une valeur differente: ce n'est plus une
-    centralisation, c'est un changement de comportement.
+    Si un seuil avait ete deplace AVEC une valeur differente de celle qu'il avait en dur, la
+    configuration par defaut cesserait de reproduire le comportement d'origine. Ici la forme
+    forte: `AnalyticsConfig()` construit explicitement doit produire le MEME rapport que
+    l'absence totale de configuration, octet pour octet.
     """
-    assert _digest(_report()) == DIGEST_BEFORE_AN16
+    assert _digest(_report(AnalyticsConfig())) == _digest(_report())
 
 
-def test_the_explicit_default_config_behaves_like_no_config_at_all():
-    assert _digest(_report(AnalyticsConfig())) == DIGEST_BEFORE_AN16
+def test_every_default_threshold_value_is_the_one_that_was_hard_coded():
+    """Les valeurs mesurees a `7580ad4` dans le code, champ par champ.
+
+    C'est la moitie absolue de la preuve: une centralisation ne change aucune valeur.
+    """
+    config = AnalyticsConfig()
+    assert config.insights.low_product_margin == 0.20          # insights.py:137
+    assert config.health.concentration_warning == 0.40         # insights.py:152 == HealthConfig
+    assert config.quality.reliable_coverage == 0.95            # kpi.py:217
+    assert config.profitability.complete_cogs_coverage == 0.999  # profitability.py:114,115
+    assert config.health.min_product_coverage == 0.80          # health.py:35
+    assert config.refund_reconciliation_tolerance == 0.01      # pipeline.py:139
+    assert config.health.revenue_growth_thresholds == (
+        (-0.25, 0.0), (-0.10, 40.0), (0.0, 70.0), (0.10, 100.0))
+    assert config.health.profitability_thresholds == (
+        (-0.05, 0.0), (0.0, 20.0), (0.05, 45.0), (0.15, 75.0), (0.25, 100.0))
+    assert config.health.roas_thresholds == (
+        (0.5, 0.0), (1.0, 25.0), (2.0, 55.0), (3.0, 80.0), (4.0, 100.0))
+    assert config.health.repeat_thresholds == (
+        (0.0, 10.0), (0.10, 45.0), (0.20, 75.0), (0.30, 100.0))
+    assert config.health.product_margin_thresholds == (
+        (0.10, 0.0), (0.25, 45.0), (0.40, 75.0), (0.55, 100.0))
 
 
 # -- chaque seuil deplace doit etre REELLEMENT actif ------------------------

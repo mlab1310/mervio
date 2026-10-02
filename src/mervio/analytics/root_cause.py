@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from ..domain.models import Dataset
 from .kpi import campaign_performance, product_performance, total_clicks, total_revenue
@@ -57,6 +57,14 @@ class RootCauseAnalysis:
     observed_change_pct: Optional[float]
     observed_change_absolute: Optional[float]
     method: str
+    #: labels des periodes de baseline, identiques a ceux de l'anomalie (AN-01)
+    baseline_periods: List[str] = field(default_factory=list)
+    #: niveau de reference: moyenne du CA sur la baseline. Egale EXACTEMENT
+    #: `anomaly.expected_value` -- c'est l'objet meme d'AN-01.
+    baseline_revenue: Optional[float] = None
+    #: comparaison a la periode precedente, CONSERVEE mais etiquetee a part et SANS
+    #: contribution: une contribution rattachee a un autre referentiel serait un melange.
+    change_vs_previous_period: Dict[str, Optional[float]] = field(default_factory=dict)
     factors: List[CauseFactor] = field(default_factory=list)
     product_contributors: List[dict] = field(default_factory=list)
     campaign_contributors: List[dict] = field(default_factory=list)
@@ -75,6 +83,9 @@ class RootCauseAnalysis:
             "observed_change_pct": round(self.observed_change_pct, 4) if self.observed_change_pct is not None else None,
             "observed_change_absolute": round(self.observed_change_absolute, 2) if self.observed_change_absolute is not None else None,
             "method": self.method, "available": self.available,
+            "baseline_periods": list(self.baseline_periods),
+            "baseline_revenue": round(self.baseline_revenue, 2) if self.baseline_revenue is not None else None,
+            "change_vs_previous_period": dict(self.change_vs_previous_period),
             "primary_factor": primary.factor if primary else None,
             "factors": [f.to_dict() for f in self.factors],
             "product_contributors": self.product_contributors,
@@ -100,17 +111,46 @@ def _confidence(contribution: Optional[float], quality_penalty: float) -> float:
 
 
 def analyse_revenue_change(
-    full: Dataset, current: Period, previous: Period
+    full: Dataset, current: Period, previous: Period,
+    baseline: Optional[Sequence[Period]] = None,
 ) -> RootCauseAnalysis:
+    """Decompose la variation du CA contre la MEME baseline que l'anomalie (AN-01).
+
+    `baseline`: periodes de reference, telles que declarees par le detecteur
+    (`anomaly.baseline_points`). Absent, la baseline vaut `[previous]`: cas degenere n = 1, qui
+    reproduit EXACTEMENT le comportement anterieur a AN-01 (somme(R)/1 = R0, somme(O)/somme(C)
+    = cvr0, somme(R)/somme(O) = aov0).
+
+    Les agregats construisent les RATIOS; le niveau de reference est leur MOYENNE par periode.
+    Prendre somme(CA) sans diviser par n fausserait ln(R1/R0) d'un facteur ln n.
+    """
+    windows = [full.window(p.start, p.end) for p in (baseline or [previous])]
     cur_ds = full.window(current.start, current.end)
     prev_ds = full.window(previous.start, previous.end)
 
-    r1, r0 = total_revenue(cur_ds), total_revenue(prev_ds)
+    n = len(windows)
+    sum_revenue = sum(total_revenue(w) for w in windows)
+    sum_clicks = sum(total_clicks(w) for w in windows)
+    sum_orders = sum(len(w.orders) for w in windows)
+
+    r1 = total_revenue(cur_ds)
+    r0 = sum_revenue / n if n else 0.0
+    prev_revenue = total_revenue(prev_ds)
     analysis = RootCauseAnalysis(
         target_metric="revenue", period=current.label, previous_period=previous.label,
         observed_change_pct=_pct(r1, r0), observed_change_absolute=r1 - r0,
-        method="decomposition multiplicative Revenue = Clics x Taux de conversion x Panier moyen, "
-               "contributions en log-ratio; contributions produit/campagne additives",
+        method="decomposition multiplicative Revenue = Clics x Taux de conversion x Panier moyen "
+               "contre la MEME baseline que l'anomalie (agregats sur la fenetre, puis ratios "
+               "derives); contributions en log-ratio; contributions produit/campagne additives",
+        baseline_periods=[p.label for p in (baseline or [previous])],
+        baseline_revenue=r0 if n else None,
+        change_vs_previous_period={
+            "previous_period": previous.label,
+            "current_revenue": round(r1, 2),
+            "previous_revenue": round(prev_revenue, 2),
+            "delta": round(r1 - prev_revenue, 2),
+            "pct": round(_pct(r1, prev_revenue), 4) if _pct(r1, prev_revenue) is not None else None,
+        },
     )
     if r0 <= 0 or r1 <= 0:
         analysis.available = False
@@ -119,12 +159,15 @@ def analyse_revenue_change(
         )
         return analysis
 
-    c1, c0 = total_clicks(cur_ds), total_clicks(prev_ds)
-    o1, o0 = len(cur_ds.orders), len(prev_ds.orders)
+    c1 = total_clicks(cur_ds)
+    o1 = len(cur_ds.orders)
+    # RATIOS DE SOMMES, pas moyennes de ratios: seule forme qui preserve l'identite
+    # C x cvr x aov = somme(R)/n = r0
+    c0 = sum_clicks / n if n else 0.0
     cvr1 = (o1 / c1) if c1 else None
-    cvr0 = (o0 / c0) if c0 else None
+    cvr0 = (sum_orders / sum_clicks) if sum_clicks else None
     aov1 = (r1 / o1) if o1 else None
-    aov0 = (r0 / o0) if o0 else None
+    aov0 = (sum_revenue / sum_orders) if sum_orders else None
 
     log_total = math.log(r1 / r0)
     factors_spec = [
@@ -149,7 +192,9 @@ def analyse_revenue_change(
         contribution = math.log(v1 / v0) / log_total if log_total else None
         analysis.factors.append(CauseFactor(
             factor=key,
-            observed_fact=f"{label} {change:+.1%} entre {previous.label} et {current.label}",
+            observed_fact=(f"{label} {change:+.1%} sur {current.label} vs la baseline de "
+                           f"{n} periode(s)" if n > 1 else
+                           f"{label} {change:+.1%} entre {previous.label} et {current.label}"),
             supporting_metric=metric, current_value=v1, previous_value=v0,
             factor_change_pct=change, contribution=contribution,
             confidence=_confidence(contribution, penalty), hypothesis=hypothesis,
@@ -157,7 +202,7 @@ def analyse_revenue_change(
 
     analysis.factors.sort(key=lambda f: abs(f.contribution) if f.contribution is not None else -1, reverse=True)
     analysis.product_contributors = _contributors(
-        product_performance(cur_ds), product_performance(prev_ds), "sku", "title", r1 - r0
+        product_performance(cur_ds), _mean_performance(windows, "sku"), "sku", "title", r1 - r0
     )
     analysis.campaign_contributors = _campaign_contributors(cur_ds, prev_ds)
     analysis.limitations = [
@@ -166,6 +211,27 @@ def analyse_revenue_change(
         "Toute hypothese doit etre verifiee dans l'outil source avant decision.",
     ]
     return analysis
+
+
+def _mean_performance(windows: Sequence[Dataset], key: str) -> List[dict]:
+    """Performance produit MOYENNE PAR PERIODE sur la fenetre de baseline (AN-01).
+
+    Necessaire, pas cosmetique: la contribution d'un produit divise par `r1 - r0`, ou `r0` est
+    desormais la moyenne de baseline. Garder une reference produit sur la seule periode
+    precedente ferait que la somme des contributions ne vaudrait plus 1 -- exactement le melange
+    de referentiels qu'AN-01 supprime.
+    """
+    n = len(windows)
+    if not n:
+        return []
+    totals: Dict[str, dict] = {}
+    for window in windows:
+        for row in product_performance(window):
+            entry = totals.setdefault(row[key], dict(row, revenue=0.0))
+            entry["revenue"] += row["revenue"]
+    for entry in totals.values():
+        entry["revenue"] /= n
+    return sorted(totals.values(), key=lambda e: (-e["revenue"], e[key]))
 
 
 def _contributors(current: List[dict], previous: List[dict], key: str, label: str, total_delta: float) -> List[dict]:

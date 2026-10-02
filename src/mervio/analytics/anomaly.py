@@ -45,6 +45,10 @@ class Anomaly:
     severity: str  # low | medium | high
     assessment: str = "neutral"  # favorable | unfavorable | neutral
     evidence: List[str] = field(default_factory=list)
+    #: labels des periodes EFFECTIVEMENT retenues comme baseline (AN-01).
+    #: Une baseline non declaree ne peut etre ni verifiee, ni reutilisee par la decomposition
+    #: sans risque de divergence silencieuse.
+    baseline_periods: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +60,7 @@ class Anomaly:
             "z_score": round(self.z_score, 3) if self.z_score is not None else None,
             "direction": self.direction, "assessment": self.assessment, "method": self.method,
             "criterion": self.criterion, "severity": self.severity, "evidence": self.evidence,
+            "baseline_periods": list(self.baseline_periods),
         }
 
 
@@ -69,6 +74,19 @@ def _severity(delta_pct: Optional[float], z: Optional[float], cfg: AnomalyConfig
     return "low"
 
 
+def baseline_points(series: List[SeriesPoint], cfg: AnomalyConfig) -> List[SeriesPoint]:
+    """Points EFFECTIVEMENT retenus comme baseline du dernier point de la serie.
+
+    Source UNIQUE de la definition de la fenetre (AN-01): le detecteur et la decomposition
+    appellent cette fonction, de sorte qu'elles ne peuvent pas divergier. Les points `None` sont
+    exclus AVANT le fenetrage: une periode sans donnee ne consomme pas un cran de la fenetre.
+    """
+    observed = [p for p in series if p.value is not None]
+    if len(observed) < 2:
+        return []
+    return observed[:-1][-cfg.baseline_window:]
+
+
 def detect_anomalies(
     metric: str, series: List[SeriesPoint], cfg: AnomalyConfig, label: Optional[str] = None
 ) -> List[Anomaly]:
@@ -77,7 +95,9 @@ def detect_anomalies(
     if len(values) < 2:
         return []
     current_label, current = values[-1]
-    baseline = [v for _, v in values[:-1]][-cfg.baseline_window:]
+    points = baseline_points(series, cfg)
+    baseline = [p.value for p in points]
+    baseline_labels = [p.period.label for p in points]
     if not baseline:
         return []
 
@@ -120,4 +140,5 @@ def detect_anomalies(
         delta=delta, delta_pct=pct, z_score=z, direction=direction,
         method=method, criterion=criterion, severity=_severity(pct, z, cfg),
         assessment=assess_direction(metric, direction), evidence=evidence,
+        baseline_periods=baseline_labels,
     )]
