@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from ..config import QualityConfig
 from ..domain.models import Dataset
 from ..domain.quality import QualityStatus
 from .periods import Period
@@ -112,7 +113,11 @@ def new_customers(ds: Dataset, period: Period) -> int:
 
 
 # --- moteur -------------------------------------------------------------
-def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
+def compute_kpis(ds: Dataset, period: Period,
+                 cfg: Optional[QualityConfig] = None) -> Dict[str, Metric]:
+    # AN-16: `QualityConfig` existait et n'etait lu par PERSONNE (code mort). Le seuil de
+    # fiabilite de la marge brute etait code en dur a la meme valeur, juste a cote.
+    cfg = cfg or QualityConfig()
     p = period.label
     q = ds.quality
     kpis: Dict[str, Metric] = {}
@@ -214,7 +219,8 @@ def compute_kpis(ds: Dataset, period: Period) -> Dict[str, Metric]:
         gm, gm_quality, gm_notes = None, QualityStatus.UNAVAILABLE, ["aucun cout produit renseigne"]
     else:
         gm = (covered - cogs) / covered
-        gm_quality = QualityStatus.RELIABLE if coverage >= 0.95 else QualityStatus.INCOMPLETE
+        gm_quality = (QualityStatus.RELIABLE if coverage >= cfg.reliable_coverage
+                      else QualityStatus.INCOMPLETE)
         gm_notes = [f"calculee sur {coverage:.0%} du CA article (produits dont le cout est connu)"]
     kpis["gross_margin"] = _m("gross_margin", "Marge brute", gm, "ratio",
                               "Marge brute sur la part du CA dont le cout produit est connu.",

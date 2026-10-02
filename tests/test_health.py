@@ -6,9 +6,7 @@ from datetime import date, datetime
 import pytest
 
 from conftest import ad, make_dataset, make_order
-from mervio.analytics.health import (
-    MIN_PRODUCT_COVERAGE, ROAS_THRESHOLDS, compute_business_health, interpolate,
-)
+from mervio.analytics.health import compute_business_health, interpolate
 from mervio.analytics.kpi import compute_kpis
 from mervio.analytics.periods import make_period
 from mervio.analytics.profitability import compute_profitability
@@ -33,11 +31,11 @@ def score_for(ds):
     (0.0, 0.0), (1.0, 25.0), (2.0, 55.0), (4.0, 100.0), (99.0, 100.0),
 ])
 def test_interpolate_respects_declared_thresholds(value, expected):
-    assert interpolate(value, ROAS_THRESHOLDS) == pytest.approx(expected)
+    assert interpolate(value, CFG.roas_thresholds) == pytest.approx(expected)
 
 
 def test_interpolate_is_linear_between_points():
-    assert interpolate(2.5, ROAS_THRESHOLDS) == pytest.approx(67.5)
+    assert interpolate(2.5, CFG.roas_thresholds) == pytest.approx(67.5)
 
 
 def test_profitability_excluded_when_cogs_missing(simple_dataset):
@@ -53,7 +51,7 @@ def test_product_health_excluded_below_coverage_floor(simple_dataset):
     health = score_for(simple_dataset)
     product = next(d for d in health.dimensions if d.key == "product_health")
     assert product.available is False
-    assert str(int(MIN_PRODUCT_COVERAGE * 100)) in product.reason_unavailable
+    assert str(int(CFG.min_product_coverage * 100)) in product.reason_unavailable
 
 
 def test_weights_are_renormalised_over_available_dimensions(simple_dataset):

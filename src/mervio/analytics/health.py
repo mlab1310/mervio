@@ -18,21 +18,14 @@ from .kpi import Metric, product_performance
 from .profitability import ProfitabilityResult
 from .timeseries import Comparison
 
-#: (valeur_seuil, score) tries par valeur croissante
+#: (valeur_seuil, score) tries par valeur croissante.
+#: AN-16: les cinq baremes vivent desormais dans `HealthConfig`, qui valide leur monotonie.
 Thresholds = Sequence[Tuple[float, float]]
-
-REVENUE_GROWTH_THRESHOLDS: Thresholds = ((-0.25, 0.0), (-0.10, 40.0), (0.0, 70.0), (0.10, 100.0))
-PROFITABILITY_THRESHOLDS: Thresholds = ((-0.05, 0.0), (0.0, 20.0), (0.05, 45.0), (0.15, 75.0), (0.25, 100.0))
-ROAS_THRESHOLDS: Thresholds = ((0.5, 0.0), (1.0, 25.0), (2.0, 55.0), (3.0, 80.0), (4.0, 100.0))
-REPEAT_THRESHOLDS: Thresholds = ((0.0, 10.0), (0.10, 45.0), (0.20, 75.0), (0.30, 100.0))
-PRODUCT_MARGIN_THRESHOLDS: Thresholds = ((0.10, 0.0), (0.25, 45.0), (0.40, 75.0), (0.55, 100.0))
 
 #: composantes de cout sans lesquelles une "marge" n'a pas de sens en e-commerce
 #: une marge qui ignore le cout d'achat ou des remboursements connus mais non ramenables a la base
 #: du CA (D-047) recompenserait l'absence de donnee: la dimension est exclue, pas approximee
 CRITICAL_COST_COMPONENTS = ("cogs", "refunds")
-#: couverture minimale du CA article pour que la marge produit represente le catalogue
-MIN_PRODUCT_COVERAGE = 0.80
 
 
 def interpolate(value: float, thresholds: Thresholds) -> float:
@@ -115,15 +108,15 @@ def compute_business_health(
     growth = next((c for c in comparisons.get("revenue", {}).values() if c.available and c.pct_change is not None), None)
     if growth:
         dims.append(DimensionScore(
-            "revenue_growth", "Croissance du CA", interpolate(growth.pct_change, REVENUE_GROWTH_THRESHOLDS),
+            "revenue_growth", "Croissance du CA", interpolate(growth.pct_change, cfg.revenue_growth_thresholds),
             w["revenue_growth"], True,
             "interpolation lineaire de la variation du CA vs periode precedente",
-            str(REVENUE_GROWTH_THRESHOLDS),
+            str(cfg.revenue_growth_thresholds),
             [f"CA {growth.pct_change:+.1%} ({growth.current_period} vs {growth.previous_period})"],
         ))
     else:
         dims.append(DimensionScore("revenue_growth", "Croissance du CA", None, w["revenue_growth"], False,
-                                   "-", str(REVENUE_GROWTH_THRESHOLDS), [],
+                                   "-", str(cfg.revenue_growth_thresholds), [],
                                    "aucune periode de comparaison exploitable"))
 
     # 2. profitabilite
@@ -134,16 +127,16 @@ def compute_business_health(
     blocking = [c for c in CRITICAL_COST_COMPONENTS if c in profitability.missing_components]
     if margin is not None:
         dims.append(DimensionScore(
-            "profitability", "Profitabilite", interpolate(margin, PROFITABILITY_THRESHOLDS),
+            "profitability", "Profitabilite", interpolate(margin, cfg.profitability_thresholds),
             w["profitability"], True,
             "interpolation lineaire de la marge de contribution complete",
-            str(PROFITABILITY_THRESHOLDS),
+            str(cfg.profitability_thresholds),
             [f"marge de contribution complete: {margin:.1%}"],
         ))
     elif blocking:
         dims.append(DimensionScore(
             "profitability", "Profitabilite", None, w["profitability"], False,
-            "-", str(PROFITABILITY_THRESHOLDS),
+            "-", str(cfg.profitability_thresholds),
             ([f"marge partielle observee: {profitability.partial_contribution_margin:.1%} "
               f"(non notee: elle exclut {', '.join(blocking)})"]
              if profitability.partial_contribution_margin is not None else []),
@@ -153,35 +146,35 @@ def compute_business_health(
     elif profitability.partial_contribution_margin is not None:
         dims.append(DimensionScore(
             "profitability", "Profitabilite",
-            interpolate(profitability.partial_contribution_margin, PROFITABILITY_THRESHOLDS),
+            interpolate(profitability.partial_contribution_margin, cfg.profitability_thresholds),
             w["profitability"], True,
             "interpolation lineaire de la marge de contribution partielle (couts majeurs presents)",
-            str(PROFITABILITY_THRESHOLDS),
+            str(cfg.profitability_thresholds),
             [f"marge de contribution PARTIELLE: {profitability.partial_contribution_margin:.1%}",
              "couts exclus (mineurs): " + ", ".join(profitability.missing_components)],
         ))
     else:
         dims.append(DimensionScore("profitability", "Profitabilite", None, w["profitability"], False,
-                                   "-", str(PROFITABILITY_THRESHOLDS), [], "aucune composante de cout disponible"))
+                                   "-", str(cfg.profitability_thresholds), [], "aucune composante de cout disponible"))
 
     # 3. efficacite marketing
     roas = kpis.get("roas")
     if roas and roas.available:
         dims.append(DimensionScore(
-            "marketing_efficiency", "Efficacite marketing", interpolate(roas.value, ROAS_THRESHOLDS),
+            "marketing_efficiency", "Efficacite marketing", interpolate(roas.value, cfg.roas_thresholds),
             w["marketing_efficiency"], True, "interpolation lineaire du ROAS global",
-            str(ROAS_THRESHOLDS), [f"ROAS {roas.value:.2f}"],
+            str(cfg.roas_thresholds), [f"ROAS {roas.value:.2f}"],
         ))
     else:
         dims.append(DimensionScore("marketing_efficiency", "Efficacite marketing", None,
-                                   w["marketing_efficiency"], False, "-", str(ROAS_THRESHOLDS), [],
+                                   w["marketing_efficiency"], False, "-", str(cfg.roas_thresholds), [],
                                    "aucune depense publicitaire connue sur la periode"))
 
     # 4. sante client
     repeat = kpis.get("repeat_purchase_rate")
     concentration = kpis.get("customer_concentration_top5")
     if repeat and repeat.available:
-        base = interpolate(repeat.value, REPEAT_THRESHOLDS)
+        base = interpolate(repeat.value, cfg.repeat_thresholds)
         evidence = [f"taux de reachat intra-periode {repeat.value:.1%}"]
         if concentration and concentration.available and concentration.value >= cfg.concentration_warning:
             base = max(0.0, base - cfg.concentration_penalty)
@@ -191,10 +184,10 @@ def compute_business_health(
             )
         dims.append(DimensionScore("customer_health", "Sante client", base, w["customer_health"], True,
                                    "interpolation du taux de reachat, moins une penalite de concentration",
-                                   str(REPEAT_THRESHOLDS), evidence))
+                                   str(cfg.repeat_thresholds), evidence))
     else:
         dims.append(DimensionScore("customer_health", "Sante client", None, w["customer_health"], False,
-                                   "-", str(REPEAT_THRESHOLDS), [], "aucun client identifie sur la periode"))
+                                   "-", str(cfg.repeat_thresholds), [], "aucun client identifie sur la periode"))
 
     # 5. sante produit
     products = product_performance(dataset)
@@ -206,24 +199,24 @@ def compute_business_health(
         coverage = covered_revenue / total_revenue_all
         evidence = [f"marge brute ponderee {weighted:.1%}",
                     f"couverture cout: {coverage:.0%} du CA article"]
-        if coverage < MIN_PRODUCT_COVERAGE:
+        if coverage < cfg.min_product_coverage:
             # une marge calculee sur une minorite du catalogue ne represente pas
             # le catalogue: on n'extrapole pas, on exclut.
             dims.append(DimensionScore(
                 "product_health", "Sante produit", None, w["product_health"], False,
-                "-", str(PRODUCT_MARGIN_THRESHOLDS), evidence,
-                f"couverture cout insuffisante ({coverage:.0%} < {MIN_PRODUCT_COVERAGE:.0%} du CA article)",
+                "-", str(cfg.product_margin_thresholds), evidence,
+                f"couverture cout insuffisante ({coverage:.0%} < {cfg.min_product_coverage:.0%} du CA article)",
             ))
         else:
             dims.append(DimensionScore(
-                "product_health", "Sante produit", interpolate(weighted, PRODUCT_MARGIN_THRESHOLDS),
+                "product_health", "Sante produit", interpolate(weighted, cfg.product_margin_thresholds),
                 w["product_health"], True,
                 "marge brute ponderee par le CA des produits dont le cout est connu",
-                str(PRODUCT_MARGIN_THRESHOLDS), evidence,
+                str(cfg.product_margin_thresholds), evidence,
             ))
     else:
         dims.append(DimensionScore("product_health", "Sante produit", None, w["product_health"], False,
-                                   "-", str(PRODUCT_MARGIN_THRESHOLDS), [],
+                                   "-", str(cfg.product_margin_thresholds), [],
                                    "aucun cout produit renseigne: marge produit non calculable"))
 
     # 6. qualite de donnee

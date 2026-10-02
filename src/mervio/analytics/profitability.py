@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from ..config import ProfitabilityConfig
 from ..domain.models import Dataset
 from .kpi import known_cogs, total_ad_spend, total_payment_fees, total_revenue
 
@@ -103,7 +104,10 @@ class ProfitabilityResult:
         }
 
 
-def compute_profitability(ds: Dataset, period_label: str) -> ProfitabilityResult:
+def compute_profitability(ds: Dataset, period_label: str,
+                          cfg: Optional[ProfitabilityConfig] = None) -> ProfitabilityResult:
+    # AN-16: le seuil de completude du COGS etait code en dur, a DEUX endroits.
+    cfg = cfg or ProfitabilityConfig()
     revenue = total_revenue(ds)
     cogs, covered, item_revenue = known_cogs(ds)
     coverage = (covered / item_revenue) if item_revenue else 0.0
@@ -111,8 +115,8 @@ def compute_profitability(ds: Dataset, period_label: str) -> ProfitabilityResult
     components: Dict[str, CostComponent] = {}
     components["cogs"] = CostComponent(
         "cogs", "Cout des marchandises vendues",
-        cogs if coverage >= 0.999 else None, "shopify_products",
-        "complet" if coverage >= 0.999 else
+        cogs if coverage >= cfg.complete_cogs_coverage else None, "shopify_products",
+        "complet" if coverage >= cfg.complete_cogs_coverage else
         f"cout connu sur {coverage:.0%} du CA article seulement: COGS total non calculable",
     )
     fees = total_payment_fees(ds)

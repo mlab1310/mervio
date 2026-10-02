@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from ..config import AnalyticsConfig
 from .anomaly import Anomaly
 from .kpi import Metric, product_performance
 from .profitability import ProfitabilityResult
@@ -55,7 +56,12 @@ def build_insights(
     profitability: ProfitabilityResult,
     dataset,
     currency: str = "EUR",
+    config: Optional[AnalyticsConfig] = None,
 ) -> List[Insight]:
+    # AN-16: deux seuils vivaient en dur ici. Celui de concentration DUPLIQUAIT
+    # `HealthConfig.concentration_warning`: deux proprietaires pour une regle, donc une
+    # divergence qui attend.
+    cfg = config or AnalyticsConfig()
     insights: List[Insight] = []
 
     # 1. anomalie de CA + cause probable
@@ -134,7 +140,7 @@ def build_insights(
 
     # 4. produits a faible marge
     for product in product_performance(dataset):
-        if product["gross_margin"] is not None and product["gross_margin"] < 0.20 and product["revenue"] > 0:
+        if product["gross_margin"] is not None and product["gross_margin"] < cfg.insights.low_product_margin and product["revenue"] > 0:
             insights.append(Insight(
                 type="low_margin_product", severity="medium", category="warning",
                 fact=f"{product['title']} ({product['sku']}) degage une marge brute de "
@@ -149,7 +155,7 @@ def build_insights(
 
     # 5. concentration client
     concentration = kpis.get("customer_concentration_top5")
-    if concentration and concentration.available and concentration.value >= 0.40:
+    if concentration and concentration.available and concentration.value >= cfg.health.concentration_warning:
         insights.append(Insight(
             type="customer_concentration", severity="medium", category="warning",
             fact=f"Les 5 plus gros clients representent {concentration.value:.1%} du CA de la periode.",

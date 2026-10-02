@@ -54,7 +54,8 @@ SERIES_METRICS = {
 }
 
 
-def load_dataset(paths: SourcePaths, identity: Optional[CustomerIdentity] = None) -> Dataset:
+def load_dataset(paths: SourcePaths, identity: Optional[CustomerIdentity] = None,
+                 config: Optional[AnalyticsConfig] = None) -> Dataset:
     """Connecteurs -> modele normalise. `identity`: cle des references client (D-053, D-058).
 
     Sans `identity`, une cle EPHEMERE est tiree pour cet appel: comportement des outils locaux
@@ -63,6 +64,7 @@ def load_dataset(paths: SourcePaths, identity: Optional[CustomerIdentity] = None
     calcule avec la cle de l'ORGANISATION de la session (004.4.2, F-08).
     """
     identity = identity or CustomerIdentity.ephemeral()
+    cfg = config or AnalyticsConfig()
     quality = DataQualityReport()
     dataset = Dataset(quality=quality, identity_key_id=identity.key_id)
 
@@ -87,7 +89,7 @@ def load_dataset(paths: SourcePaths, identity: Optional[CustomerIdentity] = None
         payments, stripe_refunds = ingest_stripe(paths.stripe, quality)
         dataset.payments = payments
         dataset.refunds.extend(stripe_refunds)
-        _reconcile_refunds(dataset, quality)
+        _reconcile_refunds(dataset, quality, cfg.refund_reconciliation_tolerance)
     else:
         quality.add_issue("stripe", "source_missing", "warning",
                           "Stripe absent: frais de paiement inconnus, profitabilite incomplete")
@@ -130,13 +132,19 @@ def _check_currency_coherence(dataset: Dataset, quality: DataQualityReport) -> N
                            + (" (certaines commandes sans devise)" if partial else ""))
 
 
-def _reconcile_refunds(dataset: Dataset, quality: DataQualityReport) -> None:
-    """Shopify fait foi sur les remboursements; tout ecart Stripe est signale."""
+def _reconcile_refunds(dataset: Dataset, quality: DataQualityReport,
+                       tolerance: float) -> None:
+    """Shopify fait foi sur les remboursements; tout ecart Stripe est signale.
+
+    AN-16: `tolerance` venait de `AnalyticsConfig.refund_reconciliation_tolerance`, champ qui
+    existait avec exactement cette valeur sans jamais etre lu (code mort non releve par
+    l'audit A-Z).
+    """
     shopify_total = sum(r.amount for r in dataset.refunds if r.source == "shopify")
     stripe_total = sum(r.amount for r in dataset.refunds if r.source == "stripe")
     if shopify_total and stripe_total:
         gap = abs(shopify_total - stripe_total) / max(shopify_total, stripe_total)
-        if gap > 0.01:
+        if gap > tolerance:
             quality.add_issue(
                 "reconciliation", "refund_mismatch", "warning",
                 f"ecart de {gap:.1%} entre remboursements Shopify ({shopify_total:,.2f}) "
@@ -156,7 +164,7 @@ def run_analysis(
     today: Optional[date] = None,
     identity: Optional[CustomerIdentity] = None,
 ) -> dict:
-    return analyze_loaded_dataset(load_dataset(paths, identity), config, today)
+    return analyze_loaded_dataset(load_dataset(paths, identity, config), config, today)
 
 
 def analyze_loaded_dataset(
@@ -179,8 +187,8 @@ def analyze_loaded_dataset(
     prior = previous_period(period)
     window = dataset.window(period.start, period.end)
 
-    kpis = compute_kpis(window, period)
-    profitability = compute_profitability(window, period.label)
+    kpis = compute_kpis(window, period, cfg.quality)
+    profitability = compute_profitability(window, period.label, cfg.profitability)
 
     series: Dict[str, list] = {
         name: build_series(dataset, period, cfg.lookback_periods, fn)
@@ -200,7 +208,8 @@ def analyze_loaded_dataset(
     comparisons = compare_all(dataset, period, SERIES_METRICS)
     root_cause = analyse_revenue_change(dataset, period, prior)
     health = compute_business_health(kpis, comparisons, profitability, window, dataset.quality, cfg.health)
-    insights = build_insights(kpis, anomalies, root_cause, profitability, window, dataset.currency)
+    insights = build_insights(kpis, anomalies, root_cause, profitability, window,
+                              dataset.currency, cfg)
 
     return build_report(dataset, window, period, prior, kpis, profitability, series,
                         anomalies, comparisons, root_cause, health, insights, cfg)
