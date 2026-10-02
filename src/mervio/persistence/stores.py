@@ -8,10 +8,15 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
+from ..config import resolve_timezone
 from .errors import NotFound
 from .tenancy import CreationHook, Permission, TenantSession
 
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+#: valeurs par defaut des colonnes `stores.timezone` / `stores.timezone_source` (migration 0011)
+DEFAULT_TIMEZONE = "UTC"
+DEFAULT_TIMEZONE_SOURCE = "default"
+_EXPLICIT_TIMEZONE_SOURCE = "explicit"
 
 
 @dataclass(frozen=True)
@@ -21,6 +26,14 @@ class Store:
     name: str
     currency: Optional[str]
     created_at: datetime
+    #: fuseau de decoupage des periodes analytiques (AN-06). Identifiant IANA.
+    #: Les colonnes existent depuis `0011_identity_pii_schema` mais n'etaient ni ecrites ni
+    #: lues: la roadmap les declarait livrees a tort (rectifie en 004.5-A).
+    timezone: str = DEFAULT_TIMEZONE
+    #: `default` tant que le marchand n'a rien choisi, `explicit` des qu'il choisit.
+    #: Distinguer les deux importe: un `UTC` par defaut n'est pas une decision du marchand, et
+    #: on ne doit pas confondre << pas encore configure >> et << configure a UTC >>.
+    timezone_source: str = DEFAULT_TIMEZONE_SOURCE
 
 
 @dataclass(frozen=True)
@@ -35,23 +48,50 @@ class Connection:
     revoked_at: Optional[datetime]
 
 
-_STORE_COLUMNS = "id, organization_id, name, currency, created_at"
+_STORE_COLUMNS = "id, organization_id, name, currency, created_at, timezone, timezone_source"
 _CONNECTION_COLUMNS = "id, organization_id, store_id, kind, label, status, created_at, revoked_at"
 
 
 def create_store(session: TenantSession, *, name: str, currency: Optional[str] = None,
+                 timezone: Optional[str] = None,
                  hook: Optional[CreationHook] = None) -> Store:
+    """Cree une boutique. `timezone`: identifiant IANA; absent => `UTC` / source `default`.
+
+    La contrainte `CHECK` de la migration 0011 est purement SYNTAXIQUE (elle accepte `aaa/bbb`):
+    la validation semantique du fuseau se fait donc ici, avant toute ecriture.
+    """
     if currency is not None and not _CURRENCY_RE.match(currency):
         raise ValueError("devise de boutique: code ISO 4217 en majuscules attendu")
+    if timezone is None:
+        zone, source = DEFAULT_TIMEZONE, DEFAULT_TIMEZONE_SOURCE
+    else:
+        resolve_timezone(timezone)  # leve ConfigurationError si le fuseau n'existe pas
+        zone, source = timezone, _EXPLICIT_TIMEZONE_SOURCE
     with session.transaction(Permission.MANAGE_STORES) as conn:
         row = conn.execute(
-            f"INSERT INTO stores (id, organization_id, name, currency) VALUES (%s, %s, %s, %s) "
-            f"RETURNING {_STORE_COLUMNS}",
-            (uuid.uuid4(), session.organization_id, name, currency),
+            f"INSERT INTO stores (id, organization_id, name, currency, timezone, timezone_source) "
+            f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_STORE_COLUMNS}",
+            (uuid.uuid4(), session.organization_id, name, currency, zone, source),
         ).fetchone()
         if hook is not None:
             hook(conn, row[0])
     return Store(*row)
+
+
+# PAS de `set_store_timezone` en 004.5, et ce n'est pas un oubli.
+#
+# `0001_tenancy.py:144` accorde `UPDATE (name, currency) ON stores` -- un grant au niveau
+# COLONNE. `timezone` et `timezone_source` n'y figurent pas: tout UPDATE de ces colonnes est
+# refuse par PostgreSQL (`InsufficientPrivilege`), et l'autoriser demanderait un
+# `GRANT UPDATE (timezone, timezone_source)`, donc une MIGRATION.
+#
+# ND-01 = B interdit une migration nouvelle sauf necessite technique, et la verification demandee
+# porte sur << create store, retrieve store >>: le fuseau se choisit a la CREATION, ce qui suffit
+# a la plomberie ratifiee. Le changement de fuseau d'une boutique existante releve de 004.6, qui
+# touchera de toute facon le modele `stores` et pourra porter le grant.
+#
+# Ce refus est une PREUVE que le modele de privileges par colonne fonctionne: il a bloque une
+# ecriture non prevue. Voir tests/persistence/test_store_timezone.py.
 
 
 def find_stores_by_name(session: TenantSession, name: str) -> List[Store]:

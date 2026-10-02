@@ -7,9 +7,30 @@ logique reste auditable et que le SaaS puisse la parametrer par tenant.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timezone, tzinfo
 from typing import Dict, Tuple
 
 ENGINE_VERSION = "0.1.0"
+
+
+def resolve_timezone(name: str) -> tzinfo:
+    """Identifiant IANA -> fuseau. Refuse, ne se rabat JAMAIS sur UTC.
+
+    "UTC" est specialise vers `datetime.timezone.utc`, de la bibliotheque standard pure.
+    Ce n'est pas une micro-optimisation: `zoneinfo.ZoneInfo("UTC")` resout contre `TZPATH`
+    comme n'importe quelle autre cle, donc une image sans base de fuseaux ferait echouer
+    jusqu'au fuseau PAR DEFAUT du moteur. Le defaut ne doit pas porter ce risque (C-3).
+
+    Un repli silencieux sur UTC en cas de valeur invalide produirait des semaines fausses sans
+    aucun signal: on leve.
+    """
+    if name == "UTC":
+        return timezone.utc
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name)
+    except Exception as exc:  # ZoneInfoNotFoundError, ValueError, OSError selon la cause
+        raise ConfigError(f"fuseau horaire inconnu ou invalide: {name!r}") from exc
 
 #: bareme de notation: suite de couples (valeur_seuil, score), seuils STRICTEMENT croissants.
 #: `analytics.health.interpolate` suppose cet ordre; un bareme desordonne produirait des scores
@@ -116,6 +137,11 @@ class HealthConfig:
 @dataclass(frozen=True)
 class AnalyticsConfig:
     grain: str = "week"
+    #: fuseau de DECOUPAGE des periodes (AN-06). Identifiant IANA.
+    #: Defaut "UTC": seule valeur qui reproduit exactement le comportement anterieur, donc
+    #: empreinte de configuration inchangee par defaut (A-16). Les instants restent stockes en
+    #: UTC; seules les BORNES de periode sont calculees a partir de minuit LOCAL.
+    timezone: str = "UTC"
     #: nombre de periodes d'historique conservees dans les series
     lookback_periods: int = 12
     #: fenetre de moyenne mobile
@@ -133,6 +159,8 @@ class AnalyticsConfig:
             raise ConfigError(f"grain non supporte: {self.grain}")
         if self.lookback_periods < 2:
             raise ConfigError("lookback_periods doit valoir au moins 2")
+        # validation AU PLUS TOT, jamais au moment du decoupage
+        resolve_timezone(self.timezone)
 
 
 # import tardif volontaire pour eviter un cycle a la lecture du module

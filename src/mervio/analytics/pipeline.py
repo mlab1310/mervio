@@ -6,11 +6,11 @@ service FastAPI demain. Aucune I/O de presentation ici.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..config import ENGINE_VERSION, AnalyticsConfig
+from ..config import ENGINE_VERSION, AnalyticsConfig, resolve_timezone
 from ..errors import InsufficientDataError
 from ..ingestion import ingest_google_ads, ingest_shopify_orders, ingest_shopify_products, ingest_stripe
 from ..logging_config import get_logger
@@ -22,7 +22,9 @@ from .anomaly import Anomaly, detect_anomalies
 from .health import compute_business_health
 from .insights import build_insights
 from .kpi import campaign_performance, compute_kpis, product_performance
-from .periods import Period, last_complete_period, previous_period
+from .periods import (
+    DEFAULT_TIMEZONE, Period, last_complete_period, previous_period,
+)
 from .profitability import compute_profitability
 from .root_cause import analyse_revenue_change
 from .timeseries import build_series, compare_all, rolling_average
@@ -152,8 +154,17 @@ def _reconcile_refunds(dataset: Dataset, quality: DataQualityReport,
             )
 
 
-def latest_data_day(dataset: Dataset) -> Optional[date]:
-    days: List[date] = [o.created_at.date() for o in dataset.orders]
+def latest_data_day(dataset: Dataset, tz: str = DEFAULT_TIMEZONE) -> Optional[date]:
+    """Dernier jour CIVIL LOCAL couvert par la donnee, dans le fuseau `tz` (AN-06).
+
+    Les `created_at` des commandes sont des instants naifs signifiant UTC: leur jour civil
+    depend donc du fuseau. `ad_performance.day` est deja un jour d'agregation sans instant:
+    il n'y a rien a convertir, et l'inventer serait faux.
+    """
+    zone = resolve_timezone(tz)
+    days: List[date] = [
+        o.created_at.replace(tzinfo=timezone.utc).astimezone(zone).date() for o in dataset.orders
+    ]
     days += [a.day for a in dataset.ad_performance]
     return max(days) if days else None
 
@@ -182,8 +193,8 @@ def analyze_loaded_dataset(
     if dataset.is_empty():
         raise InsufficientDataError("aucune donnee exploitable dans les sources fournies")
 
-    latest_day = latest_data_day(dataset)
-    period = last_complete_period(latest_day, today, cfg.grain)
+    latest_day = latest_data_day(dataset, cfg.timezone)
+    period = last_complete_period(latest_day, today, cfg.grain, cfg.timezone)
     prior = previous_period(period)
     window = dataset.window(period.start, period.end)
 
