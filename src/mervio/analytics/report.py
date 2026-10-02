@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .kpi import campaign_performance, product_performance
 from .timeseries import rolling_average
@@ -33,9 +33,16 @@ SYNTHETIC_MARKER = (
 )
 
 
-def _executive_summary(health, insights, kpis, period, currency) -> str:
+def _executive_summary(health, insights, kpis, period, currency, freshness=None) -> str:
     revenue = kpis.get("revenue")
-    parts = [f"Periode {period.label} ({period.start_date} au {period.end_date})."]
+    parts: List[str] = []
+    # AN-05: un rapport perime le dit EN TETE, avant le score. Un lecteur qui s'arrete a la
+    # premiere phrase doit savoir que les chiffres qui suivent sont vieux.
+    if freshness and freshness.get("status") == "stale":
+        parts.append(f"ATTENTION: donnee perimee. Derniere donnee {freshness['latest_data_day']}, "
+                     f"analyse au {freshness['analysis_date']}, soit {freshness['delay_days']} "
+                     f"jours de retard (seuil {freshness['threshold_days']}).")
+    parts.append(f"Periode {period.label} ({period.start_date} au {period.end_date}).")
     if revenue and revenue.available:
         parts.append(f"{revenue.label}: {revenue.value:,.2f} {currency}.")
     if health.score is not None:
@@ -72,7 +79,7 @@ def _limitations(dataset, profitability, root_cause, health) -> List[str]:
 
 def assemble_report(dataset, window, period, prior, kpis, profitability, series,
                     anomalies, comparisons, root_cause, health, insights, cfg,
-                    engine_version: str) -> dict:
+                    engine_version: str, freshness: Optional[dict] = None) -> dict:
     currency = dataset.currency
     customers = window.customers()
     top_customers = sorted(customers.values(), key=lambda c: c.revenue, reverse=True)[:5]
@@ -103,7 +110,8 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
         },
         "business_health_score": health.to_dict(),
         "period": {"current": period.to_dict(), "previous": prior.to_dict()},
-        "executive_summary": _executive_summary(health, insights, kpis, period, currency),
+        "executive_summary": _executive_summary(health, insights, kpis, period, currency,
+                                                freshness),
         "critical_issues": [i.to_dict() for i in insights if i.category == "critical_issue"],
         "warnings": [i.to_dict() for i in insights if i.category == "warning"],
         "opportunities": [i.to_dict() for i in insights if i.category == "opportunity"],
@@ -143,6 +151,7 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
             }
             for i in insights if i.recommendation
         ],
+        "data_freshness": freshness or {},
         "data_quality": dataset.quality.to_dict(),
         "limitations": _limitations(dataset, profitability, root_cause, health),
     }

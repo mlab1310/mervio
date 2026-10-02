@@ -154,19 +154,76 @@ def _reconcile_refunds(dataset: Dataset, quality: DataQualityReport,
             )
 
 
-def latest_data_day(dataset: Dataset, tz: str = DEFAULT_TIMEZONE) -> Optional[date]:
-    """Dernier jour CIVIL LOCAL couvert par la donnee, dans le fuseau `tz` (AN-06).
+def latest_day_by_source(dataset: Dataset, tz: str = DEFAULT_TIMEZONE) -> Dict[str, Optional[date]]:
+    """Dernier jour CIVIL LOCAL par source datee, dans le fuseau `tz` (AN-06 / AN-05).
 
-    Les `created_at` des commandes sont des instants naifs signifiant UTC: leur jour civil
-    depend donc du fuseau. `ad_performance.day` est deja un jour d'agregation sans instant:
-    il n'y a rien a convertir, et l'inventer serait faux.
+    Les `created_at` sont des instants naifs signifiant UTC: leur jour civil depend donc du
+    fuseau. `ad_performance.day` est deja un jour d'agregation sans instant: il n'y a rien a
+    convertir, et l'inventer serait faux.
+
+    Une source sans ligne rend `None`, jamais la date d'une AUTRE source: le detail par source
+    sert a repondre << lequel de mes exports est en retard ? >>, et emprunter une date y
+    repondrait faux.
     """
     zone = resolve_timezone(tz)
-    days: List[date] = [
-        o.created_at.replace(tzinfo=timezone.utc).astimezone(zone).date() for o in dataset.orders
-    ]
-    days += [a.day for a in dataset.ad_performance]
+
+    def civil(moment: datetime) -> date:
+        return moment.replace(tzinfo=timezone.utc).astimezone(zone).date()
+
+    stripe = [civil(p.created_at) for p in dataset.payments]
+    stripe += [civil(r.created_at) for r in dataset.refunds if r.source == "stripe"]
+    orders = [civil(o.created_at) for o in dataset.orders]
+    orders += [civil(r.created_at) for r in dataset.refunds if r.source != "stripe"]
+    return {
+        "shopify_orders": max(orders) if orders else None,
+        "google_ads": max((a.day for a in dataset.ad_performance), default=None),
+        "stripe": max(stripe) if stripe else None,
+    }
+
+
+def latest_data_day(dataset: Dataset, tz: str = DEFAULT_TIMEZONE) -> Optional[date]:
+    """Dernier jour CIVIL LOCAL couvert par TOUTES les sources datees.
+
+    AN-05: `payments` et `refunds` etaient ignores. Un export Stripe plus recent que l'export
+    Shopify faisait donc declarer la donnee perimee a tort.
+    """
+    days = [d for d in latest_day_by_source(dataset, tz).values() if d is not None]
     return max(days) if days else None
+
+
+#: cles de message du bloc de fraicheur. Stables et techniques: le rendu viendra du catalogue
+#: AN-19, pas d'une chaine libre ecrite ici.
+_FRESHNESS_KEYS = {"fresh": "data_freshness.fresh", "stale": "data_freshness.stale",
+                   "unknown": "data_freshness.unknown"}
+
+
+def build_data_freshness(dataset: Dataset, today: Optional[date], cfg: AnalyticsConfig) -> dict:
+    """Bloc `data_freshness` (AN-05 / D-079).
+
+    `last_complete_period` choisit QUELLE periode analyser; elle ne dit rien du retard. Les deux
+    notions sont disjointes: un export arrete 40 jours plus tot produit une periode parfaitement
+    close, analysee, et pourtant perimee.
+
+    `analysis_date` est le parametre `today`, JAMAIS l'horloge murale: `_meta.generated_at` est le
+    seul champ non deterministe autorise (D-058, reserve 1).
+    """
+    sources = latest_day_by_source(dataset, cfg.timezone)
+    observed = [d for d in sources.values() if d is not None]
+    latest = max(observed) if observed else None
+    delay = (today - latest).days if (today is not None and latest is not None) else None
+    if delay is None:
+        status = "unknown"
+    else:
+        status = "stale" if delay > cfg.freshness_stale_days else "fresh"
+    return {
+        "latest_data_day": latest.isoformat() if latest else None,
+        "analysis_date": today.isoformat() if today else None,
+        "delay_days": delay,
+        "threshold_days": cfg.freshness_stale_days,
+        "status": status,
+        "message_key": _FRESHNESS_KEYS[status],
+        "sources": {name: (day.isoformat() if day else None) for name, day in sources.items()},
+    }
 
 
 def run_analysis(
@@ -228,13 +285,16 @@ def analyze_loaded_dataset(
     insights = build_insights(kpis, anomalies, root_cause, profitability, window,
                               dataset.currency, cfg)
 
+    freshness = build_data_freshness(dataset, today, cfg)
     return build_report(dataset, window, period, prior, kpis, profitability, series,
-                        anomalies, comparisons, root_cause, health, insights, cfg)
+                        anomalies, comparisons, root_cause, health, insights, cfg,
+                        freshness=freshness)
 
 
 def build_report(dataset, window, period: Period, prior: Period, kpis, profitability,
-                 series, anomalies, comparisons, root_cause, health, insights, cfg) -> dict:
+                 series, anomalies, comparisons, root_cause, health, insights, cfg,
+                 freshness: Optional[dict] = None) -> dict:
     from .report import assemble_report
     return assemble_report(dataset, window, period, prior, kpis, profitability, series,
                            anomalies, comparisons, root_cause, health, insights, cfg,
-                           engine_version=ENGINE_VERSION)
+                           engine_version=ENGINE_VERSION, freshness=freshness)

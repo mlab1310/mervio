@@ -165,6 +165,10 @@ class AnalyticsConfig:
     rolling_window: int = 4
     #: ecart tolere entre refunds Shopify et refunds Stripe avant alerte
     refund_reconciliation_tolerance: float = 0.01
+    #: retard en JOURS CALENDAIRES au-dela duquel la donnee est declaree perimee (AN-05).
+    #: Defaut 14: deux periodes hebdomadaires completes, soit le point ou la baseline glissante
+    #: elle-meme devient perimee. Borne FERMEE: `delay == threshold` est encore frais.
+    freshness_stale_days: int = 14
     anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
     quality: QualityConfig = field(default_factory=QualityConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
@@ -177,6 +181,8 @@ class AnalyticsConfig:
             raise ConfigError(f"grain non supporte: {self.grain}")
         if self.lookback_periods < 2:
             raise ConfigError("lookback_periods doit valoir au moins 2")
+        if self.freshness_stale_days < 1:
+            raise ConfigError("freshness_stale_days doit valoir au moins 1")
         # validation AU PLUS TOT, jamais au moment du decoupage
         resolve_timezone(self.timezone)
 

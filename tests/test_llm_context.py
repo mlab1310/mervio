@@ -22,7 +22,7 @@ SECTIONS = {
     "contract_version", "engine_version", "system_contract", "untrusted_data_policy", "currency",
     "analysis_period", "business_health", "profitability", "facts", "findings", "evidence",
     "root_causes", "hypotheses", "recommendations", "limitations", "unavailable_metrics",
-    "data_quality", "untrusted_content", "truncation",
+    "data_quality", "data_freshness", "untrusted_content", "truncation",
 }
 
 

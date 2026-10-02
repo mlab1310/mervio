@@ -41,6 +41,7 @@ _ENUMS = {
     "direction": {"up", "down"},
     "assessment": {"favorable", "unfavorable", "neutral"},
     "data_quality": {"reliable", "incomplete", "unavailable"},
+    "freshness_status": {"fresh", "stale", "unknown"},
 }
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 
@@ -124,11 +125,33 @@ class _ContextBuilder:
             "unavailable_metrics": self._bound(_dedupe(unavailable, "metric"),
                                                self.limits.max_unavailable_metrics, "unavailable_metrics"),
             "data_quality": self._data_quality(report.get("data_quality")),
+            "data_freshness": self._data_freshness(report.get("data_freshness")),
         }
         self._finalise(context)
         return context
 
     # -- sections ---------------------------------------------------------
+    def _data_freshness(self, raw: Any) -> Dict[str, Any]:
+        """Fraicheur de la donnee, citable par le modele (AN-05).
+
+        La regle 3 de `SYSTEM_CONTRACT` oblige le modele a declarer une indisponibilite; un
+        rapport perime en est l'equivalent temporel, et il doit pouvoir le dire en citant un `id`.
+
+        Les DATES BRUTES sont volontairement omises: elles ne servent aucune phrase et
+        alourdissent le contexte. Le statut, le retard et le seuil suffisent.
+        """
+        block = _as_mapping(raw or {}, "data_freshness")
+        return {
+            "id": self._id("data_freshness"),
+            "status": self._enum(block.get("status"), "freshness_status", "data_freshness.status"),
+            **_numbers(block, ("delay_days", "threshold_days"), "data_freshness"),
+            # VERBATIM, pas `_slug`: une cle de message est une valeur de CONTRAT, pas un
+            # identifiant. `_slug` ecrase le point (`data_freshness.fresh` ->
+            # `data_freshness_fresh`), ce qui ferait divergier silencieusement la cle vue par le
+            # LLM de celle du rapport. AN-19 s'appuiera sur cette egalite.
+            "message_key": _message_key(block.get("message_key"), "data_freshness.message_key"),
+        }
+
     def _kpis(self, kpis: Mapping[str, Any]):
         facts, unavailable = [], []
         for key, raw in kpis.items():
@@ -529,6 +552,23 @@ def _number(value: Any, path: str) -> Optional[float]:
 
 def _numbers(item: Mapping[str, Any], keys: Iterable[str], path: str) -> Dict[str, Optional[float]]:
     return {key: _number(item.get(key), f"{path}.{key}") for key in keys}
+
+
+#: une cle de message est technique et stable: minuscules, chiffres, `_` et `.` hierarchique
+_MESSAGE_KEY_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)*$")
+
+
+def _message_key(value: Any, path: str) -> Optional[str]:
+    """Cle de message, transmise VERBATIM (AN-05, prepare AN-19).
+
+    Refuse plutot que de normaliser: une cle normalisee ne serait plus la cle du rapport, et
+    l'egalite rapport <-> contexte que AN-19 exige serait rompue sans aucun signal.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _MESSAGE_KEY_RE.match(value):
+        raise LLMContextError(f"cle de message invalide: {path}")
+    return value
 
 
 def _slug(value: Any) -> str:

@@ -17,6 +17,26 @@ _SEVERITY_LABEL = {"high": "ELEVEE", "medium": "MOYENNE", "low": "FAIBLE", "info
 _KPI_ORDER = ("revenue", "orders", "aov", "units", "ad_spend", "roas", "cac",
               "new_customers", "orders_per_paid_click", "gross_margin", "refunds", "refund_rate")
 
+def _stale_banner(freshness: dict) -> List[str]:
+    """Bandeau de peremption (AN-05), analogue a SYNTHETIC_BANNER et place avant le score.
+
+    Un lecteur qui s'arrete en haut de page doit savoir que les chiffres sont vieux. C'est le
+    pendant temporel de la regle << une metrique indisponible le dit >>.
+    """
+    if not freshness or freshness.get("status") != "stale":
+        return []
+    return [
+        "!" * WIDTH,
+        "!!  DONNEE PERIMEE".ljust(WIDTH - 2) + "!!",
+        f"!!  Derniere donnee: {freshness['latest_data_day']}".ljust(WIDTH - 2) + "!!",
+        f"!!  Analyse au: {freshness['analysis_date']}".ljust(WIDTH - 2) + "!!",
+        (f"!!  Retard: {freshness['delay_days']} jours "
+         f"(seuil {freshness['threshold_days']})").ljust(WIDTH - 2) + "!!",
+        "!" * WIDTH,
+        "",
+    ]
+
+
 SYNTHETIC_BANNER = [
     "!" * WIDTH,
     "!!  DEMO DATA - SYNTHETIC".ljust(WIDTH - 2) + "!!",
@@ -78,6 +98,7 @@ def render_executive_report(report: dict) -> str:
 
     if meta.get("dataset_is_synthetic"):
         lines.extend(SYNTHETIC_BANNER)
+    lines.extend(_stale_banner(report.get("data_freshness") or {}))
 
     lines += [
         "=" * WIDTH,
