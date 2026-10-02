@@ -354,10 +354,25 @@ même une purge, et aucune commande ne propose de l'outrepasser.
 
 ## 9. Prochaine mission
 
-**La roadmap prévoit 004.5 — *Report Contract 2.0 & Analytics Correctness* (P0).** Ses dépendances
-déclarées — `stores.timezone` et l'identité client — sont livrées depuis 004.4.2 / `0011`. Périmètre
+**La roadmap prévoit 004.5 — *Report Contract 2.0 & Analytics Correctness* (P0).** Périmètre
 entièrement écrit : onze défauts tabulés (AN-01, AN-02, AN-05, AN-06, AN-14 à AN-19), JSON Schema de
 rapport versionné, `ENGINE_VERSION` 0.2.0, **aucune migration**.
+
+> **Rectification factuelle (004.5-A).** Ce paragraphe affirmait que les deux dépendances déclarées de
+> 004.5 — `stores.timezone` et l'identité client — « sont livrées depuis 004.4.2 / `0011` ». **Une seule
+> l'est.** L'identité client à clé est bien livrée (D-053, 004.4.2). `stores.timezone` et
+> `stores.timezone_source` **existent en base** — ajoutées par
+> [`0011_identity_pii_schema.py:92-96`](../src/mervio/persistence/migrations/versions/0011_identity_pii_schema.py#L92),
+> énumérées par [`0016_tenant_purge.py:170`](../src/mervio/persistence/migrations/versions/0016_tenant_purge.py#L170)
+> — mais **aucun code applicatif ne les lit ni ne les écrit** : elles sont absentes de la dataclass
+> `Store` ([`stores.py:17`](../src/mervio/persistence/stores.py#L17)) et de `_STORE_COLUMNS`
+> ([`stores.py:38`](../src/mervio/persistence/stores.py#L38)), `create_store()` ne les renseigne pas, et
+> `analytics/periods.py` découpe les périodes en UTC naïf. Le `CHECK` de format est **syntaxique** et
+> accepte `aaa/bbb` : il ne valide rien contre une base de fuseaux.
+>
+> **Conséquence pour l'implémentateur de 004.5 :** ne pas supposer `store.timezone` disponible. AN-06
+> est un travail de **plomberie**, pas une migration manquante — et l'étendue de cette plomberie est
+> une décision ouverte (registre de ratification, `D-080` + `ND-01`).
 
 **La Definition of Done de 004.4 est satisfaite** : elle exigeait nommément « ADR identité/PII,
 ADR stockage objet, politique de rétention v0, **handoff** ; CI verte » — le handoff est le présent

@@ -506,7 +506,19 @@ typée consommable par l'API, l'interface et le LLM.
 - L'API (004.6) et l'interface (004.7) se construisent sur la structure du rapport.
 - Un rapport dont la cause contredit l'anomalie ne doit jamais devenir un contrat public.
 
-**Dependencies** — 004.4 (`stores.timezone`, identité client).
+**Dependencies** — 004.4 (identité client livrée ; `stores.timezone` **au schéma seulement**).
+
+> **Rectification factuelle (004.5-A).** L'énoncé antérieur affirmait que `stores.timezone` était livrée
+> par 004.4. Vérification à `7580ad4` : l'identité client à clé **est** livrée (D-053, 004.4.2). En
+> revanche `stores.timezone` et `stores.timezone_source` **existent en base** — ajoutées par
+> [`0011_identity_pii_schema.py:92-96`](../src/mervio/persistence/migrations/versions/0011_identity_pii_schema.py#L92),
+> énumérées par [`0016_tenant_purge.py:170`](../src/mervio/persistence/migrations/versions/0016_tenant_purge.py#L170)
+> — mais **ne sont pas plombées** : absentes de la dataclass `Store`
+> ([`stores.py:17`](../src/mervio/persistence/stores.py#L17)) et de `_STORE_COLUMNS`
+> ([`stores.py:38`](../src/mervio/persistence/stores.py#L38)), jamais écrites par `create_store()`, et
+> jamais lues par `analytics/` (`periods.py` découpe en UTC naïf). Le `CHECK` est **syntaxique** : il
+> accepte `aaa/bbb`. Statut réel : **SCHEMA PRESENT uniquement** — ni implémentée, ni testée, ni
+> consommée. **Aucune migration n'est donc requise** pour AN-06 ; c'est un travail de **plomberie**.
 
 **Défauts à corriger** (identifiés, non corrigés par ce document)
 
@@ -1246,7 +1258,7 @@ autres plateformes. Ordre décidé par la demande des clients payants.
 | Mission | Dépend de | Ce qu'elle consomme |
 |---|---|---|
 | 004.4 | 004.3 | CI, migrations sous garde, identité de service (purge/effacement audités) |
-| 004.5 | 004.4 | `stores.timezone`, identité client à clé |
+| 004.5 | 004.4 | identité client à clé ; `stores.timezone` **au schéma seulement, non plombée** (voir la rectification en § Mission 004.5) |
 | 004.6 | 004.3, 004.4, 004.5 | worker multi-tenant, objets bruts, rapport 2.0 |
 | 004.7 | 004.6 | OpenAPI figé |
 | 004.8 | 004.5 | contrat 2.0 |
