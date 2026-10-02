@@ -161,7 +161,10 @@ def build_insights(
 
     # 6. opportunite: campagne la plus efficace
     if root_cause and root_cause.campaign_contributors:
-        best = max(root_cause.campaign_contributors, key=lambda c: c["conversions_delta"])
+        # cle TOTALE (F-01): a egalite de `conversions_delta`, `max` renverrait la premiere
+        # rencontree, donc la campagne CITEE DANS LE CONSTAT dependrait de l'ordre d'entree.
+        best = max(root_cause.campaign_contributors,
+                   key=lambda c: (c["conversions_delta"], c["campaign_id"]))
         if best["conversions_delta"] > 0:
             insights.append(Insight(
                 type="campaign_opportunity", severity="info", category="opportunity",

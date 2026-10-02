@@ -188,7 +188,9 @@ def _contributors(current: List[dict], previous: List[dict], key: str, label: st
                 "delta": round(-row["revenue"], 2),
                 "contribution": round(-row["revenue"] / total_delta, 4) if total_delta else None,
             })
-    rows.sort(key=lambda r: abs(r["delta"]), reverse=True)
+    # cle TOTALE (F-01): `abs(delta)` seul admet des egalites, et `list.sort` etant stable
+    # l'ordre d'entree deciderait alors du classement. `key` est la colonne unique ("sku").
+    rows.sort(key=lambda r: (-abs(r["delta"]), r[key]))
     return rows[:5]
 
 
@@ -196,7 +198,10 @@ def _campaign_contributors(cur_ds: Dataset, prev_ds: Dataset) -> List[dict]:
     current = {c["campaign_id"]: c for c in campaign_performance(cur_ds)}
     previous = {c["campaign_id"]: c for c in campaign_performance(prev_ds)}
     rows = []
-    for cid in set(current) | set(previous):
+    # DEFENSE 1 (F-01): l'ordre d'iteration d'un ensemble depend de PYTHONHASHSEED. La cle de tri
+    # ci-dessous suffirait aujourd'hui, mais laisser la source en place la ferait reapparaitre au
+    # prochain tri ajoute sur une cle non totale.
+    for cid in sorted(set(current) | set(previous)):
         cur = current.get(cid, {})
         prev = previous.get(cid, {})
         name = cur.get("name") or prev.get("name") or cid
@@ -212,5 +217,9 @@ def _campaign_contributors(cur_ds: Dataset, prev_ds: Dataset) -> List[dict]:
             "cvr_previous": round(prev["cvr"], 5) if prev.get("cvr") is not None else None,
             "conversions_delta": round(cur_conv - prev_conv, 2),
         })
-    rows.sort(key=lambda r: r["conversions_delta"])
+    # DEFENSE 2 (F-01): cle TOTALE. `campaign_id` est unique par construction (cle du dict de
+    # `campaign_performance`), contrairement a `name` -- qui retombe sur `campaign_id` quand la
+    # campagne est inconnue, n'est contraint par aucune unicite, vient d'une source non fiable et
+    # est tronque a 300 caracteres cote LLM.
+    rows.sort(key=lambda r: (r["conversions_delta"], r["campaign_id"]))
     return rows

@@ -81,7 +81,10 @@ def observe(report: dict, check: str, expected: Any, manifest: dict) -> Any:
         rows = root.get("product_contributors") or []
         return rows[0]["sku"] if rows else None
     if check == "top_campaign_decline":
-        rows = sorted(root.get("campaign_contributors") or [], key=lambda r: r.get("conversions_delta") or 0)
+        # cle TOTALE alignee sur le rapport (F-01): sans elle, l'EVALUATEUR reproduirait le defaut
+        # qu'il est charge de detecter et pourrait masquer la correction.
+        rows = sorted(root.get("campaign_contributors") or [],
+                      key=lambda r: (r.get("conversions_delta") or 0, r.get("campaign_id") or ""))
         return rows[0]["name"] if rows else None
     if check in ("kpi_below", "kpi_above"):
         metric, _ = expected

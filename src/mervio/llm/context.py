@@ -223,7 +223,8 @@ class _ContextBuilder:
             products = sorted(
                 (_as_mapping(p, f"{base}.product_contributors")
                  for p in _opt_list(analysis.get("product_contributors"), base + ".product_contributors")),
-                key=lambda p: (-abs(_number(p.get("delta"), base) or 0.0), str(p.get("label", ""))),
+                # cle TOTALE alignee sur le rapport (F-01): `label` n'est pas unique, `sku` l'est.
+                key=lambda p: (-abs(_number(p.get("delta"), base) or 0.0), str(p.get("sku", ""))),
             )
             for rank, product in enumerate(self._bound(products, self.limits.max_contributors,
                                                        f"{rc_id}.product_contributors"), start=1):
@@ -237,7 +238,12 @@ class _ContextBuilder:
             campaigns = sorted(
                 (_as_mapping(c, f"{base}.campaign_contributors")
                  for c in _opt_list(analysis.get("campaign_contributors"), base + ".campaign_contributors")),
-                key=lambda c: (_number(c.get("conversions_delta"), base) or 0.0, str(c.get("name", ""))),
+                # cle TOTALE alignee sur le rapport (F-01). Elle etait totale AVANT, mais sur
+                # `name`: le contexte etait deterministe et pourtant ordonne autrement que le
+                # rapport, de sorte qu'une explication citant << la 2e campagne >> pouvait
+                # designer une autre ligne. L'ordre du rapport fait foi.
+                key=lambda c: (_number(c.get("conversions_delta"), base) or 0.0,
+                               str(c.get("campaign_id", ""))),
             )
             for rank, campaign in enumerate(self._bound(campaigns, self.limits.max_contributors,
                                                         f"{rc_id}.campaign_contributors"), start=1):
