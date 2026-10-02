@@ -15,14 +15,14 @@
     },
     {
       "check": "primary_factor",
-      "expected": "conversion_rate",
-      "note": "",
-      "status": "MATCH"
+      "expected": "conversion_decline",
+      "note": "AN-02: le facteur `conversion_rate` a disparu (D-074). Une chute de conversion de campagne a depense constante donne des clics plats et des commandes en baisse: meme signature observable qu'une chute organique. `top_campaign_decline` reste MATCH, donc la campagne fautive est bien citee. Restauration: 004.11, donnees de sessions",
+      "status": "KNOWN_GAP"
     },
     {
       "check": "recommendation_category",
       "expected": "campaign_optimization",
-      "note": "la recommandation du moteur vise le tunnel de conversion; la campagne n'est citee qu'en detail",
+      "note": "la recommandation du moteur vise l'investigation de la demande; la campagne n'est citee qu'en detail",
       "status": "KNOWN_GAP"
     }
   ],

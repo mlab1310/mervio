@@ -565,7 +565,31 @@ et identité octet pour octet CLI/persisté maintenue.
 - Tous les défauts du tableau ont un test qui échouait avant et passe après.
 - 100 % des rapports produits (goldens, scénarios) valident le schéma 2.0.
 - Aucun nombre dans une chaîne de preuve.
-- 7 scénarios entièrement couverts restent couverts ; `order_volume_drop` n'émet plus de recommandation checkout.
+- **5 scénarios entièrement couverts** (`AOV_decline`, `healthy_store`, `refund_spike`,
+  `revenue_drop`, `traffic_drop`) ; `order_volume_drop` n'émet plus de recommandation checkout.
+
+> **Rectification ratifiée (D-076 = A, option A).** Le critère disait « 7 scénarios entièrement
+> couverts restent couverts ». Mesure après implémentation honnête d'AN-02 : **5**. Trois scénarios
+> sont rétrogradés en `KNOWN_GAP`, chacun avec une justification écrite dans
+> [`synthetic/scenarios.py`](../src/mervio/synthetic/scenarios.py) :
+>
+> - **`conversion_drop`** — `primary_factor` et `recommendation_category`. Avec trafic payé plat et
+>   commandes en baisse, la signature observable est **identique** à celle d'une chute organique
+>   (`order_volume_drop`). Le moteur avait raison ici **par accident** : un label unique couvrait
+>   trois mécanismes. L'attente `anomaly` est **renommée** `orders_per_paid_click:down` et reste
+>   MATCH — le signal n'est pas perdu, seul son nom change.
+> - **`marketing_campaign_failure`** — `primary_factor`. Même signature observable.
+>   `top_campaign_decline` reste MATCH : la campagne fautive est bien citée.
+> - **`mixed_root_causes`** — `primary_factor` et `secondary_factor`. D-072 mesure **deux
+>   quantités analytiquement différentes** : la couche A porte des parts de la variation du **CA**,
+>   la couche B des parts de la variation du **volume de commandes**. Les classer sur une échelle
+>   **plate** revient à comparer des grandeurs non commensurables. Mesure sur 3 graines :
+>   `average_order_value` contribue 0,56–0,60 du CA contre 0,37–0,44 pour `order_volume`, donc la
+>   couche A est dominée par le panier moyen et la primauté n'atteint jamais la couche B.
+>   **Aucune règle inter-couches n'a été créée** pour forcer ce MATCH.
+>
+> **Restauration** : 004.11, données de sessions, qui rendront le trafic total observable.
+> Aucune vérité terrain n'a été modifiée.
 - Suite LLM verte sur le contrat 2.0.
 
 **Definition of Done** — ADR « Report Contract 2.0 », table de correspondance 1.x → 2.0, goldens justifiés, CI verte.

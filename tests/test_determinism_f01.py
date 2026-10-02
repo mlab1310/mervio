@@ -105,8 +105,11 @@ def test_the_fixture_really_contains_tied_conversion_deltas(reports):
     assert len(deltas) != len(set(deltas)), f"aucune egalite dans {deltas}"
     assert deltas.count(min(deltas)) >= 2, "le delta le plus negatif doit etre a egalite"
     assert deltas.count(max(deltas)) >= 2, "le delta le plus positif doit etre a egalite"
-    # la cause racine doit bien emprunter le chemin dangereux de `_recommendation_for`
-    assert reports[SEEDS[0]]["root_causes"][0]["primary_factor"] == "conversion_rate"
+    # la cause racine doit bien emprunter le chemin dangereux de `_recommendation_for`, celui
+    # dont le suffixe NOMME une campagne. AN-02 a supprime le facteur `conversion_rate`: sur ce
+    # jeu (clics plats, commandes en baisse) la couche A designe desormais `order_volume`, dont
+    # la recommandation porte le meme suffixe. La propriete mesuree est inchangee.
+    assert reports[SEEDS[0]]["root_causes"][0]["primary_factor"] == "order_volume"
 
 
 # -- T-F01.1: identite d'octets ---------------------------------------------

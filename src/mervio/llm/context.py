@@ -208,15 +208,27 @@ class _ContextBuilder:
                 factor_id = self._id(f"{rc_id}.factor.{_slug(factor.get('factor', ''))}")
                 factor_ids.append(factor_id)
                 path = f"evidence[{factor_id}]"
+                # AN-02 / D-073: un facteur NON observe n'a ni metrique support, ni hypothese,
+                # ni aucune valeur chiffree. Les champs sont null et doivent le RESTER jusqu'au
+                # LLM: les remplacer par "" ou 0.0 reconstruirait l'angle mort en affirmation.
+                metric = factor.get("supporting_metric")
                 evidence.append({
                     "id": factor_id, "kind": "root_cause_factor",
                     "factor": _slug(factor.get("factor", "")),
-                    "supporting_metric": _slug(factor.get("supporting_metric", "")),
+                    "supporting_metric": _slug(metric) if metric is not None else None,
+                    "layer": _slug(factor.get("layer", "")) if factor.get("layer") else None,
+                    "observability": _slug(factor.get("observability", ""))
+                    if factor.get("observability") else None,
+                    "missing_source": _slug(factor["missing_source"])
+                    if factor.get("missing_source") else None,
+                    "explains": _slug(factor["explains"]) if factor.get("explains") else None,
                     **_numbers(factor, ("current_value", "previous_value", "factor_change_pct",
-                                        "contribution", "confidence"), f"{base}.factors[{f_index}]"),
+                                        "contribution", "confidence", "explains_share"),
+                               f"{base}.factors[{f_index}]"),
                     "observed_fact": self._text(factor.get("observed_fact", ""), path + ".observed_fact"),
                 })
-                if factor.get("contribution") is not None and factor.get("hypothesis"):
+                if factor.get("hypothesis") and (factor.get("contribution") is not None
+                                                 or factor.get("explains_share") is not None):
                     hypotheses.append((factor_id, self._text(factor["hypothesis"], path + ".hypothesis"),
                                        _number(factor.get("confidence"), f"{base}.factors[{f_index}].confidence")))
 

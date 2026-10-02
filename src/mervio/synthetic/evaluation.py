@@ -23,7 +23,9 @@ from .scenarios import ScenarioSpec
 FLAT_BAND = AnomalyConfig().min_material_pct
 
 #: facteur du moteur -> categorie de recommandation (insights._recommendation_for)
-FACTOR_CATEGORY = {"paid_traffic": "acquisition", "conversion_rate": "conversion_checkout",
+#: AN-02: `conversion_rate -> conversion_checkout` RETIRE (D-075). `order_volume` ne
+#: designe pas une cause mais un symptome: sa categorie est une INVESTIGATION.
+FACTOR_CATEGORY = {"paid_traffic": "acquisition", "order_volume": "demand_investigation",
                    "average_order_value": "pricing_merchandising"}
 
 

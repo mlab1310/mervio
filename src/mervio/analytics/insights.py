@@ -21,7 +21,7 @@ SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 #: Quand une baisse de CA est detectee, "commandes -28%" et "conversion -34%"
 #: decrivent le meme evenement: les emettre separement produit 5 alarmes pour
 #: un seul incident et noie la cause racine. Elles deviennent des preuves.
-DECOMPOSITION_METRICS = {"orders", "aov", "paid_conversion_rate", "paid_clicks", "roas"}
+DECOMPOSITION_METRICS = {"orders", "aov", "orders_per_paid_click", "paid_clicks", "roas"}
 
 
 
@@ -196,12 +196,21 @@ def build_insights(
 
 
 def _recommendation_for(factor: str, analysis: RootCauseAnalysis) -> str:
-    if factor == "conversion_rate":
+    """AN-02 / D-075: AUCUNE recommandation checkout tant que le trafic total n'est pas observe.
+
+    La branche `conversion_rate` a disparu avec le facteur. Elle recommandait d'auditer le
+    checkout des que << commandes totales / clics payants >> baissait -- ce qui arrive aussi quand
+    le trafic organique chute, sans qu'aucun checkout soit en cause. La derivation des commandes
+    non payantes depuis `ad_performance.conversions` est REJETEE en 004.5: la fenetre
+    d'attribution de la regie n'est pas la date de commande Shopify.
+    """
+    if factor == "order_volume":
         worst = analysis.campaign_contributors[0] if analysis.campaign_contributors else None
-        suffix = (f" La degradation est la plus marquee sur {worst['name']}."
+        suffix = (f" La baisse de conversions est la plus marquee sur {worst['name']}."
                   if worst and worst["conversions_delta"] < 0 else "")
-        return ("Auditer le tunnel de conversion (checkout, moyens de paiement, mobile, "
-                "disponibilite produit) avant de modifier les budgets." + suffix)
+        return ("Chercher d'ou vient la demande manquante: le trafic total et la conversion du "
+                "site ne sont pas observes, donc la cause n'est pas etablie. Connecter une mesure "
+                "d'audience pour la trancher." + suffix)
     if factor == "paid_traffic":
         return ("Verifier budgets, enchares et taux d'impressions perdues dans Google Ads: "
                 "la variation vient du volume de trafic achete.")

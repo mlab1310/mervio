@@ -74,7 +74,7 @@ _METRIC_TERMS: Dict[str, Tuple[str, ...]] = {
     "gross_margin": (r"marge brute", r"gross margin"),
     "payment_fees": (r"frais de paiement", r"payment fees"),
     "aov": (r"panier moyen", r"average order value", r"\baov\b"),
-    "paid_conversion_rate": (r"taux de conversion", r"conversion rate"),
+    "orders_per_paid_click": (r"commandes par clic", r"orders per paid click"),
     "repeat_purchase_rate": (r"reachat", r"repeat purchase"),
     "refund_rate": (r"taux de remboursement", r"refund rate"),
     "new_customers": (r"nouveaux clients", r"new customers"),

@@ -707,7 +707,7 @@ def _analyse_report(result, report, rerun, ref_orders, sources, identifiers, tim
     if sources.get("google_ads"):
         ads = google_ads_reference(Path(sources["google_ads"]), period)
         reconciliation.append(compare("ad_spend", value("ad_spend"), ads["spend"] if ads["has_rows"] else 0.0))
-        reconciliation.append(compare("paid_clicks", value("clicks"), ads["clicks"] if ads["has_rows"] else 0.0))
+        reconciliation.append(compare("paid_clicks", value("paid_clicks"), ads["clicks"] if ads["has_rows"] else 0.0))
         reconciliation.append(compare("roas", value("roas"), ref["revenue"] / ads["spend"] if ads["spend"] else None))
         cac = ads["spend"] / ref["new_customers"] if ads["has_rows"] and ref["new_customers"] else None
         reconciliation.append(compare("cac", value("cac"), cac))

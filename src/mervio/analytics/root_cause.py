@@ -20,33 +20,77 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
+from ..config import RootCauseConfig
 from ..domain.models import Dataset
 from .kpi import campaign_performance, product_performance, total_clicks, total_revenue
 from .periods import Period
+
+
+#: couche A: identite arithmetique du CA (Revenue = Commandes x Panier moyen), ADDITIVE
+LAYER_REVENUE = "a"
+#: couche B: explications du VOLUME DE COMMANDES, NON additives
+LAYER_ORDER_VOLUME = "b"
+OBSERVED = "observed"
+NOT_OBSERVED = "not_observed"
+#: source qui manque pour observer le trafic total et la conversion du site
+_MISSING_SESSIONS = "web_analytics_sessions"
 
 
 @dataclass
 class CauseFactor:
     factor: str
     observed_fact: str
-    supporting_metric: str
+    supporting_metric: Optional[str]
     current_value: Optional[float]
     previous_value: Optional[float]
     factor_change_pct: Optional[float]
-    contribution: Optional[float]  # part de la variation expliquee (0..1)
-    confidence: float
-    hypothesis: str
+    #: part de la variation du CA. UNIQUEMENT pour la couche A: une contribution est une part de
+    #: la variation du CA, et la couche B explique la variation du VOLUME. Les melanger dans un
+    #: seul champ serait le melange de referentiels qu'AN-01 supprime.
+    contribution: Optional[float]
+    confidence: Optional[float]
+    hypothesis: Optional[str]
+    layer: str = LAYER_REVENUE
+    observability: str = OBSERVED
+    #: couche B: grandeur que ce facteur explique ("order_volume")
+    explains: Optional[str] = None
+    #: couche B observee: part de la variation de `explains` imputable a ce facteur
+    explains_share: Optional[float] = None
+    #: facteur NON observe: source qui manque. Obligatoire dans ce cas (D-073).
+    missing_source: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
-            "factor": self.factor, "observed_fact": self.observed_fact,
+            "factor": self.factor, "layer": self.layer,
+            "observability": self.observability,
+            "observed_fact": self.observed_fact,
             "supporting_metric": self.supporting_metric,
             "current_value": round(self.current_value, 4) if self.current_value is not None else None,
             "previous_value": round(self.previous_value, 4) if self.previous_value is not None else None,
             "factor_change_pct": round(self.factor_change_pct, 4) if self.factor_change_pct is not None else None,
             "contribution": round(self.contribution, 4) if self.contribution is not None else None,
-            "confidence": round(self.confidence, 2), "hypothesis": self.hypothesis,
+            "confidence": round(self.confidence, 2) if self.confidence is not None else None,
+            "hypothesis": self.hypothesis,
+            "explains": self.explains,
+            "explains_share": round(self.explains_share, 4) if self.explains_share is not None else None,
+            "missing_source": self.missing_source,
         }
+
+    @property
+    def sort_key(self):
+        """Cle TOTALE: observes d'abord, couche A avant couche B, puis |part|, puis le nom.
+
+        `factor` est unique, donc la cle ne peut pas admettre d'egalite. Avant AN-02,
+        `abs(contribution)` seul laissait l'ordre d'entree decider a egalite (mesure sur
+        `f01_ties`: `paid_traffic` et `average_order_value` tous deux a -0.0).
+        """
+        magnitude = self.contribution if self.contribution is not None else self.explains_share
+        return (
+            0 if self.observability == OBSERVED else 1,
+            0 if self.layer == LAYER_REVENUE else 1,
+            -abs(magnitude) if magnitude is not None else 0.0,
+            self.factor,
+        )
 
 
 @dataclass
@@ -65,15 +109,48 @@ class RootCauseAnalysis:
     #: comparaison a la periode precedente, CONSERVEE mais etiquetee a part et SANS
     #: contribution: une contribution rattachee a un autre referentiel serait un melange.
     change_vs_previous_period: Dict[str, Optional[float]] = field(default_factory=dict)
+    #: commandes TOTALES / clics PAYANTS: une preuve, jamais un taux de conversion du site
+    orders_per_paid_click: Dict[str, object] = field(default_factory=dict)
+    #: seuil de primaute de la couche B EFFECTIVEMENT applique (D-089). Enregistre pour que le
+    #: rapport soit auditable: sans lui, `to_dict()` retomberait sur le defaut et le seuil
+    #: configure n'atteindrait jamais le rapport.
+    primacy_share: float = 0.5
     factors: List[CauseFactor] = field(default_factory=list)
     product_contributors: List[dict] = field(default_factory=list)
     campaign_contributors: List[dict] = field(default_factory=list)
     limitations: List[str] = field(default_factory=list)
     available: bool = True
 
-    def primary_factor(self) -> Optional[CauseFactor]:
-        ranked = [f for f in self.factors if f.contribution is not None]
-        return max(ranked, key=lambda f: abs(f.contribution)) if ranked else None
+    def primary_factor(self, cfg: Optional[RootCauseConfig] = None) -> Optional[CauseFactor]:
+        """Facteur primaire. Jamais un facteur NON observe (D-073).
+
+        Couche A d'abord: elle porte l'identite du CA, et sa dominance est exacte, sans seuil.
+        Puis, si le volume de commandes domine le CA ET que les clics payants expliquent la part
+        dominante de ce volume, la cause nommee devient `paid_traffic` -- parce que le volume est
+        le SYMPTOME et le trafic paye l'explication mesurable.
+
+        Le seuil vient de `RootCauseConfig` (D-089, MEASUREMENT REQUIRED): il n'est pas une
+        constante, et il ne doit pas etre calibre pour faire passer un test.
+        """
+        threshold = cfg.paid_traffic_primacy_share if cfg is not None else self.primacy_share
+        layer_a = [f for f in self.factors
+                   if f.layer == LAYER_REVENUE and f.observability == OBSERVED
+                   and f.contribution is not None]
+        if not layer_a:
+            return None
+        # cle TOTALE: `factor` est unique, donc aucune egalite possible
+        dominant = min(layer_a, key=lambda f: (-abs(f.contribution), f.factor))
+        if dominant.factor != "order_volume":
+            return dominant
+        explanations = [f for f in self.factors
+                        if f.layer == LAYER_ORDER_VOLUME and f.observability == OBSERVED
+                        and f.explains_share is not None]
+        if not explanations:
+            return dominant
+        best = min(explanations, key=lambda f: (-abs(f.explains_share), f.factor))
+        if abs(best.explains_share) >= threshold:
+            return best
+        return dominant
 
     def to_dict(self) -> dict:
         primary = self.primary_factor()
@@ -86,6 +163,8 @@ class RootCauseAnalysis:
             "baseline_periods": list(self.baseline_periods),
             "baseline_revenue": round(self.baseline_revenue, 2) if self.baseline_revenue is not None else None,
             "change_vs_previous_period": dict(self.change_vs_previous_period),
+            "orders_per_paid_click": dict(self.orders_per_paid_click),
+            "primacy_share": self.primacy_share,
             "primary_factor": primary.factor if primary else None,
             "factors": [f.to_dict() for f in self.factors],
             "product_contributors": self.product_contributors,
@@ -113,6 +192,7 @@ def _confidence(contribution: Optional[float], quality_penalty: float) -> float:
 def analyse_revenue_change(
     full: Dataset, current: Period, previous: Period,
     baseline: Optional[Sequence[Period]] = None,
+    cfg: Optional[RootCauseConfig] = None,
 ) -> RootCauseAnalysis:
     """Decompose la variation du CA contre la MEME baseline que l'anomalie (AN-01).
 
@@ -124,6 +204,7 @@ def analyse_revenue_change(
     Les agregats construisent les RATIOS; le niveau de reference est leur MOYENNE par periode.
     Prendre somme(CA) sans diviser par n fausserait ln(R1/R0) d'un facteur ln n.
     """
+    cfg = cfg or RootCauseConfig()
     windows = [full.window(p.start, p.end) for p in (baseline or [previous])]
     cur_ds = full.window(current.start, current.end)
     prev_ds = full.window(previous.start, previous.end)
@@ -144,6 +225,7 @@ def analyse_revenue_change(
                "derives); contributions en log-ratio; contributions produit/campagne additives",
         baseline_periods=[p.label for p in (baseline or [previous])],
         baseline_revenue=r0 if n else None,
+        primacy_share=cfg.paid_traffic_primacy_share,
         change_vs_previous_period={
             "previous_period": previous.label,
             "current_revenue": round(r1, 2),
@@ -161,46 +243,88 @@ def analyse_revenue_change(
 
     c1 = total_clicks(cur_ds)
     o1 = len(cur_ds.orders)
-    # RATIOS DE SOMMES, pas moyennes de ratios: seule forme qui preserve l'identite
-    # C x cvr x aov = somme(R)/n = r0
+    # RATIOS DE SOMMES, pas moyennes de ratios (AN-01)
     c0 = sum_clicks / n if n else 0.0
-    cvr1 = (o1 / c1) if c1 else None
-    cvr0 = (sum_orders / sum_clicks) if sum_clicks else None
+    o0 = sum_orders / n if n else 0.0
     aov1 = (r1 / o1) if o1 else None
     aov0 = (sum_revenue / sum_orders) if sum_orders else None
+    opc1 = (o1 / c1) if c1 else None
+    opc0 = (sum_orders / sum_clicks) if sum_clicks else None
 
     log_total = math.log(r1 / r0)
-    factors_spec = [
-        ("paid_traffic", "Clics payants (proxy de trafic)", "clicks", c1, c0, 0.15,
-         "La variation du CA est associee au volume de trafic paye achete."),
-        ("conversion_rate", "Taux de conversion sur trafic paye", "paid_conversion_rate", cvr1, cvr0, 0.20,
-         "La variation du CA est associee a la capacite du site a convertir le trafic "
-         "(parcours d'achat, prix, disponibilite, checkout)."),
-        ("average_order_value", "Panier moyen", "aov", aov1, aov0, 0.05,
-         "La variation du CA est associee a la valeur moyenne des commandes "
-         "(mix produit, remises, quantites)."),
-    ]
 
-    for key, label, metric, v1, v0, penalty, hypothesis in factors_spec:
+    def _observed(key, label, metric, v1, v0, penalty, hypothesis, layer, explains=None):
+        """Facteur OBSERVE. Contribution en couche A, part explicative en couche B."""
         if not v1 or not v0 or v1 <= 0 or v0 <= 0:
-            analysis.factors.append(CauseFactor(
-                key, f"{label}: non calculable", metric, v1, v0, None, None, 0.1,
-                "Donnee insuffisante pour evaluer ce facteur.",
-            ))
-            continue
+            return CauseFactor(
+                factor=key, observed_fact=f"{label}: non calculable", supporting_metric=metric,
+                current_value=v1, previous_value=v0, factor_change_pct=None, contribution=None,
+                confidence=0.1, hypothesis="Donnee insuffisante pour evaluer ce facteur.",
+                layer=layer, explains=explains,
+            )
         change = _pct(v1, v0)
-        contribution = math.log(v1 / v0) / log_total if log_total else None
-        analysis.factors.append(CauseFactor(
-            factor=key,
-            observed_fact=(f"{label} {change:+.1%} sur {current.label} vs la baseline de "
-                           f"{n} periode(s)" if n > 1 else
-                           f"{label} {change:+.1%} entre {previous.label} et {current.label}"),
+        reference = (f"vs la baseline de {n} periode(s)" if n > 1 else f"vs {previous.label}")
+        share = math.log(v1 / v0) / log_total if log_total else None
+        if layer == LAYER_REVENUE:
+            contribution, explains_share = share, None
+        else:
+            # couche B: part de la variation du VOLUME DE COMMANDES, pas du CA.
+            # Identite exacte: Commandes = Clics payants x Commandes par clic paye.
+            log_orders = math.log(o1 / o0) if (o1 and o0) else None
+            contribution = None
+            explains_share = (math.log(v1 / v0) / log_orders) if log_orders else None
+        return CauseFactor(
+            factor=key, observed_fact=f"{label} {change:+.1%} sur {current.label} {reference}",
             supporting_metric=metric, current_value=v1, previous_value=v0,
             factor_change_pct=change, contribution=contribution,
-            confidence=_confidence(contribution, penalty), hypothesis=hypothesis,
-        ))
+            confidence=_confidence(contribution if contribution is not None else explains_share,
+                                   penalty),
+            hypothesis=hypothesis, layer=layer, explains=explains, explains_share=explains_share,
+        )
 
-    analysis.factors.sort(key=lambda f: abs(f.contribution) if f.contribution is not None else -1, reverse=True)
+    def _unobserved(key, label, explains):
+        """Facteur NON observe (D-073).
+
+        Tous les champs chiffres et interpretatifs sont null: `contribution: 0.0` AFFIRMERAIT une
+        absence d'effet, la meme faute que << CAC = 0 >>. L'angle mort est DECLARE, jamais comble.
+        """
+        return CauseFactor(
+            factor=key, observed_fact=f"{label}: non observe", supporting_metric=None,
+            current_value=None, previous_value=None, factor_change_pct=None, contribution=None,
+            confidence=None, hypothesis=None, layer=LAYER_ORDER_VOLUME,
+            observability=NOT_OBSERVED, explains=explains, explains_share=None,
+            missing_source=_MISSING_SESSIONS,
+        )
+
+    # COUCHE A -- identite arithmetique du CA, additive, somme des contributions = 1
+    analysis.factors.append(_observed(
+        "order_volume", "Volume de commandes", "orders", float(o1), o0, 0.10,
+        "La variation du CA est associee au NOMBRE de commandes.", LAYER_REVENUE))
+    analysis.factors.append(_observed(
+        "average_order_value", "Panier moyen", "aov", aov1, aov0, 0.05,
+        "La variation du CA est associee a la valeur moyenne des commandes "
+        "(mix produit, remises, quantites).", LAYER_REVENUE))
+
+    # COUCHE B -- explications du volume de commandes, NON additives
+    analysis.factors.append(_observed(
+        "paid_traffic", "Clics payants", "paid_clicks", float(c1), c0, 0.15,
+        "La variation du volume de commandes est associee au trafic paye achete.",
+        LAYER_ORDER_VOLUME, explains="order_volume"))
+    analysis.factors.append(_unobserved(
+        "organic_traffic", "Trafic organique et direct", "order_volume"))
+    analysis.factors.append(_unobserved(
+        "site_conversion_rate", "Taux de conversion du site", "order_volume"))
+
+    analysis.orders_per_paid_click = {
+        "current": round(opc1, 6) if opc1 is not None else None,
+        "baseline": round(opc0, 6) if opc0 is not None else None,
+        "note": "commandes TOTALES rapportees aux SEULS clics payants: une preuve, pas un taux "
+                "de conversion du site. Le trafic organique et direct n'est pas observe.",
+    }
+
+    # cle TOTALE (AN-02): observes avant non observes, couche A avant couche B,
+    # puis |part| decroissante, puis le nom du facteur -- qui est unique.
+    analysis.factors.sort(key=lambda f: f.sort_key)
     analysis.product_contributors = _contributors(
         product_performance(cur_ds), _mean_performance(windows, "sku"), "sku", "title", r1 - r0
     )

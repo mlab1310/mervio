@@ -146,8 +146,11 @@ def test_the_aggregate_to_ratio_identity_holds_exactly():
     analysis = analyse_revenue_change(dataset, period, previous_period(period), baseline=baseline)
 
     factors = {f.factor: f for f in analysis.factors}
+    # AN-02 a reduit l'identite du CA a la COUCHE A: Revenue = Commandes x Panier moyen.
+    # L'identite reste exacte, et c'est le meme invariant: les agregats de baseline construisent
+    # les ratios, jamais la reference de niveau.
     product = 1.0
-    for key in ("paid_traffic", "conversion_rate", "average_order_value"):
+    for key in ("order_volume", "average_order_value"):
         value = factors[key].previous_value
         assert value is not None, f"{key}: valeur de reference manquante"
         product *= value

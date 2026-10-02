@@ -179,13 +179,13 @@ def compute_kpis(ds: Dataset, period: Period,
                           "Depense Google Ads uniquement.", "sum(ad.spend)", ["google_ads"], p,
                           QualityStatus.INCOMPLETE,
                           ["Meta Ads et autres regies non connectes: la depense reelle peut etre superieure"])
-    kpis["clicks"] = _m("clicks", "Clics payants", float(clicks), "count",
+    kpis["paid_clicks"] = _m("paid_clicks", "Clics payants", float(clicks), "count",
                         "Clics Google Ads, utilises comme proxy de trafic paye.",
                         "sum(ad.clicks)", ["google_ads"], p, QualityStatus.INCOMPLETE,
                         ["proxy: le trafic organique et direct n'est pas mesure (GA4 non connecte)"])
 
     cvr = (orders_count / clicks) if clicks else None
-    kpis["paid_conversion_rate"] = _m("paid_conversion_rate", "Taux de conversion (trafic paye)", cvr, "ratio",
+    kpis["orders_per_paid_click"] = _m("orders_per_paid_click", "Commandes par clic paye", cvr, "ratio",
                                       "Commandes rapportees aux clics payants.",
                                       "orders / paid_clicks", ["shopify_orders", "google_ads"], p,
                                       QualityStatus.INCOMPLETE if clicks else QualityStatus.UNAVAILABLE,

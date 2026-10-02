@@ -22,7 +22,7 @@ def test_zero_orders_does_not_crash():
     assert kpis["revenue"].value == 0.0
     assert kpis["aov"].value is None          # pas de commande -> pas de panier moyen
     assert kpis["roas"].value == 0.0          # 100 EUR depenses, 0 EUR de CA
-    assert kpis["paid_conversion_rate"].value == 0.0
+    assert kpis["orders_per_paid_click"].value == 0.0
 
 
 def test_no_ad_data_gives_unknown_roas_not_zero():

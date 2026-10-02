@@ -15,7 +15,7 @@ _SEVERITY_LABEL = {"high": "ELEVEE", "medium": "MOYENNE", "low": "FAIBLE", "info
 
 #: ordre d'affichage des indicateurs, partage par KEY KPIs et la tracabilite
 _KPI_ORDER = ("revenue", "orders", "aov", "units", "ad_spend", "roas", "cac",
-              "new_customers", "paid_conversion_rate", "gross_margin", "refunds", "refund_rate")
+              "new_customers", "orders_per_paid_click", "gross_margin", "refunds", "refund_rate")
 
 SYNTHETIC_BANNER = [
     "!" * WIDTH,
@@ -125,7 +125,7 @@ def render_executive_report(report: dict) -> str:
             rendered = "indisponible"
         elif metric["unit"] == "currency":
             rendered = _money(metric["value"], currency)
-        elif key in ("gross_margin", "refund_rate", "paid_conversion_rate"):
+        elif key in ("gross_margin", "refund_rate", "orders_per_paid_click"):
             rendered = _pct(metric["value"])
         elif metric["unit"] == "ratio":
             rendered = f"{metric['value']:.2f}"
@@ -264,14 +264,32 @@ def render_executive_report(report: dict) -> str:
         for chunk in _wrap("Methode : " + analysis["method"], indent=4):
             lines.append("  " + chunk)
         lines.append("")
+        # AN-02 / D-073: un facteur NON observe n'a ni part, ni hypothese. Le rendu le DIT
+        # ("non observe") et nomme la source manquante, au lieu d'afficher 0 % ou une hypothese
+        # vide -- ce qui ferait passer un angle mort pour une mesure.
         for factor in analysis["factors"]:
-            share = "   n/a" if factor["contribution"] is None else f"{factor['contribution']:>6.0%}"
-            lines.append(f"    {share}  {factor['observed_fact']}")
-            for chunk in _wrap("hypothese: " + factor["hypothesis"], indent=14):
-                lines.append("            " + chunk)
+            if factor["observability"] != "observed":
+                lines.append(f"    non obs.  {factor['observed_fact']}")
+                missing = factor.get("missing_source")
+                if missing:
+                    lines.append(f"              source manquante: {missing}")
+                continue
+            if factor["contribution"] is not None:
+                share = f"{factor['contribution']:>6.0%}"
+            elif factor.get("explains_share") is not None:
+                share = f"{factor['explains_share']:>6.0%}"
+            else:
+                share = "   n/a"
+            suffix = (f" (part du {factor['explains']})" if factor["contribution"] is None
+                      and factor.get("explains") else "")
+            lines.append(f"    {share}  {factor['observed_fact']}{suffix}")
+            if factor["hypothesis"]:
+                for chunk in _wrap("hypothese: " + factor["hypothesis"], indent=14):
+                    lines.append("            " + chunk)
         lines.append("")
-        lines.append("  Ces contributions decrivent une decomposition arithmetique.")
+        lines.append("  Les parts de la couche CA decrivent une decomposition arithmetique.")
         lines.append("  Elles n'etablissent pas un lien de causalite prouve.")
+        lines.append("  Les facteurs non observes ne sont pas chiffres: la donnee manque.")
 
     lines += _title("RECOMMENDATIONS")
     if not report["recommendations"]:

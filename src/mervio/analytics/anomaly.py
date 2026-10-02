@@ -17,7 +17,7 @@ from .timeseries import SeriesPoint
 #: remboursements serait signalee comme une alerte, ce qui est faux.
 DESIRABLE_DIRECTION = {
     "revenue": "up", "orders": "up", "aov": "up", "units": "up",
-    "paid_conversion_rate": "up", "roas": "up", "gross_margin": "up",
+    "orders_per_paid_click": "up", "roas": "up", "gross_margin": "up",
     "refunds": "down", "refund_rate": "down", "cac": "down",
     "ad_spend": "neutral", "paid_clicks": "neutral",
 }

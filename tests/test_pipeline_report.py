@@ -32,8 +32,16 @@ def test_engine_detects_the_injected_conversion_incident(sample_report):
     """La fixture contient une chute de conversion: le moteur doit la retrouver."""
     analysis = sample_report["root_causes"][0]
     assert analysis["available"] is True
-    assert analysis["primary_factor"] == "conversion_rate"
+    # AN-02: le facteur `conversion_rate` a disparu. Il divisait TOUTES les commandes par les
+    # SEULS clics payants, donc il nommait une cause que le moteur ne mesure pas. L'incident
+    # injecte reste detecte, mais par le SYMPTOME mesurable (volume de commandes), et les deux
+    # explications possibles -- trafic organique, conversion du site -- sont declarees NON
+    # OBSERVEES au lieu d'etre confondues.
+    assert analysis["primary_factor"] == "order_volume"
     assert analysis["observed_change_pct"] < 0
+    unobserved = {f["factor"] for f in analysis["factors"]
+                  if f["observability"] == "not_observed"}
+    assert unobserved == {"organic_traffic", "site_conversion_rate"}
 
 
 def test_engine_blames_the_right_campaign(sample_report):

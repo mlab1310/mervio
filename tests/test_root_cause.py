@@ -23,12 +23,22 @@ def build(n_prev, n_cur, price_prev=100.0, price_cur=100.0, clicks_prev=1000, cl
     return make_dataset(orders=orders, ads=ads)
 
 
-def test_conversion_driven_decline_identifies_conversion():
-    """Trafic stable, commandes en chute -> la cause doit etre la conversion."""
+def test_order_volume_driven_decline_is_not_called_a_conversion_problem():
+    """Trafic PAYE stable, commandes en chute.
+
+    AVANT AN-02, le moteur repondait `conversion_rate` -- en divisant TOUTES les commandes par
+    les SEULS clics payants. C'etait faux: avec un trafic paye plat, une chute des commandes peut
+    venir du trafic organique, de la conversion du site, ou des deux. Aucun des deux n'est
+    observe. Le moteur nomme donc le SYMPTOME mesure (`order_volume`) et declare les angles
+    morts, au lieu d'affirmer une cause qu'il ne mesure pas.
+    """
     analysis = analyse_revenue_change(build(100, 60), CURRENT, PREVIOUS)
     primary = analysis.primary_factor()
-    assert primary.factor == "conversion_rate"
+    assert primary.factor == "order_volume"
+    assert primary.layer == "a", "la couche A porte l'identite du CA"
     assert analysis.observed_change_pct == pytest.approx(-0.40)
+    unobserved = {f.factor for f in analysis.factors if f.observability == "not_observed"}
+    assert unobserved == {"organic_traffic", "site_conversion_rate"}
 
 
 def test_traffic_driven_decline_identifies_traffic():
@@ -58,6 +68,11 @@ def test_zero_revenue_makes_analysis_unavailable():
 def test_hypothesis_is_never_stated_as_proven_cause():
     analysis = analyse_revenue_change(build(100, 60), CURRENT, PREVIOUS)
     for factor in analysis.factors:
+        if factor.hypothesis is None:
+            # D-073: un facteur NON observe ne porte AUCUNE hypothese. Une hypothese sur une
+            # grandeur non mesuree serait une affirmation gratuite.
+            assert factor.observability == "not_observed"
+            continue
         assert "associee" in factor.hypothesis or "insuffisante" in factor.hypothesis
     assert any("causalite" in lim for lim in analysis.limitations)
 
@@ -65,12 +80,18 @@ def test_hypothesis_is_never_stated_as_proven_cause():
 def test_confidence_is_bounded_and_never_certain():
     analysis = analyse_revenue_change(build(100, 60), CURRENT, PREVIOUS)
     for factor in analysis.factors:
+        if factor.confidence is None:
+            assert factor.observability == "not_observed"  # D-073: aucune valeur fabriquee
+            continue
         assert 0.1 <= factor.confidence <= 0.9
 
 
 def test_each_factor_carries_its_supporting_metric():
     analysis = analyse_revenue_change(build(100, 60), CURRENT, PREVIOUS)
-    assert {f.supporting_metric for f in analysis.factors} == {"clicks", "paid_conversion_rate", "aov"}
+    observed = {f.supporting_metric for f in analysis.factors if f.observability == "observed"}
+    assert observed == {"orders", "aov", "paid_clicks"}, "cles alignees sur les KPI (ND-05 = A)"
+    assert all(f.supporting_metric is None for f in analysis.factors
+               if f.observability == "not_observed"), "pas de metrique support sans mesure"
 
 
 def test_product_contributors_are_ranked_by_impact():

@@ -75,6 +75,23 @@ class QualityConfig:
 
 
 @dataclass(frozen=True)
+class RootCauseConfig:
+    """Regle de primaute de la couche B (AN-02 / D-072).
+
+    `paid_traffic` vit en COUCHE B: il explique le volume de commandes, pas directement le CA.
+    Il devient facteur primaire quand la variation du CA est portee par le volume de commandes ET
+    que la variation des clics payants explique la part dominante de cette variation de volume.
+
+    Le SEUIL est une entree de configuration, pas une constante: `PROPOSED-D-089` est classee
+    MEASUREMENT REQUIRED et interdit de le figer sans l'avoir mesure sur les 17 scenarios. 0.5
+    est la regle de MAJORITE -- la forme que D-089 fixe -- et non une valeur calibree pour faire
+    passer un test, ce que D-089 interdit explicitement.
+    """
+
+    paid_traffic_primacy_share: float = 0.5
+
+
+@dataclass(frozen=True)
 class InsightsConfig:
     """Seuils des constats. AN-16: ils vivaient en dur dans `analytics/insights.py`."""
 
@@ -152,6 +169,7 @@ class AnalyticsConfig:
     quality: QualityConfig = field(default_factory=QualityConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
     insights: InsightsConfig = field(default_factory=InsightsConfig)
+    root_cause: RootCauseConfig = field(default_factory=RootCauseConfig)
     profitability: ProfitabilityConfig = field(default_factory=ProfitabilityConfig)
 
     def __post_init__(self) -> None:

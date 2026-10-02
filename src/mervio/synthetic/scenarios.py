@@ -162,9 +162,15 @@ SCENARIOS: Dict[str, ScenarioSpec] = {s.name: s for s in [
         Effects(campaign_cvr=(("Shopping", 0.05),)),
         _gt("campaign_failure", "down", "down", "campaign_optimization", ["conversion_decline"]),
         [Expectation("revenue_wow", "down"), Expectation("top_campaign_decline", "Shopping"),
-         Expectation("primary_factor", "conversion_rate"),
+         Expectation("primary_factor", "conversion_decline", "KNOWN_GAP",
+                     "AN-02: le facteur `conversion_rate` a disparu (D-074). Une chute de "
+                     "conversion de campagne a depense constante donne des clics plats et des "
+                     "commandes en baisse: meme signature observable qu'une chute organique. "
+                     "`top_campaign_decline` reste MATCH, donc la campagne fautive est bien "
+                     "citee. Restauration: 004.11, donnees de sessions"),
          Expectation("recommendation_category", "campaign_optimization", "KNOWN_GAP",
-                     "la recommandation du moteur vise le tunnel de conversion; la campagne n'est citee qu'en detail")],
+                     "la recommandation du moteur vise l'investigation de la demande; la "
+                     "campagne n'est citee qu'en detail")],
     ),
     ScenarioSpec(
         "traffic_drop", BASELINE, "trafic paye et organique -35 %, conversion inchangee, derniere semaine",
@@ -178,9 +184,23 @@ SCENARIOS: Dict[str, ScenarioSpec] = {s.name: s for s in [
         "conversion_drop", BASELINE, "conversion -40 % sur tous les canaux, trafic inchange, derniere semaine",
         Effects(cvr=0.60),
         _gt("conversion_decline", "down", "down", "conversion_checkout"),
-        [Expectation("revenue_wow", "down"), Expectation("anomaly", "paid_conversion_rate:down"),
-         Expectation("primary_factor", "conversion_rate"),
-         Expectation("recommendation_category", "conversion_checkout")],
+        [Expectation("revenue_wow", "down"),
+         # cle RENOMMEE par ND-05/D-074, signal INCHANGE: la baisse de commandes par clic paye
+         # reste mesuree, detectee et exposee. Ce n'est pas une perte de couverture.
+         Expectation("anomaly", "orders_per_paid_click:down"),
+         Expectation("primary_factor", "conversion_decline", "KNOWN_GAP",
+                     "AN-02: le facteur `conversion_rate` divisait TOUTES les commandes par les "
+                     "SEULS clics payants. Avec trafic paye plat et commandes en baisse, la "
+                     "signature observable est IDENTIQUE a celle d'une chute organique "
+                     "(order_volume_drop): le moteur avait raison ici PAR ACCIDENT, un label "
+                     "unique couvrant trois mecanismes. Il nomme desormais le symptome mesure "
+                     "(order_volume) et declare les deux explications possibles comme non "
+                     "observees. Restauration: 004.11, donnees de sessions"),
+         Expectation("recommendation_category", "conversion_checkout", "KNOWN_GAP",
+                     "D-075: aucune recommandation checkout tant que `web_analytics_sessions` "
+                     "n'est pas une source observee. La cause EST le checkout dans ce scenario, "
+                     "mais le moteur ne peut pas le savoir: le prix de l'honnetete. "
+                     "Restauration: 004.11, donnees de sessions")],
     ),
     ScenarioSpec(
         "refund_spike", BASELINE, "probabilite de remboursement x6, derniere semaine",
@@ -221,8 +241,29 @@ SCENARIOS: Dict[str, ScenarioSpec] = {s.name: s for s in [
         "mixed_root_causes", BASELINE, "trafic paye -35 %, panier moyen en legere baisse et remboursements x4, derniere semaine",
         Effects(paid_traffic=0.65, single_line_shift=0.35, cheap_mix=0.5, refund_probability_multiplier=4.0),
         _gt("mixed", "down", "down", "acquisition", ["paid_traffic_decline", "aov_decline", "refund_increase"]),
-        [Expectation("revenue_wow", "down"), Expectation("primary_factor", "paid_traffic"),
-         Expectation("secondary_factor", "average_order_value"), Expectation("anomaly", "refunds:up")],
+        [Expectation("revenue_wow", "down"),
+         Expectation("primary_factor", "paid_traffic", "KNOWN_GAP",
+                     "D-072: la decomposition a deux COUCHES mesure deux quantites "
+                     "analytiquement differentes. La couche A porte l'identite du CA "
+                     "(Revenue = Commandes x Panier moyen) et ses contributions sont des parts "
+                     "de la variation du CA. La couche B explique la variation du VOLUME DE "
+                     "COMMANDES. Les classer sur une echelle PLATE, comme le faisait la "
+                     "decomposition a trois facteurs, revient a comparer deux grandeurs qui ne "
+                     "sont pas commensurables. Mesure sur 3 graines: `average_order_value` "
+                     "contribue 0,56-0,60 du CA contre 0,37-0,44 pour `order_volume`, donc la "
+                     "couche A est dominee par le panier moyen et la primaute n'atteint jamais "
+                     "la couche B ou vit `paid_traffic`. AUCUNE regle inter-couches n'est creee "
+                     "pour forcer ce MATCH. Restauration: 004.11, donnees de sessions, qui "
+                     "rendront le trafic total observable et permettront une decomposition du "
+                     "volume sans angle mort"),
+         Expectation("secondary_factor", "average_order_value", "KNOWN_GAP",
+                     "`secondary_factor` lit `factors[1]`. Sous D-072 l'ordre est contractuel "
+                     "(observes avant non observes, couche A avant couche B, puis part "
+                     "decroissante, puis nom): `factors[1]` designe donc le second facteur de "
+                     "la couche A, pas le second d'un classement plat. L'attente n'est pas "
+                     "affaiblie, elle devient inexprimable dans la structure ratifiee. "
+                     "Restauration: 004.11"),
+         Expectation("anomaly", "refunds:up")],
     ),
 ]}
 

@@ -50,7 +50,7 @@ SERIES_METRICS = {
     "aov": lambda ds: (kpi_module.total_revenue(ds) / len(ds.orders)) if ds.orders else None,
     "ad_spend": lambda ds: kpi_module.total_ad_spend(ds),
     "paid_clicks": lambda ds: float(kpi_module.total_clicks(ds)),
-    "paid_conversion_rate": lambda ds: (len(ds.orders) / kpi_module.total_clicks(ds)) if kpi_module.total_clicks(ds) else None,
+    "orders_per_paid_click": lambda ds: (len(ds.orders) / kpi_module.total_clicks(ds)) if kpi_module.total_clicks(ds) else None,
     "roas": lambda ds: (kpi_module.total_revenue(ds) / kpi_module.total_ad_spend(ds)) if kpi_module.total_ad_spend(ds) else None,
     "refunds": lambda ds: kpi_module.total_refunds(ds),
 }
@@ -221,7 +221,9 @@ def analyze_loaded_dataset(
     # recalcule jamais. `baseline_points` est la source unique de la definition de la fenetre:
     # une periode sans donnee ne peut donc pas faire divergier les deux referentiels.
     revenue_baseline = [point.period for point in baseline_points(series["revenue"], cfg.anomaly)]
-    root_cause = analyse_revenue_change(dataset, period, prior, baseline=revenue_baseline or None)
+    root_cause = analyse_revenue_change(dataset, period, prior,
+                                       baseline=revenue_baseline or None,
+                                       cfg=cfg.root_cause)
     health = compute_business_health(kpis, comparisons, profitability, window, dataset.quality, cfg.health)
     insights = build_insights(kpis, anomalies, root_cause, profitability, window,
                               dataset.currency, cfg)

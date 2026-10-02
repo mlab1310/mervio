@@ -9,21 +9,21 @@
     },
     {
       "check": "anomaly",
-      "expected": "paid_conversion_rate:down",
+      "expected": "orders_per_paid_click:down",
       "note": "",
       "status": "MATCH"
     },
     {
       "check": "primary_factor",
-      "expected": "conversion_rate",
-      "note": "",
-      "status": "MATCH"
+      "expected": "conversion_decline",
+      "note": "AN-02: le facteur `conversion_rate` divisait TOUTES les commandes par les SEULS clics payants. Avec trafic paye plat et commandes en baisse, la signature observable est IDENTIQUE a celle d'une chute organique (order_volume_drop): le moteur avait raison ici PAR ACCIDENT, un label unique couvrant trois mecanismes. Il nomme desormais le symptome mesure (order_volume) et declare les deux explications possibles comme non observees. Restauration: 004.11, donnees de sessions",
+      "status": "KNOWN_GAP"
     },
     {
       "check": "recommendation_category",
       "expected": "conversion_checkout",
-      "note": "",
-      "status": "MATCH"
+      "note": "D-075: aucune recommandation checkout tant que `web_analytics_sessions` n'est pas une source observee. La cause EST le checkout dans ce scenario, mais le moteur ne peut pas le savoir: le prix de l'honnetete. Restauration: 004.11, donnees de sessions",
+      "status": "KNOWN_GAP"
     }
   ],
   "ground_truth": {

@@ -104,8 +104,14 @@ def test_customer_concentration():
     assert kpis["customer_concentration_top5"].value == pytest.approx((900 + 40) / 1000)
 
 
-def test_paid_conversion_rate(simple_dataset):
-    assert compute_kpis(simple_dataset, PERIOD)["paid_conversion_rate"].value == pytest.approx(2 / 200)
+def test_orders_per_paid_click(simple_dataset):
+    """ND-05 = A / D-074: la cle etait `paid_conversion_rate` et le libelle disait << taux de
+    conversion >>, alors que le numerateur compte TOUTES les commandes et le denominateur les
+    SEULS clics payants. Le nom dit desormais ce que la grandeur est."""
+    kpis = compute_kpis(simple_dataset, PERIOD)
+    assert kpis["orders_per_paid_click"].value == pytest.approx(2 / 200)
+    assert "paid_conversion_rate" not in kpis, "ancienne cle retiree, sans alias"
+    assert "taux de conversion" not in kpis["orders_per_paid_click"].label.lower()
 
 
 def test_every_metric_carries_definition_formula_and_period(simple_dataset):

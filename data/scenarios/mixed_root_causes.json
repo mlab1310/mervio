@@ -10,14 +10,14 @@
     {
       "check": "primary_factor",
       "expected": "paid_traffic",
-      "note": "",
-      "status": "MATCH"
+      "note": "D-072: la decomposition a deux COUCHES mesure deux quantites analytiquement differentes. La couche A porte l'identite du CA (Revenue = Commandes x Panier moyen) et ses contributions sont des parts de la variation du CA. La couche B explique la variation du VOLUME DE COMMANDES. Les classer sur une echelle PLATE, comme le faisait la decomposition a trois facteurs, revient a comparer deux grandeurs qui ne sont pas commensurables. Mesure sur 3 graines: `average_order_value` contribue 0,56-0,60 du CA contre 0,37-0,44 pour `order_volume`, donc la couche A est dominee par le panier moyen et la primaute n'atteint jamais la couche B ou vit `paid_traffic`. AUCUNE regle inter-couches n'est creee pour forcer ce MATCH. Restauration: 004.11, donnees de sessions, qui rendront le trafic total observable et permettront une decomposition du volume sans angle mort",
+      "status": "KNOWN_GAP"
     },
     {
       "check": "secondary_factor",
       "expected": "average_order_value",
-      "note": "",
-      "status": "MATCH"
+      "note": "`secondary_factor` lit `factors[1]`. Sous D-072 l'ordre est contractuel (observes avant non observes, couche A avant couche B, puis part decroissante, puis nom): `factors[1]` designe donc le second facteur de la couche A, pas le second d'un classement plat. L'attente n'est pas affaiblie, elle devient inexprimable dans la structure ratifiee. Restauration: 004.11",
+      "status": "KNOWN_GAP"
     },
     {
       "check": "anomaly",
