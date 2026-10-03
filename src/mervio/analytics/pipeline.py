@@ -280,7 +280,7 @@ def analyze_loaded_dataset(
     revenue_baseline = [point.period for point in baseline_points(series["revenue"], cfg.anomaly)]
     root_cause = analyse_revenue_change(dataset, period, prior,
                                        baseline=revenue_baseline or None,
-                                       cfg=cfg.root_cause)
+                                       cfg=cfg.root_cause, cfg_anomaly=cfg.anomaly)
     health = compute_business_health(kpis, comparisons, profitability, window, dataset.quality, cfg.health)
     insights = build_insights(kpis, anomalies, root_cause, profitability, window,
                               dataset.currency, cfg)

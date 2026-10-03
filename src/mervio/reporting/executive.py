@@ -47,6 +47,30 @@ SYNTHETIC_BANNER = [
 ]
 
 
+#: libelles des niveaux de confiance (AN-14). Le rendu FR passera au catalogue en AN-19.
+_CONFIDENCE_LABEL = {"low": "faible", "medium": "moyenne", "high": "elevee"}
+#: libelles des etats de critere
+_CRITERION_STATE_LABEL = {"satisfied": "oui", "not_satisfied": "non",
+                          "not_applicable": "sans objet"}
+
+
+def _confidence_lines(confidence, *, prefix: str) -> List[str]:
+    """Niveau de confiance ET les criteres qui le produisent (AN-14 / D-081).
+
+    Les criteres sont EXPOSES parce que le niveau seul ne serait pas plus auditable que le
+    flottant qu'il remplace: un marchand doit pouvoir voir ce qui soutient ou affaiblit la
+    conclusion.
+    """
+    if not confidence:
+        return [prefix + "non evaluee"]
+    level = confidence.get("level", "")
+    lines = [prefix + f"{_CONFIDENCE_LABEL.get(level, level)} (qualitative, pas une probabilite)"]
+    for criterion in confidence.get("criteria", []):
+        state = _CRITERION_STATE_LABEL.get(criterion["state"], criterion["state"])
+        lines.append(f"           - {criterion['criterion']}: {state}")
+    return lines
+
+
 def _title(text: str) -> List[str]:
     return ["", f"## {text}", "-" * WIDTH]
 
@@ -84,7 +108,9 @@ def _insight_block(item: dict, currency: str) -> List[str]:
         if impact is not None
         else "non chiffrable a partir des donnees disponibles"
     ))
-    lines.append(f"  CONF.  : {item['confidence']:.2f} (indice de confiance, pas une probabilite)")
+    # AN-14: la confiance est QUALITATIVE. Le rendu affiche le niveau ET les criteres qui l'ont
+    # produit: << 0.65 >> ne disait pas pourquoi, et laissait croire a une mesure.
+    lines.extend(_confidence_lines(item.get("confidence"), prefix="  CONF.  : "))
     lines.append("")
     return lines
 
@@ -319,9 +345,10 @@ def render_executive_report(report: dict) -> str:
         for position, chunk in enumerate(_wrap(reco["recommendation"], indent=6)):
             lines.append((f"  {index}. " if position == 0 else "     ") + chunk)
         impact = reco.get("estimated_impact")
+        level = (reco.get("confidence") or {}).get("level") or "non evaluee"
         lines.append(f"     (origine: {reco['source_insight']}, severite: "
                      f"{_SEVERITY_LABEL.get(reco['severity'], reco['severity'])}, "
-                     f"confiance: {reco['confidence']:.2f}, impact: "
+                     f"confiance: {_CONFIDENCE_LABEL.get(level, level)}, impact: "
                      + (f"{impact:,.2f} {currency})" if impact is not None else "non chiffrable)"))
 
     quality = report["data_quality"]

@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from ..config import AnalyticsConfig
+from .confidence import (
+    NOT_APPLICABLE, Confidence, assess, sort_rank,
+)
 from .anomaly import Anomaly
 from .kpi import Metric, product_performance
 from .profitability import ProfitabilityResult
@@ -36,7 +39,7 @@ class Insight:
     recommendation: Optional[str] = None
     estimated_impact: Optional[float] = None
     estimated_impact_basis: Optional[str] = None
-    confidence: float = 0.0
+    confidence: Optional[Confidence] = None
 
     def to_dict(self) -> dict:
         return {
@@ -45,7 +48,7 @@ class Insight:
             "recommendation": self.recommendation,
             "estimated_impact": round(self.estimated_impact, 2) if self.estimated_impact is not None else None,
             "estimated_impact_basis": self.estimated_impact_basis,
-            "confidence": round(self.confidence, 2),
+            "confidence": self.confidence.to_dict() if self.confidence is not None else None,
         }
 
 
@@ -75,7 +78,9 @@ def build_insights(
             evidence=list(revenue_anomaly.evidence),
             estimated_impact=revenue_anomaly.delta,
             estimated_impact_basis="ecart de CA observe vs baseline glissante, en devise",
-            confidence=primary.confidence if primary else 0.4,
+            # AN-14: le constat HERITE la confiance du facteur primaire. Il repose
+            # sur lui, donc il ne peut pas etre plus confiant que lui.
+            confidence=primary.confidence if primary else None,
         )
         if primary:
             insight.evidence.append(primary.observed_fact)
@@ -122,7 +127,8 @@ def build_insights(
                  if anomaly.delta_pct is not None else f"{anomaly.metric}: ecart detecte sur {anomaly.period}.",
             evidence=list(anomaly.evidence),
             hypothesis=hypothesis, recommendation=recommendation,
-            estimated_impact=None, estimated_impact_basis=None, confidence=0.45,
+            estimated_impact=None, estimated_impact_basis=None,
+            confidence=_kpi_confidence(dataset),
         ))
 
     # 3. profitabilite non calculable
@@ -135,7 +141,8 @@ def build_insights(
             recommendation="Renseigner les couts manquants ("
                            + ", ".join(profitability.missing_components)
                            + ") pour obtenir une profitabilite reelle plutot qu'un CA.",
-            estimated_impact=None, estimated_impact_basis=None, confidence=0.9,
+            estimated_impact=None, estimated_impact_basis=None,
+            confidence=_kpi_confidence(dataset),
         ))
 
     # 4. produits a faible marge
@@ -150,7 +157,8 @@ def build_insights(
                           f"unites vendues: {product['units']}"],
                 hypothesis="Marge faible: prix, cout d'achat ou remises appliquees.",
                 recommendation="Reevaluer le prix ou le cout d'achat de cette reference.",
-                estimated_impact=None, estimated_impact_basis=None, confidence=0.7,
+                estimated_impact=None, estimated_impact_basis=None,
+            confidence=_kpi_confidence(dataset),
             ))
 
     # 5. concentration client
@@ -162,7 +170,8 @@ def build_insights(
             evidence=[concentration.definition],
             hypothesis="Dependance commerciale a un petit nombre de comptes.",
             recommendation="Diversifier l'acquisition pour reduire le risque de concentration.",
-            estimated_impact=None, estimated_impact_basis=None, confidence=0.6,
+            estimated_impact=None, estimated_impact_basis=None,
+            confidence=_kpi_confidence(dataset),
         ))
 
     # 6. opportunite: campagne la plus efficace
@@ -182,17 +191,38 @@ def build_insights(
                 recommendation="Tester une hausse de budget maitrisee sur cette campagne et mesurer le CPA.",
                 estimated_impact=None,
                 estimated_impact_basis="impact non chiffrable: aucune donnee de marge par campagne",
-                confidence=0.4,
+                confidence=_kpi_confidence(dataset),
             ))
 
     # la baisse de CA porte la cause racine et la recommandation: elle passe
     # toujours en tete, quelle que soit la severite mecanique des autres ecarts
-    insights.sort(key=lambda i: (
-        0 if i.type == "revenue_decline" else 1,
-        SEVERITY_ORDER.get(i.severity, 9),
-        -i.confidence,
+    # AN-14: passer de nombreux flottants a TROIS niveaux multiplie les egalites. La cle doit
+    # donc rester TOTALE, sinon l'ordre des constats redeviendrait dependant de l'ordre
+    # d'insertion -- la faute meme de F-01, dans un autre objet. L'ordre d'EMISSION est le
+    # dernier recours: il est deterministe et ne depend d'aucun texte (donc immunise contre AN-19).
+    ordered = sorted(enumerate(insights), key=lambda pair: (
+        0 if pair[1].type == "revenue_decline" else 1,
+        SEVERITY_ORDER.get(pair[1].severity, 9),
+        -sort_rank(pair[1].confidence),
+        pair[0],
     ))
-    return insights
+    return [insight for _index, insight in ordered]
+
+
+def _kpi_confidence(dataset) -> Confidence:
+    """Confiance d'un constat adosse a UN SEUL KPI, pas a une decomposition.
+
+    Les criteres de decomposition -- part expliquee, concurrent non observe -- sont NON
+    APPLICABLES: ils n'ont pas d'objet ici, et un critere sans objet ne peut ni soutenir ni
+    affaiblir la conclusion. Restent la longueur de baseline (sans objet egalement: le constat ne
+    compare pas a une baseline) et la fiabilite des champs, qui, elle, s'applique.
+    """
+    from .root_cause import _fields_reliable
+    reliable = _fields_reliable(dataset)
+    confidence = assess(baseline_periods=0, min_baseline_periods=0, fields_reliable=reliable,
+                        unobserved_competitor=None, contribution=None, share_applicable=False)
+    return Confidence(confidence.level,
+                      dict(confidence.criteria, baseline_sufficient=NOT_APPLICABLE))
 
 
 def _recommendation_for(factor: str, analysis: RootCauseAnalysis) -> str:

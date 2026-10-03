@@ -77,13 +77,24 @@ def test_hypothesis_is_never_stated_as_proven_cause():
     assert any("causalite" in lim for lim in analysis.limitations)
 
 
-def test_confidence_is_bounded_and_never_certain():
+def test_confidence_is_qualitative_and_never_claims_certainty():
+    """Meme intention qu'avant AN-14, nouveau contrat.
+
+    Le test imposait `0.1 <= confidence <= 0.9`: des bornes qui disaient << jamais certain >> en
+    exhibant une fausse precision. D-081 remplace le flottant par trois niveaux et expose les
+    criteres. << Jamais certain >> devient: le niveau le plus haut est `high`, il n'y a pas de
+    `certain`, et ce qui l'a produit est lisible.
+    """
     analysis = analyse_revenue_change(build(100, 60), CURRENT, PREVIOUS)
     for factor in analysis.factors:
         if factor.confidence is None:
             assert factor.observability == "not_observed"  # D-073: aucune valeur fabriquee
             continue
-        assert 0.1 <= factor.confidence <= 0.9
+        assert factor.confidence.level in ("low", "medium", "high")
+        assert factor.confidence.criteria, "les criteres doivent etre exposes"
+        rendered = factor.confidence.to_dict()
+        assert set(rendered) == {"level", "criteria"}
+        assert not isinstance(rendered["level"], (int, float))
 
 
 def test_each_factor_carries_its_supporting_metric():

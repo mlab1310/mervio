@@ -42,6 +42,7 @@ _ENUMS = {
     "assessment": {"favorable", "unfavorable", "neutral"},
     "data_quality": {"reliable", "incomplete", "unavailable"},
     "freshness_status": {"fresh", "stale", "unknown"},
+    "confidence_level": {"low", "medium", "high"},
 }
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 
@@ -131,6 +132,18 @@ class _ContextBuilder:
         return context
 
     # -- sections ---------------------------------------------------------
+    def _confidence(self, raw: Any, path: str) -> Optional[str]:
+        """Niveau qualitatif, jamais un nombre (AN-14 / D-081).
+
+        `_number` acceptait un flottant de fausse precision et le laissait atteindre le modele,
+        qui pouvait le citer comme une mesure. Le LLM recoit desormais le NIVEAU seul: les
+        criteres qui l'ont produit vivent dans le rapport, ou ils sont auditables.
+        """
+        if raw is None:
+            return None
+        block = _as_mapping(raw, path)
+        return self._enum(block.get("level"), "confidence_level", path + ".level")
+
     def _data_freshness(self, raw: Any) -> Dict[str, Any]:
         """Fraicheur de la donnee, citable par le modele (AN-05).
 
@@ -193,7 +206,8 @@ class _ContextBuilder:
                     "severity": self._enum(item.get("severity"), "severity", path),
                     "statement": self._text(item.get("fact", ""), path + ".statement"),
                     "evidence_text": self._texts(item.get("evidence"), path + ".evidence_text"),
-                    "confidence": _number(item.get("confidence"), f"{section}[{index}].confidence"),
+                    "confidence": self._confidence(item.get("confidence"),
+                                                   f"{section}[{index}].confidence"),
                     "estimated_impact": impact,
                     "estimated_impact_basis": self._opt_text(item.get("estimated_impact_basis"),
                                                              path + ".estimated_impact_basis"),
@@ -245,15 +259,20 @@ class _ContextBuilder:
                     "missing_source": _slug(factor["missing_source"])
                     if factor.get("missing_source") else None,
                     "explains": _slug(factor["explains"]) if factor.get("explains") else None,
+                    # AN-14: `confidence` QUITTE `_numbers`. Elle n'est plus un nombre, et la
+                    # laisser ici ferait lever `_number` -- rupture franche, donc detectable.
                     **_numbers(factor, ("current_value", "previous_value", "factor_change_pct",
-                                        "contribution", "confidence", "explains_share"),
+                                        "contribution", "explains_share"),
                                f"{base}.factors[{f_index}]"),
+                    "confidence": self._confidence(factor.get("confidence"),
+                                                   f"{base}.factors[{f_index}].confidence"),
                     "observed_fact": self._text(factor.get("observed_fact", ""), path + ".observed_fact"),
                 })
                 if factor.get("hypothesis") and (factor.get("contribution") is not None
                                                  or factor.get("explains_share") is not None):
                     hypotheses.append((factor_id, self._text(factor["hypothesis"], path + ".hypothesis"),
-                                       _number(factor.get("confidence"), f"{base}.factors[{f_index}].confidence")))
+                                       self._confidence(factor.get("confidence"),
+                                                        f"{base}.factors[{f_index}].confidence")))
 
             products = sorted(
                 (_as_mapping(p, f"{base}.product_contributors")
@@ -344,7 +363,8 @@ class _ContextBuilder:
                 "id": reco_id, "action": action,
                 "source_finding": source[0] if source else None,
                 "severity": self._enum(item.get("severity"), "severity", path),
-                "confidence": _number(item.get("confidence"), f"recommendations[{index}].confidence"),
+                "confidence": self._confidence(item.get("confidence"),
+                                               f"recommendations[{index}].confidence"),
                 "estimated_impact": impact,
                 "estimated_impact_basis": self._opt_text(item.get("estimated_impact_basis"),
                                                          path + ".estimated_impact_basis"),

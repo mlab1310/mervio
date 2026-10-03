@@ -145,7 +145,8 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
         "recommendations": [
             {
                 "source_insight": i.type, "severity": i.severity,
-                "recommendation": i.recommendation, "confidence": round(i.confidence, 2),
+                "recommendation": i.recommendation,
+                "confidence": i.confidence.to_dict() if i.confidence is not None else None,
                 "estimated_impact": round(i.estimated_impact, 2) if i.estimated_impact is not None else None,
                 "estimated_impact_basis": i.estimated_impact_basis,
             }

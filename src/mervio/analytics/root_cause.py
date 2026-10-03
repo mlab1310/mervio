@@ -20,7 +20,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
-from ..config import RootCauseConfig
+from ..config import AnomalyConfig, RootCauseConfig
+from .confidence import Confidence, assess, decomposition_interpretable
 from ..domain.models import Dataset
 from .kpi import campaign_performance, product_performance, total_clicks, total_revenue
 from .periods import Period
@@ -48,7 +49,7 @@ class CauseFactor:
     #: la variation du CA, et la couche B explique la variation du VOLUME. Les melanger dans un
     #: seul champ serait le melange de referentiels qu'AN-01 supprime.
     contribution: Optional[float]
-    confidence: Optional[float]
+    confidence: Optional[Confidence]
     hypothesis: Optional[str]
     layer: str = LAYER_REVENUE
     observability: str = OBSERVED
@@ -69,7 +70,7 @@ class CauseFactor:
             "previous_value": round(self.previous_value, 4) if self.previous_value is not None else None,
             "factor_change_pct": round(self.factor_change_pct, 4) if self.factor_change_pct is not None else None,
             "contribution": round(self.contribution, 4) if self.contribution is not None else None,
-            "confidence": round(self.confidence, 2) if self.confidence is not None else None,
+            "confidence": self.confidence.to_dict() if self.confidence is not None else None,
             "hypothesis": self.hypothesis,
             "explains": self.explains,
             "explains_share": round(self.explains_share, 4) if self.explains_share is not None else None,
@@ -114,7 +115,10 @@ class RootCauseAnalysis:
     #: seuil de primaute de la couche B EFFECTIVEMENT applique (D-089). Enregistre pour que le
     #: rapport soit auditable: sans lui, `to_dict()` retomberait sur le defaut et le seuil
     #: configure n'atteindrait jamais le rapport.
-    primacy_share: float = 0.5
+    #: valeur par defaut LUE dans la configuration: un litteral ici serait un duplicata
+    #: du seuil D-089, et deux proprietaires pour un seuil divergent toujours.
+    primacy_share: float = field(
+        default_factory=lambda: RootCauseConfig().paid_traffic_primacy_share)
     factors: List[CauseFactor] = field(default_factory=list)
     product_contributors: List[dict] = field(default_factory=list)
     campaign_contributors: List[dict] = field(default_factory=list)
@@ -177,22 +181,27 @@ def _pct(current: float, previous: float) -> Optional[float]:
     return ((current - previous) / abs(previous)) if previous else None
 
 
-def _confidence(contribution: Optional[float], quality_penalty: float) -> float:
-    """Heuristique documentee, PAS une probabilite statistique.
+def _fields_reliable(dataset: Dataset) -> Optional[bool]:
+    """Les champs qui alimentent la decomposition sont-ils DECLARES fiables ?
 
-    Base 0.35, +0.5 proportionnel a la part de variation expliquee, moins une
-    penalite de qualite de donnee. Bornee a [0.1, 0.9].
+    Lit le rapport qualite, qui est deja la source de verite sur la couverture (D-047). Aucun
+    seuil nouveau: le statut est celui que l'ingestion a inscrit.
     """
-    if contribution is None:
-        return 0.1
-    raw = 0.35 + 0.5 * min(abs(contribution), 1.0) - quality_penalty
-    return max(0.1, min(0.9, raw))
+    fields = getattr(dataset.quality, "fields", None)
+    if not fields:
+        return None
+    relevant = [f for key, f in fields.items()
+                if key in ("order_total", "order_created_at", "ad_clicks", "ad_spend")]
+    if not relevant:
+        return None
+    return all(getattr(f.status, "value", f.status) == "reliable" for f in relevant)
 
 
 def analyse_revenue_change(
     full: Dataset, current: Period, previous: Period,
     baseline: Optional[Sequence[Period]] = None,
     cfg: Optional[RootCauseConfig] = None,
+    cfg_anomaly: Optional[AnomalyConfig] = None,
 ) -> RootCauseAnalysis:
     """Decompose la variation du CA contre la MEME baseline que l'anomalie (AN-01).
 
@@ -252,14 +261,30 @@ def analyse_revenue_change(
     opc0 = (sum_orders / sum_clicks) if sum_clicks else None
 
     log_total = math.log(r1 / r0)
+    # Criteres d'AN-14, evalues UNE fois pour cette analyse.
+    #   baseline: la meme exigence que le detecteur d'anomalie (D-007), pas un nouveau seuil
+    #   champs:   la qualite DECLAREE des champs qui alimentent la decomposition
+    min_baseline = cfg_anomaly.min_baseline_periods if cfg_anomaly else n
+    fields_reliable = _fields_reliable(full)
 
-    def _observed(key, label, metric, v1, v0, penalty, hypothesis, layer, explains=None):
-        """Facteur OBSERVE. Contribution en couche A, part explicative en couche B."""
+    def _observed(key, label, metric, v1, v0, hypothesis, layer, explains=None,
+                  unobserved_competitor=None):
+        """Facteur OBSERVE. Contribution en couche A, part explicative en couche B.
+
+        AN-14: plus aucune penalite numerique. La confiance est derivee des quatre criteres du
+        contrat, et la part expliquee en est UN -- au lieu d'etre ecrasee par
+        `min(abs(contribution), 1.0)`.
+        """
         if not v1 or not v0 or v1 <= 0 or v0 <= 0:
             return CauseFactor(
                 factor=key, observed_fact=f"{label}: non calculable", supporting_metric=metric,
                 current_value=v1, previous_value=v0, factor_change_pct=None, contribution=None,
-                confidence=0.1, hypothesis="Donnee insuffisante pour evaluer ce facteur.",
+                confidence=assess(baseline_periods=n, min_baseline_periods=min_baseline,
+                                  fields_reliable=fields_reliable,
+                                  unobserved_competitor=unobserved_competitor,
+                                  contribution=None,
+                                  shares_interpretable=shares_interpretable),
+                hypothesis="Donnee insuffisante pour evaluer ce facteur.",
                 layer=layer, explains=explains,
             )
         change = _pct(v1, v0)
@@ -273,12 +298,16 @@ def analyse_revenue_change(
             log_orders = math.log(o1 / o0) if (o1 and o0) else None
             contribution = None
             explains_share = (math.log(v1 / v0) / log_orders) if log_orders else None
+        magnitude = contribution if contribution is not None else explains_share
         return CauseFactor(
             factor=key, observed_fact=f"{label} {change:+.1%} sur {current.label} {reference}",
             supporting_metric=metric, current_value=v1, previous_value=v0,
             factor_change_pct=change, contribution=contribution,
-            confidence=_confidence(contribution if contribution is not None else explains_share,
-                                   penalty),
+            confidence=assess(baseline_periods=n, min_baseline_periods=min_baseline,
+                              fields_reliable=fields_reliable,
+                              unobserved_competitor=unobserved_competitor,
+                              contribution=magnitude,
+                              shares_interpretable=shares_interpretable),
             hypothesis=hypothesis, layer=layer, explains=explains, explains_share=explains_share,
         )
 
@@ -296,20 +325,35 @@ def analyse_revenue_change(
             missing_source=_MISSING_SESSIONS,
         )
 
+    # AN-14: le critere de part expliquee porte sur la DECOMPOSITION. Elle est construite en
+    # deux passes: les contributions de couche A d'abord, puis la confiance qui les juge
+    # ensemble. Un facteur ne peut pas etre juge interpretable isolement quand un autre de la
+    # meme decomposition depasse 100 %.
+    layer_a_shares = [
+        math.log(v1 / v0) / log_total if (v1 and v0 and v1 > 0 and v0 > 0 and log_total) else None
+        for v1, v0 in ((float(o1), o0), (aov1, aov0))
+    ]
+    shares_interpretable = decomposition_interpretable(layer_a_shares)
+
     # COUCHE A -- identite arithmetique du CA, additive, somme des contributions = 1
+    # `order_volume` a DEUX concurrents non observes: le trafic organique et la conversion du
+    # site expliquent le meme volume et ne sont pas mesures (lecon d'AN-02). Sa dominance est
+    # donc confondue, et le critere le dit.
     analysis.factors.append(_observed(
-        "order_volume", "Volume de commandes", "orders", float(o1), o0, 0.10,
-        "La variation du CA est associee au NOMBRE de commandes.", LAYER_REVENUE))
+        "order_volume", "Volume de commandes", "orders", float(o1), o0,
+        "La variation du CA est associee au NOMBRE de commandes.", LAYER_REVENUE,
+        unobserved_competitor=True))
     analysis.factors.append(_observed(
-        "average_order_value", "Panier moyen", "aov", aov1, aov0, 0.05,
+        "average_order_value", "Panier moyen", "aov", aov1, aov0,
         "La variation du CA est associee a la valeur moyenne des commandes "
-        "(mix produit, remises, quantites).", LAYER_REVENUE))
+        "(mix produit, remises, quantites).", LAYER_REVENUE,
+        unobserved_competitor=False))
 
     # COUCHE B -- explications du volume de commandes, NON additives
     analysis.factors.append(_observed(
-        "paid_traffic", "Clics payants", "paid_clicks", float(c1), c0, 0.15,
+        "paid_traffic", "Clics payants", "paid_clicks", float(c1), c0,
         "La variation du volume de commandes est associee au trafic paye achete.",
-        LAYER_ORDER_VOLUME, explains="order_volume"))
+        LAYER_ORDER_VOLUME, explains="order_volume", unobserved_competitor=True))
     analysis.factors.append(_unobserved(
         "organic_traffic", "Trafic organique et direct", "order_volume"))
     analysis.factors.append(_unobserved(
