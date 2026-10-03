@@ -5,26 +5,51 @@ un dashboard, un PDF, un email ou un contexte LLM sans transformation metier.
 """
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from ..domain.models import Customer
 from .kpi import campaign_performance, product_performance
 from .timeseries import rolling_average
 
-def pseudonymise(customer_id: str) -> str:
-    """Identifiant stable et non reversible pour la sortie.
+#: nombre de clients decrits dans `customers.top_customers` (meme perimetre que
+#: `customer_concentration_top5`, dont les parts publiees sont les composantes)
+TOP_CUSTOMERS = 5
 
-    Depuis 004.4.2 (D-053), `customer_id` n'est plus un e-mail: c'est deja une
-    reference a cle (`c1:`/`g1:` + HMAC-SHA256 tronque), calculee avec la cle
-    d'identite de l'organisation (ou une cle CLI explicite/ephemere). Le hachage
-    ci-dessous n'ajoute donc aucune protection cryptographique; il conserve la
-    forme `cust_<12 hex>` du contrat de rapport, sans exposer la reference de
-    jointure stockee en base. Le pseudonyme est stable pour une meme cle; le
-    retrait complet des identifiants client du rapport est prevu en 004.5.
+
+def top_customers(customers: Dict[str, Customer], revenue: Optional[float]) -> List[dict]:
+    """Les plus gros clients de la periode, DECRITS et non designes (AN-17).
+
+    Le rapport exposait ici `customer_id = "cust_" + sha256(customer_ref)[:12]`. Ce n'etait
+    pas un agregat mais un IDENTIFIANT: deterministe et recalculable par qui detient la cle
+    d'identite de l'organisation, STABLE d'un rapport a l'autre -- donc suffisant pour suivre
+    un client dans le temps -- et inscrit dans `reports`, table que `reports_forbid_update`
+    (revision 0003) interdit de modifier. L'effacement client (D-056) remplace
+    `orders.customer_ref` par un tombstone et detruit les octets bruts; il ne touche pas, et
+    ne peut pas toucher, un rapport deja persiste. Le pseudonyme d'un client efface y
+    survivait indefiniment.
+
+    Le rang porte la meme information analytique sans designer personne: la concentration du
+    CA se lit dans les parts, la fidelite dans le nombre de commandes. Le CA absolu reste
+    derivable (`revenue_share` x `kpis.revenue.value`).
+
+    `revenue_share` partage le denominateur de `customer_concentration_top5`: la somme des
+    parts publiees EST cette concentration. Un CA de periode nul ne permet aucune part: la
+    reponse est `null`, jamais 0.0, comme pour le KPI.
+
+    L'ordre est celui du CA decroissant; a egalite, le tri stable de Python conserve l'ordre
+    de premiere apparition dans les commandes. Il ne depend donc d'aucune reference client,
+    et c'est ce qui rend le rapport independant de la cle d'identite (cf. D-058).
     """
-    digest = hashlib.sha256(customer_id.encode("utf-8")).hexdigest()
-    return f"cust_{digest[:12]}"
+    ranked = sorted(customers.values(), key=lambda c: c.revenue, reverse=True)[:TOP_CUSTOMERS]
+    return [
+        {
+            "rank": rank,
+            "orders": c.orders_count,
+            "revenue_share": round(c.revenue / revenue, 4) if revenue else None,
+        }
+        for rank, c in enumerate(ranked, start=1)
+    ]
 
 
 SYNTHETIC_MARKER = (
@@ -82,7 +107,8 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
                     engine_version: str, freshness: Optional[dict] = None) -> dict:
     currency = dataset.currency
     customers = window.customers()
-    top_customers = sorted(customers.values(), key=lambda c: c.revenue, reverse=True)[:5]
+    revenue_metric = kpis.get("revenue")
+    period_revenue = revenue_metric.value if revenue_metric is not None else None
 
     series_out = {}
     for name, points in series.items():
@@ -122,11 +148,7 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
             "new_customers": kpis["new_customers"].to_dict() if "new_customers" in kpis else None,
             "repeat_purchase_rate": kpis["repeat_purchase_rate"].to_dict() if "repeat_purchase_rate" in kpis else None,
             "concentration_top5": kpis["customer_concentration_top5"].to_dict() if "customer_concentration_top5" in kpis else None,
-            "top_customers": [
-                {"customer_id": pseudonymise(c.customer_id),
-                 "orders": c.orders_count, "revenue": round(c.revenue, 2)}
-                for c in top_customers
-            ],
+            "top_customers": top_customers(customers, period_revenue),
         },
         "products": product_performance(window),
         "marketing": {

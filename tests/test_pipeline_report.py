@@ -95,14 +95,19 @@ def test_analysis_is_deterministic(sample_paths):
     assert a == b
 
 
-def test_without_an_explicit_key_only_the_customer_pseudonyms_differ(sample_paths):
+def test_without_an_explicit_key_the_report_is_identical_anyway(sample_paths):
+    """AN-17 leve le risque residuel de D-058.
+
+    Avant, deux executions sans cle explicite tiraient deux cles ephemeres et ne differaient
+    QUE par les pseudonymes de `top_customers` -- seul endroit du rapport qui dependait de la
+    cle d'identite. Ce champ ayant disparu, la reproductibilite octet pour octet ne demande
+    plus de cle explicite.
+    """
     a = run_analysis(sample_paths, today=date(2026, 9, 14))
     b = run_analysis(sample_paths, today=date(2026, 9, 14))
     for report in (a, b):
         report["_meta"].pop("generated_at")
-    ids = [[c.pop("customer_id") for c in r["customers"]["top_customers"]] for r in (a, b)]
-    assert a == b  # KPI, series, constats, clients (hors pseudonymes): identiques
-    assert ids[0] != ids[1] and all(i.startswith("cust_") for i in ids[0] + ids[1])
+    assert a == b
 
 
 def test_time_series_length_matches_lookback(sample_report):

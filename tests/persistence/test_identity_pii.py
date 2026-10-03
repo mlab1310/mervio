@@ -427,12 +427,13 @@ def test_customer_kpis_do_not_depend_on_the_key(db, tenant_a, tenant_b):
         outcome = analyze_snapshot(tenant.session, store_id=tenant.store_id, snapshot_id=snapshot.id,
                                    today=date(2026, 9, 14))
         reports.append(analyses.get_report(tenant.session, tenant.store_id, outcome.report.id).report())
-    ids = []
     for report in reports:
         report["_meta"].pop("generated_at")
-        ids.append([c.pop("customer_id") for c in report["customers"]["top_customers"]])
-    assert reports[0] == reports[1]  # KPI, clients, constats: identiques; seule la cle differe
-    assert reports[0]["customers"]["total_active"] > 0 and ids[0] != ids[1]
+    # AN-17: le pseudonyme etait le SEUL champ ou la cle se voyait. Sans lui, deux
+    # organisations aux cles differentes produisent le meme rapport des memes octets.
+    assert reports[0] == reports[1]
+    assert reports[0]["customers"]["total_active"] > 0
+    assert reports[0]["customers"]["top_customers"]
 
 
 def test_the_import_fingerprint_depends_on_the_identity_key_and_the_new_normalization(db, tenant_a):

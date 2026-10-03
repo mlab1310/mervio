@@ -291,7 +291,8 @@ def test_the_cli_with_the_organization_key_file_reproduces_the_persisted_report(
     assert persisted == (out / REPORT_JSON).read_bytes()
     assert org_identity(tenant_a).export_hex() not in capsys.readouterr().out  # la cle n'est jamais affichee
 
-    # sans cle explicite: autre cle ephemere, donc autres pseudonymes, memes KPI
+    # sans cle explicite: autre cle ephemere, donc autres references d'instantane. Depuis AN-17
+    # le rapport, lui, ne depend plus de la cle (cf. tests/test_report_privacy.py).
     ephemeral = tmp_path / "ephemeral"
     assert main(["analyze", "--shopify-orders", SAMPLE_FILES["shopify_orders"], "--today", today.isoformat(),
                  "--out", str(ephemeral), "--ephemeral-identity-key"]) == 0

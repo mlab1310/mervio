@@ -20,9 +20,10 @@ La premiere egalite fait varier une PHRASE DESTINEE AU MARCHAND (`_recommendatio
 seconde fait varier la campagne citee par `campaign_opportunity`.
 
 Les tests de ce module n'exigent AUCUNE base de donnees: la preuve principale de F-01 doit etre
-executable hors CI complete. L'identite client est fixee par une cle EXPLICITE, sans quoi la
-cle ephemere de `run_analysis` (D-058, reserve 1) ferait varier les pseudonymes et masquerait
-ce qu'on mesure ici.
+executable hors CI complete. L'identite client est fixee par une cle EXPLICITE. Ce n'est plus
+necessaire depuis AN-17 -- le rapport ne porte plus de pseudonyme client, donc ses octets ne
+dependent plus de la cle -- mais la cle reste figee ici: ce module mesure UNE source de
+non-determinisme (`PYTHONHASHSEED`) et n'a aucune raison d'en laisser varier une seconde.
 """
 from __future__ import annotations
 
@@ -38,7 +39,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "f01_ties"
 TODAY = "2026-09-14"
-#: cle d'identite FIXE: isole F-01 du non-determinisme assume des pseudonymes (D-058)
+#: cle d'identite FIXE: une seule variable bouge dans ce module, `PYTHONHASHSEED`
 IDENTITY_HEX = "f0" * 32
 SEEDS = ("0", "1", "2", "7", "42")
 

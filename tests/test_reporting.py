@@ -139,17 +139,17 @@ def test_error_messages_redact_emails():
     assert "@" not in redact("valeur cassee jean.dupont@client.fr")
 
 
-# --- pseudonymisation des clients dans les livrables -----------------
-def test_customer_ids_are_pseudonymised_in_the_report(result):
-    """Un livrable circule: il ne doit contenir aucun email client."""
+# --- aucune designation de client dans les livrables -----------------
+def test_no_customer_designation_in_the_report(result):
+    """Un livrable circule: il ne doit designer aucun client.
+
+    AN-17 a remplace le pseudonyme `cust_<hash>` par un rang. D-023 exigeait la
+    pseudonymisation parce que `top_customers` portait des e-mails en clair; le pseudonyme
+    qui l'a remplacee etait lui-meme un identifiant (stable, recalculable, dans un artefact
+    immuable). La garantie est donc plus forte, pas seulement differente. Le detail de
+    l'inventaire et du contrat 2.0 est dans `tests/test_report_privacy.py`.
+    """
     payload = json.dumps(result.report)
-    assert "@example.com" not in payload
+    assert "@example.com" not in payload and "cust_" not in payload
     for customer in result.report["customers"]["top_customers"]:
-        assert customer["customer_id"].startswith("cust_")
-
-
-def test_pseudonym_is_stable_and_not_reversible():
-    from mervio.analytics.report import pseudonymise
-    assert pseudonymise("a@x.com") == pseudonymise("a@x.com")
-    assert pseudonymise("a@x.com") != pseudonymise("b@x.com")
-    assert "a@x.com" not in pseudonymise("a@x.com")
+        assert set(customer) == {"rank", "orders", "revenue_share"}

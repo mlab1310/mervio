@@ -71,11 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_identity_args(parser: argparse.ArgumentParser) -> None:
-    """Cle des references client (D-058). Par defaut ephemere: pseudonymes non liables d'une
-    execution a l'autre. Une cle explicite rend le rapport reproductible octet pour octet."""
+    """Cle des references client (D-058). Par defaut ephemere: les references `c1:`/`g1:` d'une
+    execution ne sont pas liables a celles d'une autre.
+
+    AN-17: le rapport ne porte plus aucun identifiant client, donc ses octets ne dependent plus
+    de cette cle. Une cle explicite reste necessaire pour reproduire une IDENTITE -- les
+    references d'un instantane persiste et son `inputs_sha256`, qui porte l'identifiant non
+    secret de la cle."""
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--identity-key-file", metavar="FICHIER",
-                       help="cle d'identite explicite (hexadecimal, 32 octets au moins): rapport reproductible")
+                       help="cle d'identite explicite (hexadecimal, 32 octets au moins): references client reproductibles")
     group.add_argument("--ephemeral-identity-key", action="store_true",
                        help="cle d'identite tiree pour cette execution (comportement par defaut)")
 
