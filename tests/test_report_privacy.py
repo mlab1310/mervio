@@ -215,8 +215,9 @@ def test_the_customer_identity_quality_field_is_still_measured(sample):
 # -- 4. constats, preuves, rendu, contexte LLM ---------------------------------------------
 
 def test_findings_and_evidence_carry_no_identifier(sample):
-    findings = (sample["critical_issues"] + sample["warnings"] + sample["opportunities"]
-                + sample["anomalies"] + sample["root_causes"] + sample["recommendations"])
+    findings = (sample["critical_issues"] + sample["warnings"] + sample["setup"]
+                + sample["opportunities"] + sample["anomalies"] + sample["root_causes"]
+                + sample["recommendations"])
     assert findings
     assert _refs_in(json.dumps(findings, ensure_ascii=False)) == []
 

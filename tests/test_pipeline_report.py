@@ -11,6 +11,8 @@ from mervio.llm import build_llm_context
 
 REQUIRED_KEYS = {
     "business_health_score", "period", "executive_summary", "critical_issues", "warnings",
+    # AN-18 / D-084: `setup` est une section de constats du contrat, pas un detail de rendu
+    "setup",
     "opportunities", "kpis", "profitability", "customers", "products", "marketing",
     "anomalies", "root_causes", "recommendations", "data_quality", "limitations",
 }
@@ -63,7 +65,7 @@ def test_profitability_is_declared_incomplete_on_sample(sample_report):
 
 
 def test_no_insight_invents_a_financial_impact(sample_report):
-    for bucket in ("critical_issues", "warnings", "opportunities"):
+    for bucket in ("critical_issues", "warnings", "setup", "opportunities"):
         for insight in sample_report[bucket]:
             if insight["estimated_impact"] is not None:
                 assert insight["estimated_impact_basis"], insight["type"]

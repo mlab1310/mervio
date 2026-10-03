@@ -101,7 +101,8 @@ def _all_confidences(report: dict):
     """Chaque objet de confiance du rapport, cote facteurs ET cote constats."""
     for factor in report["root_causes"][0]["factors"]:
         yield f"factor:{factor['factor']}", factor["confidence"]
-    for section in ("critical_issues", "warnings", "opportunities"):
+    # AN-18: `setup` porte des constats, donc des confiances (AN-14) a verifier comme les autres
+    for section in ("critical_issues", "warnings", "setup", "opportunities"):
         for item in report.get(section, []):
             yield f"{section}:{item['type']}", item["confidence"]
 
@@ -365,7 +366,7 @@ report = run_analysis(SourcePaths(shopify_orders=D + "/shopify_orders.csv",
                                   google_ads=D + "/google_ads.csv"),
                       today=date(2026, 9, 21))
 print(json.dumps({
-    "insights": [i["type"] for s in ("critical_issues", "warnings", "opportunities")
+    "insights": [i["type"] for s in ("critical_issues", "warnings", "setup", "opportunities")
                  for i in report[s]],
     "levels": [(f["factor"], (f["confidence"] or {}).get("level"))
                for f in report["root_causes"][0]["factors"]],

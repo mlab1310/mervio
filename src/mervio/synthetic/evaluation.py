@@ -96,7 +96,10 @@ def observe(report: dict, check: str, expected: Any, manifest: dict) -> Any:
         new = (kpis.get("new_customers") or {}).get("value")
         return (new / orders) if orders and new is not None else None
     if check == "insight_present":
-        types = {i.get("type") for key in ("critical_issues", "warnings", "opportunities") for i in report.get(key, [])}
+        # AN-18: `setup` est une section de constats comme les autres. Sans elle, l'evaluateur
+        # perdrait de vue tout constat qui y est classe, et une attente ne pourrait jamais le citer.
+        types = {i.get("type") for key in ("critical_issues", "warnings", "setup", "opportunities")
+                 for i in report.get(key, [])}
         return expected if expected in types else None
     # verites terrain hors du vocabulaire du moteur (angles morts): jamais observables aujourd'hui
     return None

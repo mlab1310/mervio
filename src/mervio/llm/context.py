@@ -37,7 +37,7 @@ _SHRINK_ORDER = ("evidence", "findings", "facts", "limitations", "hypotheses",
 
 _ENUMS = {
     "severity": {"high", "medium", "low", "info"},
-    "category": {"critical_issue", "warning", "opportunity"},
+    "category": {"critical_issue", "warning", "setup", "opportunity"},
     "direction": {"up", "down"},
     "assessment": {"favorable", "unfavorable", "neutral"},
     "data_quality": {"reliable", "incomplete", "unavailable"},
@@ -247,7 +247,10 @@ class _ContextBuilder:
 
     def _findings(self, report: Mapping[str, Any]):
         findings, links, facts = [], [], []
-        for section in ("critical_issues", "warnings", "opportunities"):
+        # AN-18 / D-084: l'ordre des sections EST l'ordre des constats transmis au modele, et
+        # c'est aussi l'ordre dans lequel les bornes les coupent. `_list` rend `[]` sur une cle
+        # absente: un rapport 1.x, qui n'a pas de `setup`, passe sans cas particulier (ND-04).
+        for section in _SECTIONS:
             for index, raw in enumerate(_list(report, section)):
                 item = _as_mapping(raw, f"{section}[{index}]")
                 finding_id = self._id(f"finding.{len(findings) + 1}")
@@ -615,7 +618,11 @@ class _ContextBuilder:
             self.truncation.setdefault(section, {"total": 0, "included": 0})["included"] = len(context[section])
 
 
-_CATEGORY = {"critical_issues": "critical_issue", "warnings": "warning", "opportunities": "opportunity"}
+#: sections de constat du rapport, dans l'ordre ratifie (AN-18 / D-084), et la categorie que
+#: chacune porte quand le constat ne la declare pas lui-meme.
+_CATEGORY = {"critical_issues": "critical_issue", "warnings": "warning",
+             "setup": "setup", "opportunities": "opportunity"}
+_SECTIONS = tuple(_CATEGORY)
 
 
 def _mapping(parent: Mapping[str, Any], key: str, path: Optional[str] = None) -> Mapping[str, Any]:

@@ -199,7 +199,7 @@ def test_no_checkout_recommendation_is_ever_emitted(sample, decline):
     """`web_analytics_sessions` n'est observe par aucune source aujourd'hui."""
     for report in (sample, decline):
         for item in (report["critical_issues"] + report["warnings"]
-                     + report["opportunities"]):
+                     + report["setup"] + report["opportunities"]):
             recommendation = (item.get("recommendation") or "").lower()
             assert "checkout" not in recommendation, (
                 f"{item['type']}: recommandation checkout sans trafic total observe"

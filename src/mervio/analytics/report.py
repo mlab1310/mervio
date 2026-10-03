@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from ..domain.models import Customer
+from .insights import CATEGORIES, SECTION_OF
 from .kpi import campaign_performance, product_performance
 from .timeseries import rolling_average
 
@@ -138,9 +139,10 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
         "period": {"current": period.to_dict(), "previous": prior.to_dict()},
         "executive_summary": _executive_summary(health, insights, kpis, period, currency,
                                                 freshness),
-        "critical_issues": [i.to_dict() for i in insights if i.category == "critical_issue"],
-        "warnings": [i.to_dict() for i in insights if i.category == "warning"],
-        "opportunities": [i.to_dict() for i in insights if i.category == "opportunity"],
+        # AN-18 / D-084: une liste par categorie, dans l'ORDRE ratifie. L'ordre des cles est
+        # l'ordre de lecture, et il survit a la serialisation: c'est elle qui circule.
+        **{SECTION_OF[category]: [i.to_dict() for i in insights if i.category == category]
+           for category in CATEGORIES},
         "kpis": {k: m.to_dict() for k, m in kpis.items()},
         "profitability": profitability.to_dict(),
         "customers": {

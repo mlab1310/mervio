@@ -55,6 +55,10 @@ from mervio.llm.contract import ContextLimits  # noqa: E402
 from mervio.llm.safety import sensitive_findings  # noqa: E402
 from mervio.reporting.executive import render_executive_report  # noqa: E402
 
+#: sections de constat du rapport, dans l'ordre ratifie (AN-18 / D-084). Ce script lit le
+#: RAPPORT, comme n'importe quel consommateur: il ne reprend pas les constantes du moteur.
+FINDING_SECTIONS = ("critical_issues", "warnings", "setup", "opportunities")
+
 #: Tolerance de rapprochement. Le rapport arrondit les KPI a 4 decimales et les
 #: montants de profitabilite a 2: au-dela d'un centime (plus une marge relative
 #: pour les tres gros totaux en float), l'ecart n'est plus un arrondi.
@@ -507,7 +511,9 @@ def report_checks(report: Dict[str, Any], rerun: Dict[str, Any]) -> Dict[str, st
     stripped = [copy.deepcopy(r) for r in (report, rerun)]
     for item in stripped:
         item["_meta"].pop("generated_at", None)
-    insight_types = {i["type"] for s in ("critical_issues", "warnings", "opportunities") for i in report[s]}
+    # AN-18: `setup` compte parmi les constats. Sans elle, `recommendations_linked_to_findings`
+    # tomberait en FAIL sur toute boutique Shopify, dont `profitability_unavailable` est classe la.
+    insight_types = {i["type"] for s in FINDING_SECTIONS for i in report[s]}
     profit = report["profitability"]
     return {
         "health_score_recomputed_from_dimensions": "PASS" if recomputed == health["score"] else "FAIL",
@@ -727,7 +733,7 @@ def _analyse_report(result, report, rerun, ref_orders, sources, identifiers, tim
         "anomalies": [{"metric": a["metric"], "direction": a["direction"], "severity": a["severity"],
                        "delta_pct": a["delta_pct"]} for a in report["anomalies"]],
         "root_cause_primary_factor": report["root_causes"][0]["primary_factor"] if report["root_causes"] else None,
-        "finding_types": [i["type"] for s in ("critical_issues", "warnings", "opportunities") for i in report[s]],
+        "finding_types": [i["type"] for s in FINDING_SECTIONS for i in report[s]],
         "data_quality_issue_kinds": dict(sorted(Counter(i["kind"] for i in report["data_quality"]["issues"]).items())),
         "limitations_count": len(report["limitations"]),
     }

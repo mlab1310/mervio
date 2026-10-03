@@ -124,7 +124,8 @@ def _pathological(report):
     huge["kpis"] = {f"metric_{i}": dict(report["kpis"]["revenue"], notes=[long_text] * 1000, key=f"m{i}")
                     for i in range(2000)}
     huge["kpis"].update({f"missing_{i}": dict(report["kpis"]["revenue"], value=None) for i in range(500)})
-    for section in ("critical_issues", "warnings", "opportunities", "anomalies", "recommendations"):
+    for section in ("critical_issues", "warnings", "setup", "opportunities", "anomalies",
+                    "recommendations"):
         huge[section] = [dict(item, evidence=[long_text] * 1000) if "evidence" in item else item
                          for item in report[section]] * 500
     huge["root_causes"] = report["root_causes"] * 200
@@ -252,7 +253,7 @@ def test_error_messages_never_echo_report_content():
 def test_null_optional_sections_are_accepted():
     report = minimal_report()
     report.update({section: None for section in ("anomalies", "root_causes", "critical_issues", "warnings",
-                                                 "opportunities", "recommendations", "limitations",
+                                                 "setup", "opportunities", "recommendations", "limitations",
                                                  "profitability", "data_quality")})
     report["period"]["previous"] = None
     context = build_llm_context(report)
@@ -286,7 +287,8 @@ def test_incoherent_report_cannot_smuggle_a_complete_profit(sample_report):
 
 def test_financial_impact_is_only_the_engine_value(sample_report, context):
     engine_impacts = sorted(i["estimated_impact"] for i in sample_report["critical_issues"]
-                            + sample_report["warnings"] + sample_report["opportunities"]
+                            + sample_report["warnings"] + sample_report["setup"]
+                            + sample_report["opportunities"]
                             if i["estimated_impact"] is not None)
     context_impacts = sorted(f["estimated_impact"] for f in context["findings"] if f["estimated_impact"] is not None)
     assert context_impacts == engine_impacts

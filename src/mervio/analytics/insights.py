@@ -24,6 +24,15 @@ from .root_cause import RootCauseAnalysis
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
+#: categories de constat, DANS L'ORDRE de lecture ratifie (AN-18 / D-084). `setup` n'est pas un
+#: probleme de l'entreprise: c'est une donnee qui n'est pas branchee. Elle se lit apres ce qui va
+#: mal et avant ce qu'il y a a saisir.
+CATEGORIES = ("critical_issue", "warning", "setup", "opportunity")
+#: liste du rapport portant chaque categorie. Le moteur possede cet ordre; le rapport s'y
+#: conforme. Les consommateurs (`reporting/`, `llm/`) continuent de ne lire QUE le rapport.
+SECTION_OF = {"critical_issue": "critical_issues", "warning": "warnings",
+              "setup": "setup", "opportunity": "opportunities"}
+
 #: metriques qui sont la DECOMPOSITION du CA, pas des problemes independants.
 #: Quand une baisse de CA est detectee, "commandes -28%" et "conversion -34%"
 #: decrivent le meme evenement: les emettre separement produit 5 alarmes pour
@@ -36,7 +45,7 @@ DECOMPOSITION_METRICS = {"orders", "aov", "orders_per_paid_click", "paid_clicks"
 class Insight:
     type: str
     severity: str  # high | medium | low | info
-    category: str  # critical_issue | warning | opportunity
+    category: str  # critical_issue | warning | setup | opportunity
     fact: str
     #: precise QUEL objet le constat vise, quand le type peut se repeter (un SKU, une
     #: campagne). Sans lui, deux `low_margin_product` auraient le MEME identifiant.
@@ -164,8 +173,15 @@ def build_insights(
 
     # 3. profitabilite non calculable
     if not profitability.data_available:
+        # AN-18 / D-084: `medium` + `warning` faisaient de ce constat une alerte business.
+        # Il est emis par CONSTRUCTION, pas par exception: `REQUIRED_COMPONENTS` exige
+        # `shipping_cost`, que `compute_profitability` pose a None sans condition (un export
+        # Shopify porte le port FACTURE, jamais le cout transporteur). Aucune boutique
+        # alimentee par CSV ne peut donc l'eviter: l'avertissement etait permanent, donc muet,
+        # et il occupait la section ou le marchand cherche ce qui va mal cette semaine.
+        # `info` + `setup` disent ce que c'est: une donnee a brancher, pas un probleme.
         insights.append(Insight(
-            type="profitability_unavailable", severity="medium", category="warning",
+            type="profitability_unavailable", severity="info", category="setup",
             fact="Le profit de contribution complet n'est pas calculable a partir des donnees fournies.",
             # AN-15: les limitations etaient de la PROSE. Les faits, eux, sont les composantes
             # de cout manquantes -- deja typées sur `ProfitabilityResult`. Chacune devient un fait

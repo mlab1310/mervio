@@ -196,11 +196,15 @@ def render_executive_report(report: dict) -> str:
         lines.append("  Dimensions non notees faute de donnees: "
                      + ", ".join(health["excluded_dimensions"]) + ".")
 
-    for section, key in (("CRITICAL ISSUES", "critical_issues"),
-                         ("WARNINGS", "warnings"),
-                         ("OPPORTUNITIES", "opportunities")):
+    # AN-18 / D-084: quatre sections, dans l'ordre ratifie. `setup` est lu avec `.get`: un
+    # rapport 1.x n'a pas cette cle et doit rester lisible (ND-04), comme `data_freshness`
+    # ajoute par AN-05. Les trois sections qui existent depuis 1.0 restent lues strictement.
+    for section, key, legacy in (("CRITICAL ISSUES", "critical_issues", False),
+                                 ("WARNINGS", "warnings", False),
+                                 ("SETUP", "setup", True),
+                                 ("OPPORTUNITIES", "opportunities", False)):
         lines += _title(section)
-        items = report[key]
+        items = (report.get(key) or []) if legacy else report[key]
         if not items:
             lines.append("  Aucun element detecte sur les dimensions mesurees.")
             continue

@@ -79,7 +79,10 @@ def declining() -> dict:
 
 def _evidence_blocks(report: dict):
     """Chaque liste de preuves du rapport, avec son emplacement. LES TROIS producteurs."""
-    for section in ("critical_issues", "warnings", "opportunities"):
+    # AN-18: `setup` est une section de constats. `profitability_unavailable`, dont la preuve
+    # est l'exemple meme d'AN-15 (composantes de cout NON OBSERVEES), y est desormais classe:
+    # l'omettre retirerait silencieusement ce producteur du perimetre mesure ici.
+    for section in ("critical_issues", "warnings", "setup", "opportunities"):
         for item in report.get(section, []):
             yield f"{section}[{item['type']}]", item["evidence"]
     for anomaly in report.get("anomalies", []):
@@ -230,14 +233,14 @@ def test_fact_ids_are_unique_within_their_block(report):
 def test_every_finding_has_a_stable_finding_id(report):
     """D-082: `finding_id` existait UNIQUEMENT dans `llm/context.py`, frappe localement, et etait
     absent du rapport. L'identifiant du constat doit venir du moteur, pas du consommateur."""
-    for section in ("critical_issues", "warnings", "opportunities"):
+    for section in ("critical_issues", "warnings", "setup", "opportunities"):
         for item in report.get(section, []):
             assert item["finding_id"], f"{item['type']}: identifiant de constat manquant"
             assert re.match(r"^[a-z0-9_.:-]+$", item["finding_id"])
 
 
 def test_finding_ids_are_unique_across_the_report(report):
-    ids = [i["finding_id"] for s in ("critical_issues", "warnings", "opportunities")
+    ids = [i["finding_id"] for s in ("critical_issues", "warnings", "setup", "opportunities")
            for i in report.get(s, [])]
     assert len(ids) == len(set(ids)), f"identifiants de constat dupliques: {ids}"
 
@@ -245,7 +248,7 @@ def test_finding_ids_are_unique_across_the_report(report):
 def test_the_finding_id_is_stable_across_runs(report):
     second = run_analysis(_paths(SAMPLE), today=date(2026, 9, 14))
     def ids(r):
-        return [i["finding_id"] for s in ("critical_issues", "warnings", "opportunities")
+        return [i["finding_id"] for s in ("critical_issues", "warnings", "setup", "opportunities")
                 for i in r.get(s, [])]
     assert ids(report) == ids(second)
 
@@ -352,7 +355,7 @@ report = run_analysis(SourcePaths(shopify_orders=D + "/shopify_orders.csv",
                                   google_ads=D + "/google_ads.csv"),
                       today=date(2026, 9, 21),
                       identity=CustomerIdentity(bytes.fromhex("cd" * 32)))
-facts = [i for s in ("critical_issues", "warnings", "opportunities") for item in report[s]
+facts = [i for s in ("critical_issues", "warnings", "setup", "opportunities") for item in report[s]
          for i in item["evidence"]]
 facts += [i for a in report["anomalies"] for i in a["evidence"]]
 facts += [i for d in report["business_health_score"]["dimensions"] for i in d["evidence"]]
