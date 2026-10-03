@@ -10,6 +10,9 @@ from statistics import mean, pstdev
 from typing import List, Optional
 
 from ..config import AnomalyConfig
+from .evidence import (
+    NO_COMPARISON, VS_BASELINE, Evidence, observed, to_dicts,
+)
 from .timeseries import SeriesPoint
 
 
@@ -21,6 +24,20 @@ DESIRABLE_DIRECTION = {
     "refunds": "down", "refund_rate": "down", "cac": "down",
     "ad_spend": "neutral", "paid_clicks": "neutral",
 }
+
+
+#: unite de chaque grandeur suivie. Sans elle, un consommateur devine si 0,18 est un ratio ou un
+#: montant -- exactement ce que les anciennes chaines le forcaient a faire.
+_METRIC_UNITS = {
+    "revenue": "currency", "refunds": "currency", "ad_spend": "currency", "aov": "currency",
+    "orders": "count", "units": "count", "paid_clicks": "count", "new_customers": "count",
+    "orders_per_paid_click": "ratio", "roas": "ratio", "gross_margin": "ratio",
+    "refund_rate": "ratio", "cac": "currency",
+}
+
+
+def _unit_of(metric: str) -> str:
+    return _METRIC_UNITS.get(metric, "ratio")
 
 
 def assess_direction(metric: str, direction: str) -> str:
@@ -44,7 +61,7 @@ class Anomaly:
     criterion: str
     severity: str  # low | medium | high
     assessment: str = "neutral"  # favorable | unfavorable | neutral
-    evidence: List[str] = field(default_factory=list)
+    evidence: List[Evidence] = field(default_factory=list)
     #: labels des periodes EFFECTIVEMENT retenues comme baseline (AN-01).
     #: Une baseline non declaree ne peut etre ni verifiee, ni reutilisee par la decomposition
     #: sans risque de divergence silencieuse.
@@ -59,7 +76,8 @@ class Anomaly:
             "delta_pct": round(self.delta_pct, 4) if self.delta_pct is not None else None,
             "z_score": round(self.z_score, 3) if self.z_score is not None else None,
             "direction": self.direction, "assessment": self.assessment, "method": self.method,
-            "criterion": self.criterion, "severity": self.severity, "evidence": self.evidence,
+            "criterion": self.criterion, "severity": self.severity,
+            "evidence": to_dicts(self.evidence),
             "baseline_periods": list(self.baseline_periods),
         }
 
@@ -125,14 +143,21 @@ def detect_anomalies(
         f"(|variation| >= {cfg.pct_threshold:.0%} vs moyenne des {len(baseline)} periodes precedentes"
         + (f" OU |z| >= {cfg.zscore_threshold}" if z is not None else "") + ")"
     )
-    evidence = [
-        f"{label or metric} observe sur {current_label}: {current:,.2f}",
-        f"attendu (moyenne {len(baseline)} periodes): {expected:,.2f}",
-    ]
-    if pct is not None:
-        evidence.append(f"ecart relatif: {pct:+.1%}")
+    # AN-15: la preuve DUPLIQUAIT `observed_value`, `expected_value`, `delta`, `delta_pct` et
+    # `z_score`, qui existent deja en champs typés sur le meme objet. Elle devient UN fait
+    # structure portant la grandeur, sa reference de baseline et sa comparaison -- plus une
+    # reformulation en prose de donnees dont on dispose.
+    evidence = [observed(
+        f"anomaly.{metric}", "evidence.anomaly.observed_vs_baseline",
+        metric_key=metric, source="analytics", unit=_unit_of(metric), period=current_label,
+        current=current, previous=expected, comparison=VS_BASELINE, delta_pct=pct,
+    )]
     if z is not None:
-        evidence.append(f"z-score: {z:+.2f}")
+        evidence.append(observed(
+            f"anomaly.{metric}.zscore", "evidence.anomaly.zscore",
+            metric_key=metric, source="analytics", unit="score", period=current_label,
+            current=z, comparison=NO_COMPARISON,
+        ))
 
     direction = "down" if delta < 0 else "up"
     return [Anomaly(

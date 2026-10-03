@@ -99,4 +99,9 @@ def test_concentration_penalty_is_applied_and_explained():
               make_order("#2", date(2026, 9, 9), "seul@x.com", [("A", 1, 500.0)])]
     ds = make_dataset(orders=orders, ads=[ad(date(2026, 9, 8), 100.0, 200)])
     customer = next(d for d in score_for(ds).dimensions if d.key == "customer_health")
-    assert any("concentration" in ev for ev in customer.evidence)
+    # AN-15: la preuve est un FAIT structure, plus une chaine ou chercher un mot.
+    keys = {ev.metric_key for ev in customer.evidence}
+    assert "customer_concentration_top5" in keys, keys
+    penalty = next(ev for ev in customer.evidence
+                   if ev.metric_key == "customer_concentration_top5")
+    assert penalty.current_value is not None and penalty.unit == "ratio"

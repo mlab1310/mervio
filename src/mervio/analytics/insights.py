@@ -13,6 +13,10 @@ from ..config import AnalyticsConfig
 from .confidence import (
     NOT_APPLICABLE, Confidence, assess, sort_rank,
 )
+from .evidence import (
+    NO_COMPARISON, VS_BASELINE, VS_PREVIOUS_PERIOD, Evidence, finding_id,
+    not_observed, observed, to_dicts,
+)
 from .anomaly import Anomaly
 from .kpi import Metric, product_performance
 from .profitability import ProfitabilityResult
@@ -34,17 +38,27 @@ class Insight:
     severity: str  # high | medium | low | info
     category: str  # critical_issue | warning | opportunity
     fact: str
-    evidence: List[str] = field(default_factory=list)
+    #: precise QUEL objet le constat vise, quand le type peut se repeter (un SKU, une
+    #: campagne). Sans lui, deux `low_margin_product` auraient le MEME identifiant.
+    scope: Optional[str] = None
+    evidence: List[Evidence] = field(default_factory=list)
     hypothesis: Optional[str] = None
     recommendation: Optional[str] = None
     estimated_impact: Optional[float] = None
     estimated_impact_basis: Optional[str] = None
     confidence: Optional[Confidence] = None
 
+    @property
+    def finding_id(self) -> str:
+        """Identite STABLE du constat (D-082). Elle vivait uniquement dans `llm/context.py`,
+        frappee localement: le consommateur fabriquait l'identite de ce qu'il consommait."""
+        return finding_id(self.type, self.scope)
+
     def to_dict(self) -> dict:
         return {
+            "finding_id": self.finding_id,
             "type": self.type, "severity": self.severity, "category": self.category,
-            "fact": self.fact, "evidence": self.evidence, "hypothesis": self.hypothesis,
+            "fact": self.fact, "evidence": to_dicts(self.evidence), "hypothesis": self.hypothesis,
             "recommendation": self.recommendation,
             "estimated_impact": round(self.estimated_impact, 2) if self.estimated_impact is not None else None,
             "estimated_impact_basis": self.estimated_impact_basis,
@@ -65,6 +79,10 @@ def build_insights(
     # `HealthConfig.concentration_warning`: deux proprietaires pour une regle, donc une
     # divergence qui attend.
     cfg = config or AnalyticsConfig()
+    # AN-15: chaque fait structure declare SA periode. Elle est deja portee par les
+    # metriques: aucune nouvelle plomberie, et aucune invention de date.
+    revenue_metric = kpis.get("revenue")
+    period_label = revenue_metric.period if revenue_metric is not None else None
     insights: List[Insight] = []
 
     # 1. anomalie de CA + cause probable
@@ -83,11 +101,22 @@ def build_insights(
             confidence=primary.confidence if primary else None,
         )
         if primary:
-            insight.evidence.append(primary.observed_fact)
-            insight.evidence.append(
-                f"contribution estimee a la variation: {primary.contribution:.0%}"
-                if primary.contribution is not None else "contribution non calculable"
-            )
+            insight.evidence.append(observed(
+                f"factor.{primary.factor}", "evidence.factor.change",
+                metric_key=primary.factor, source="analytics", unit="ratio",
+                period=root_cause.period, current=primary.factor_change_pct,
+                comparison=VS_BASELINE,
+            ) if primary.factor_change_pct is not None else not_observed(
+                f"factor.{primary.factor}", "evidence.factor.not_computable",
+                metric_key=primary.factor, source="analytics"))
+            insight.evidence.append(observed(
+                f"factor.{primary.factor}.contribution", "evidence.factor.contribution",
+                metric_key="contribution", source="analytics", unit="ratio",
+                period=root_cause.period, current=primary.contribution,
+            ) if primary.contribution is not None else not_observed(
+                f"factor.{primary.factor}.contribution",
+                "evidence.factor.contribution_not_computable",
+                metric_key="contribution", source="analytics"))
             insight.hypothesis = primary.hypothesis
             insight.recommendation = _recommendation_for(primary.factor, root_cause)
         else:
@@ -102,11 +131,13 @@ def build_insights(
             continue
         # rattachement a l'insight de CA au lieu d'une alerte separee
         if revenue_insight is not None and anomaly.metric in DECOMPOSITION_METRICS:
-            arrow = "+" if anomaly.direction == "up" else ""
-            revenue_insight.evidence.append(
-                f"{anomaly.metric}: {arrow}{anomaly.delta_pct:.1%} vs baseline"
-                if anomaly.delta_pct is not None else f"{anomaly.metric}: ecart detecte"
-            )
+            revenue_insight.evidence.append(observed(
+                f"anomaly.{anomaly.metric}.delta_pct", "evidence.anomaly.delta_vs_baseline",
+                metric_key=anomaly.metric, source="analytics", unit="ratio",
+                period=anomaly.period, current=anomaly.delta_pct, comparison=VS_BASELINE,
+            ) if anomaly.delta_pct is not None else not_observed(
+                f"anomaly.{anomaly.metric}.delta_pct", "evidence.anomaly.delta_not_computable",
+                metric_key=anomaly.metric, source="analytics"))
             continue
         if anomaly.assessment == "favorable":
             category, severity = "opportunity", "info"
@@ -136,7 +167,19 @@ def build_insights(
         insights.append(Insight(
             type="profitability_unavailable", severity="medium", category="warning",
             fact="Le profit de contribution complet n'est pas calculable a partir des donnees fournies.",
-            evidence=profitability.limitations,
+            # AN-15: les limitations etaient de la PROSE. Les faits, eux, sont les composantes
+            # de cout manquantes -- deja typées sur `ProfitabilityResult`. Chacune devient un fait
+            # NON OBSERVE: aucune valeur fabriquee, et la source manquante est nommee. Le texte
+            # de limitation reste dans `limitations`, ou AN-19 le passera au catalogue.
+            evidence=[
+                not_observed(f"cost.{component.key}", "evidence.cost.not_observed",
+                             metric_key=component.key, source=component.source)
+                if not component.available else
+                observed(f"cost.{component.key}", "evidence.cost.observed",
+                         metric_key=component.key, source=component.source, unit="currency",
+                         period=period_label, current=component.value)
+                for component in profitability.components.values()
+            ],
             hypothesis=None,
             recommendation="Renseigner les couts manquants ("
                            + ", ".join(profitability.missing_components)
@@ -152,9 +195,18 @@ def build_insights(
                 type="low_margin_product", severity="medium", category="warning",
                 fact=f"{product['title']} ({product['sku']}) degage une marge brute de "
                      f"{product['gross_margin']:.1%}.",
-                evidence=[f"CA periode: {product['revenue']:,.2f} {currency}",
-                          f"cout marchandise: {product['cogs']:,.2f} {currency}",
-                          f"unites vendues: {product['units']}"],
+                scope=product["sku"],
+                evidence=[
+                    observed(f"product.{product['sku']}.revenue", "evidence.product.revenue",
+                             metric_key="revenue", source="shopify_orders", unit="currency",
+                             period=period_label, current=product["revenue"]),
+                    observed(f"product.{product['sku']}.cogs", "evidence.product.cogs",
+                             metric_key="cogs", source="shopify_products", unit="currency",
+                             period=period_label, current=product["cogs"]),
+                    observed(f"product.{product['sku']}.units", "evidence.product.units",
+                             metric_key="units", source="shopify_orders", unit="count",
+                             period=period_label, current=float(product["units"])),
+                ],
                 hypothesis="Marge faible: prix, cout d'achat ou remises appliquees.",
                 recommendation="Reevaluer le prix ou le cout d'achat de cette reference.",
                 estimated_impact=None, estimated_impact_basis=None,
@@ -167,7 +219,10 @@ def build_insights(
         insights.append(Insight(
             type="customer_concentration", severity="medium", category="warning",
             fact=f"Les 5 plus gros clients representent {concentration.value:.1%} du CA de la periode.",
-            evidence=[concentration.definition],
+            evidence=[observed(
+                "kpi.customer_concentration_top5", "evidence.kpi.value",
+                metric_key="customer_concentration_top5", source="shopify_orders",
+                unit="ratio", period=period_label, current=concentration.value)],
             hypothesis="Dependance commerciale a un petit nombre de comptes.",
             recommendation="Diversifier l'acquisition pour reduire le risque de concentration.",
             estimated_impact=None, estimated_impact_basis=None,
@@ -185,8 +240,20 @@ def build_insights(
                 type="campaign_opportunity", severity="info", category="opportunity",
                 fact=f"La campagne {best['name']} a augmente ses conversions de "
                      f"{best['conversions_delta']:.0f} sur la periode.",
-                evidence=[f"depense: {best['spend_current']:,.2f} vs {best['spend_previous']:,.2f} {currency}",
-                          f"conversions: {best['conversions_current']:.0f} vs {best['conversions_previous']:.0f}"],
+                scope=best["campaign_id"],
+                evidence=[
+                    observed(f"campaign.{best['campaign_id']}.spend",
+                             "evidence.campaign.spend",
+                             metric_key="campaign_spend", source="google_ads", unit="currency",
+                             period=period_label, current=best["spend_current"],
+                             previous=best["spend_previous"], comparison=VS_PREVIOUS_PERIOD),
+                    observed(f"campaign.{best['campaign_id']}.conversions",
+                             "evidence.campaign.conversions",
+                             metric_key="campaign_conversions", source="google_ads", unit="count",
+                             period=period_label, current=best["conversions_current"],
+                             previous=best["conversions_previous"],
+                             comparison=VS_PREVIOUS_PERIOD),
+                ],
                 hypothesis="Cette campagne absorbe la demande mieux que les autres sur la periode.",
                 recommendation="Tester une hausse de budget maitrisee sur cette campagne et mesurer le CPA.",
                 estimated_impact=None,

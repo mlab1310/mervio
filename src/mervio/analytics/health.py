@@ -14,6 +14,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..config import HealthConfig
 from ..domain.quality import DataQualityReport
+from .evidence import (
+    NO_COMPARISON, VS_PREVIOUS_PERIOD, Evidence, not_observed, observed, to_dicts,
+)
 from .kpi import Metric, product_performance
 from .profitability import ProfitabilityResult
 from .timeseries import Comparison
@@ -49,7 +52,10 @@ class DimensionScore:
     available: bool
     formula: str
     thresholds: str
-    evidence: List[str] = field(default_factory=list)
+    #: AN-15 / D-090 = A: le critere d'acceptation << aucun nombre dans une chaine de
+    #: preuve >> ne distingue pas les producteurs, et `llm/context.py` passait ces
+    #: chaines au modele COMME PREUVES. `health.py` est donc dans le perimetre.
+    evidence: List[Evidence] = field(default_factory=list)
     reason_unavailable: str = ""
 
     def to_dict(self) -> dict:
@@ -58,7 +64,7 @@ class DimensionScore:
             "score": round(self.score, 1) if self.score is not None else None,
             "weight": round(self.weight, 4), "available": self.available,
             "formula": self.formula, "thresholds": self.thresholds,
-            "evidence": self.evidence, "reason_unavailable": self.reason_unavailable,
+            "evidence": to_dicts(self.evidence), "reason_unavailable": self.reason_unavailable,
         }
 
 
@@ -112,7 +118,10 @@ def compute_business_health(
             w["revenue_growth"], True,
             "interpolation lineaire de la variation du CA vs periode precedente",
             str(cfg.revenue_growth_thresholds),
-            [f"CA {growth.pct_change:+.1%} ({growth.current_period} vs {growth.previous_period})"],
+            [observed("health.revenue_growth.change", "evidence.health.revenue_growth",
+                      metric_key="revenue", source="shopify_orders", unit="ratio",
+                      period=growth.current_period, current=growth.pct_change,
+                      comparison=VS_PREVIOUS_PERIOD)],
         ))
     else:
         dims.append(DimensionScore("revenue_growth", "Croissance du CA", None, w["revenue_growth"], False,
@@ -131,15 +140,23 @@ def compute_business_health(
             w["profitability"], True,
             "interpolation lineaire de la marge de contribution complete",
             str(cfg.profitability_thresholds),
-            [f"marge de contribution complete: {margin:.1%}"],
+            [observed("health.profitability.full_margin", "evidence.health.full_margin",
+                      metric_key="contribution_profit", source="analytics", unit="ratio",
+                      current=margin)],
         ))
     elif blocking:
         dims.append(DimensionScore(
             "profitability", "Profitabilite", None, w["profitability"], False,
             "-", str(cfg.profitability_thresholds),
-            ([f"marge partielle observee: {profitability.partial_contribution_margin:.1%} "
-              f"(non notee: elle exclut {', '.join(blocking)})"]
-             if profitability.partial_contribution_margin is not None else []),
+            ([observed("health.profitability.partial_margin",
+                       "evidence.health.partial_margin_not_scored",
+                       metric_key="contribution_profit", source="analytics", unit="ratio",
+                       current=profitability.partial_contribution_margin)]
+             + [not_observed(f"cost.{key}", "evidence.cost.not_observed", metric_key=key,
+                             source="analytics") for key in blocking]
+             if profitability.partial_contribution_margin is not None else
+             [not_observed(f"cost.{key}", "evidence.cost.not_observed", metric_key=key,
+                           source="analytics") for key in blocking]),
             "composante de cout majeure manquante: " + ", ".join(blocking)
             + " - noter cette dimension surestimerait la sante reelle",
         ))
@@ -150,8 +167,11 @@ def compute_business_health(
             w["profitability"], True,
             "interpolation lineaire de la marge de contribution partielle (couts majeurs presents)",
             str(cfg.profitability_thresholds),
-            [f"marge de contribution PARTIELLE: {profitability.partial_contribution_margin:.1%}",
-             "couts exclus (mineurs): " + ", ".join(profitability.missing_components)],
+            [observed("health.profitability.partial_margin", "evidence.health.partial_margin",
+                      metric_key="contribution_profit", source="analytics", unit="ratio",
+                      current=profitability.partial_contribution_margin)]
+            + [not_observed(f"cost.{key}", "evidence.cost.not_observed", metric_key=key,
+                            source="analytics") for key in profitability.missing_components],
         ))
     else:
         dims.append(DimensionScore("profitability", "Profitabilite", None, w["profitability"], False,
@@ -163,7 +183,10 @@ def compute_business_health(
         dims.append(DimensionScore(
             "marketing_efficiency", "Efficacite marketing", interpolate(roas.value, cfg.roas_thresholds),
             w["marketing_efficiency"], True, "interpolation lineaire du ROAS global",
-            str(cfg.roas_thresholds), [f"ROAS {roas.value:.2f}"],
+            str(cfg.roas_thresholds),
+            [observed("health.marketing_efficiency.roas", "evidence.kpi.value",
+                      metric_key="roas", source="google_ads", unit="ratio",
+                      current=roas.value)],
         ))
     else:
         dims.append(DimensionScore("marketing_efficiency", "Efficacite marketing", None,
@@ -175,13 +198,16 @@ def compute_business_health(
     concentration = kpis.get("customer_concentration_top5")
     if repeat and repeat.available:
         base = interpolate(repeat.value, cfg.repeat_thresholds)
-        evidence = [f"taux de reachat intra-periode {repeat.value:.1%}"]
+        evidence = [observed("health.customer_health.repeat_rate", "evidence.kpi.value",
+                             metric_key="repeat_purchase_rate", source="shopify_orders",
+                             unit="ratio", current=repeat.value)]
         if concentration and concentration.available and concentration.value >= cfg.concentration_warning:
             base = max(0.0, base - cfg.concentration_penalty)
-            evidence.append(
-                f"penalite de concentration: top 5 clients = {concentration.value:.1%} du CA "
-                f"(seuil {cfg.concentration_warning:.0%}, -{cfg.concentration_penalty:.0f} pts)"
-            )
+            evidence.append(observed(
+                "health.customer_health.concentration", "evidence.health.concentration_penalty",
+                metric_key="customer_concentration_top5", source="shopify_orders", unit="ratio",
+                current=concentration.value, previous=cfg.concentration_warning,
+                comparison=NO_COMPARISON))
         dims.append(DimensionScore("customer_health", "Sante client", base, w["customer_health"], True,
                                    "interpolation du taux de reachat, moins une penalite de concentration",
                                    str(cfg.repeat_thresholds), evidence))
@@ -197,8 +223,14 @@ def compute_business_health(
         weighted = sum(p["gross_margin"] * p["revenue"] for p in with_margin) / covered_revenue
         total_revenue_all = sum(p["revenue"] for p in products) or 1.0
         coverage = covered_revenue / total_revenue_all
-        evidence = [f"marge brute ponderee {weighted:.1%}",
-                    f"couverture cout: {coverage:.0%} du CA article"]
+        evidence = [
+            observed("health.product_health.weighted_margin", "evidence.kpi.value",
+                     metric_key="product_gross_margin", source="shopify_products", unit="ratio",
+                     current=weighted),
+            observed("health.product_health.coverage", "evidence.health.cost_coverage",
+                     metric_key="data_quality_coverage", source="shopify_products", unit="ratio",
+                     current=coverage),
+        ]
         if coverage < cfg.min_product_coverage:
             # une marge calculee sur une minorite du catalogue ne represente pas
             # le catalogue: on n'extrapole pas, on exclut.
@@ -225,7 +257,10 @@ def compute_business_health(
         dims.append(DimensionScore("data_quality", "Qualite de la donnee", ratio * 100.0,
                                    w["data_quality"], True,
                                    "part des champs suivis classes 'reliable'", "lineaire 0-100",
-                                   [f"{ratio:.0%} des champs suivis sont fiables"]))
+                                   [observed("health.data_quality.reliable_share",
+                                             "evidence.health.reliable_fields",
+                                             metric_key="data_quality_coverage",
+                                             source="analytics", unit="ratio", current=ratio)]))
     else:
         dims.append(DimensionScore("data_quality", "Qualite de la donnee", None, w["data_quality"], False,
                                    "-", "lineaire 0-100", [], "aucun champ suivi"))

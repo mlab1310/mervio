@@ -43,6 +43,9 @@ _ENUMS = {
     "data_quality": {"reliable", "incomplete", "unavailable"},
     "freshness_status": {"fresh", "stale", "unknown"},
     "confidence_level": {"low", "medium", "high"},
+    "observability": {"observed", "not_observed"},
+    "comparison": {"baseline", "previous_period", "none"},
+    "unit": {"currency", "count", "ratio", "score", "days"},
 }
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 
@@ -97,8 +100,11 @@ class _ContextBuilder:
             raise LLMContextError("rapport incomplet: _meta.engine_version absent")
 
         facts, unavailable = self._kpis(kpis)
-        findings, recommendations_links = self._findings(report)
+        findings, recommendations_links, finding_facts = self._findings(report)
         evidence, root_causes, factor_hypotheses = self._evidence(report)
+        # les faits des constats rejoignent la section evidence: UN seul endroit ou le
+        # modele trouve un fait, et un seul ou le citer.
+        evidence = finding_facts + evidence
         profitability = self._profitability(report.get("profitability"))
         unavailable.extend(self._unavailable_profitability(profitability))
 
@@ -132,6 +138,54 @@ class _ContextBuilder:
         return context
 
     # -- sections ---------------------------------------------------------
+    def _structured_evidence(self, raw: Any, path: str) -> List[Dict[str, Any]]:
+        """Faits structures transmis au modele (AN-15 / D-082).
+
+        Les valeurs restent des NOMBRES et les champs non observes restent `null`. Le modele peut
+        donc citer un chiffre en le referencant, au lieu de le reparser depuis du francais.
+        """
+        items: List[Dict[str, Any]] = []
+        # BORNE, comme toute autre liste du contexte. Un fait structure pese plus qu'une chaine
+        # courte (~13 champs typés contre une phrase), et la mesure 004.5-B signalait precisement
+        # ce risque de volume: sans borne, un rapport pathologique depassait `max_context_bytes`
+        # et `_finalise` finissait par refuser. Meme limite que les chaines par element, pour que
+        # la borne ne depende pas d'un reglage nouveau.
+        bounded = self._bound(_opt_list(raw, path), self.limits.max_strings_per_item, path,
+                              record=False)
+        for index, entry in enumerate(bounded):
+            if isinstance(entry, str):
+                # Rapport 1.x (ND-04: ils restent lisibles). Une CHAINE n'est pas un fait, et
+                # c'est tout le propos d'AN-15: la prose n'est pas transmise comme preuve. Le
+                # modele recoit donc un fait NON OBSERVE sans valeur -- ce qui est exact, un
+                # rapport 1.x n'a pas de preuve structuree. Aucune compatibilite deguisee qui
+                # ferait survivre l'ancien contrat sous un autre nom.
+                items.append({
+                    "fact_id": None, "message_key": None, "metric_key": None, "source": None,
+                    "observability": "not_observed", "period": None, "comparison": "none",
+                    "unit": None, "current_value": None, "previous_value": None,
+                    "delta": None, "delta_pct": None,
+                })
+                continue
+            fact = _as_mapping(entry, f"{path}[{index}]")
+            items.append({
+                "fact_id": _slug(fact.get("fact_id", "")) if fact.get("fact_id") else None,
+                "message_key": _message_key(fact.get("message_key"),
+                                            f"{path}[{index}].message_key"),
+                "metric_key": _slug(fact["metric_key"]) if fact.get("metric_key") else None,
+                "source": _slug(fact["source"]) if fact.get("source") else None,
+                "observability": self._enum(fact.get("observability"), "observability",
+                                            f"{path}[{index}].observability"),
+                "period": self._text(fact["period"], f"{path}[{index}].period")
+                if fact.get("period") else None,
+                "comparison": self._enum(fact.get("comparison"), "comparison",
+                                         f"{path}[{index}].comparison"),
+                "unit": self._enum(fact.get("unit"), "unit", f"{path}[{index}].unit")
+                if fact.get("unit") else None,
+                **_numbers(fact, ("current_value", "previous_value", "delta", "delta_pct"),
+                           f"{path}[{index}]"),
+            })
+        return items
+
     def _confidence(self, raw: Any, path: str) -> Optional[str]:
         """Niveau qualitatif, jamais un nombre (AN-14 / D-081).
 
@@ -192,7 +246,7 @@ class _ContextBuilder:
         return facts, unavailable
 
     def _findings(self, report: Mapping[str, Any]):
-        findings, links = [], []
+        findings, links, facts = [], [], []
         for section in ("critical_issues", "warnings", "opportunities"):
             for index, raw in enumerate(_list(report, section)):
                 item = _as_mapping(raw, f"{section}[{index}]")
@@ -205,7 +259,21 @@ class _ContextBuilder:
                     "category": self._enum(item.get("category", _CATEGORY[section]), "category", path),
                     "severity": self._enum(item.get("severity"), "severity", path),
                     "statement": self._text(item.get("fact", ""), path + ".statement"),
-                    "evidence_text": self._texts(item.get("evidence"), path + ".evidence_text"),
+                    # AN-15: `evidence_text` envoyait des chaines FRANCAISES au modele comme
+                    # preuves, donc il ne pouvait pas distinguer un fait mesure d'un texte genere.
+                    # Le constat REFERENCE desormais ses faits par identifiant, et les faits
+                    # eux-memes vivent dans la section `evidence`.
+                    #
+                    # Reference et non imbrication, pour deux raisons mesurees. D'abord la
+                    # convention du depot est deja la reference (`hypotheses[].supports`,
+                    # `root_causes[].factor_ids`, `recommendations[].source_finding`). Ensuite
+                    # l'imbrication dupliquait structurellement la section `evidence`: mesure sur
+                    # data/sample, 4 989 octets sur 6 789 de la section `findings`, et le contexte
+                    # passait de 24 365 a 31 918 octets, au point qu'un plafond de 12 000 ne
+                    # pouvait plus etre atteint par les bornes.
+                    "evidence_ids": self._collect_facts(
+                        item.get("evidence"), finding_id, path + ".evidence", facts),
+                    "finding_id": _slug(item.get("finding_id", "")) if item.get("finding_id") else None,
                     "confidence": self._confidence(item.get("confidence"),
                                                    f"{section}[{index}].confidence"),
                     "estimated_impact": impact,
@@ -216,7 +284,17 @@ class _ContextBuilder:
                 })
                 links.append((finding_id, _slug(item.get("type", "")),
                               self._opt_text(item.get("recommendation"), path + ".recommendation", flag=False)))
-        return findings, links
+        return findings, links, facts
+
+    def _collect_facts(self, raw: Any, finding_id: str, path: str,
+                       sink: List[Dict[str, Any]]) -> List[str]:
+        """Pousse les faits d'un constat dans la section `evidence` et rend leurs identifiants."""
+        ids: List[str] = []
+        for offset, fact in enumerate(self._structured_evidence(raw, path), start=1):
+            item_id = self._id(f"{finding_id}.fact.{offset}")
+            sink.append({"id": item_id, "kind": "finding_fact", **fact})
+            ids.append(item_id)
+        return ids
 
     def _evidence(self, report: Mapping[str, Any]):
         evidence, root_causes, hypotheses = [], [], []
@@ -399,7 +477,9 @@ class _ContextBuilder:
                 "label": self._text(dim.get("label", ""), path + ".label"),
                 "available": bool(dim.get("available", False)),
                 **_numbers(dim, ("score", "weight"), f"business_health_score.dimensions[{index}]"),
-                "evidence": self._texts(dim.get("evidence"), path + ".evidence"),
+                # D-090 = A: la preuve des dimensions de sante est dans le perimetre
+                "evidence": self._structured_evidence(dim.get("evidence"),
+                                                      path + ".evidence"),
                 "reason_unavailable": self._text(dim.get("reason_unavailable", ""), path + ".reason_unavailable"),
             })
         return {

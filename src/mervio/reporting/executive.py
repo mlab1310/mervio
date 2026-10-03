@@ -54,6 +54,50 @@ _CRITERION_STATE_LABEL = {"satisfied": "oui", "not_satisfied": "non",
                           "not_applicable": "sans objet"}
 
 
+def _format_value(value, unit: str, currency: str) -> str:
+    """Rend UNE valeur depuis son unite declaree. Avant AN-15, l'unite etait implicite dans la
+    chaine et un consommateur devait deviner si 0,18 etait un ratio ou un montant."""
+    if value is None:
+        return "non observe"
+    if unit == "currency":
+        return f"{value:,.2f} {currency}"
+    if unit == "ratio":
+        return f"{value:.1%}"
+    if unit == "count":
+        return f"{value:,.0f}"
+    return f"{value:,.2f}"
+
+
+def _evidence_lines(items, currency: str) -> List[str]:
+    """Rendu DERIVE du fait structure (AN-15).
+
+    Le texte reste la representation finale; il n'est plus la source de verite. Chaque ligne est
+    reconstruite depuis les champs typés, donc aucun nombre affiche ne peut diverger du fait.
+    """
+    lines: List[str] = []
+    for fact in items or []:
+        if isinstance(fact, str):  # rapport 1.x: lisible, non reformate (ND-04)
+            lines.append(fact)
+            continue
+        label = fact.get("metric_key") or "fait"
+        if fact.get("observability") != "observed":
+            lines.append(f"{label}: non observe (source manquante: {fact.get('source') or '?'})")
+            continue
+        unit = fact.get("unit") or ""
+        rendered = f"{label}: {_format_value(fact.get('current_value'), unit, currency)}"
+        if fact.get("previous_value") is not None:
+            reference = {"baseline": "baseline", "previous_period": "periode precedente"}.get(
+                fact.get("comparison"), "reference")
+            rendered += (f" vs {reference} "
+                         f"{_format_value(fact['previous_value'], unit, currency)}")
+        if fact.get("delta_pct") is not None:
+            rendered += f" ({fact['delta_pct']:+.1%})"
+        if fact.get("period"):
+            rendered += f" [{fact['period']}]"
+        lines.append(rendered)
+    return lines
+
+
 def _confidence_lines(confidence, *, prefix: str) -> List[str]:
     """Niveau de confiance ET les criteres qui le produisent (AN-14 / D-081).
 
@@ -93,7 +137,7 @@ def _insight_block(item: dict, currency: str) -> List[str]:
     lines = [f"  [{_SEVERITY_LABEL.get(item['severity'], item['severity'].upper())}]"]
     for index, chunk in enumerate(_wrap(item["fact"])):
         lines.append(("  FACT   : " if index == 0 else pad + "  ") + chunk)
-    for evidence in item["evidence"]:
+    for evidence in _evidence_lines(item["evidence"], currency):
         for index, chunk in enumerate(_wrap(evidence, indent=12)):
             lines.append(("  PREUVE : " if index == 0 else pad + "  ") + chunk)
     if item.get("hypothesis"):
