@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from ..domain.models import Customer
-from .insights import CATEGORIES, SECTION_OF
+from .insights import CATEGORIES, SECTION_OF, message_fields
 from .kpi import campaign_performance, product_performance
 from .timeseries import rolling_average
 
@@ -75,9 +75,11 @@ def _executive_summary(health, insights, kpis, period, currency, freshness=None)
         parts.append(f"Business Health Score: {health.score}/100. {health.interpretation}")
     critical = [i for i in insights if i.category == "critical_issue"]
     if critical:
-        parts.append(f"Point principal: {critical[0].fact}")
-        if critical[0].hypothesis:
-            parts.append(f"Hypothese: {critical[0].hypothesis}")
+        # AN-19: le resume REPREND le texte rendu du constat; il ne le reformule pas. Ses
+        # propres phrases restent hors catalogue (D-1, laisse a G-27 / 004.7).
+        parts.append(f"Point principal: {critical[0].fact.text}")
+        if critical[0].hypothesis is not None:
+            parts.append(f"Hypothese: {critical[0].hypothesis.text}")
     else:
         parts.append("Aucun probleme critique detecte sur les dimensions mesurees.")
     return " ".join(parts)
@@ -86,7 +88,7 @@ def _executive_summary(health, insights, kpis, period, currency, freshness=None)
 def _limitations(dataset, profitability, root_cause, health) -> List[str]:
     out: List[str] = list(profitability.limitations)
     if root_cause and root_cause.limitations:
-        out.extend(root_cause.limitations)
+        out.extend(item.text for item in root_cause.limitations)
     if health.excluded_dimensions:
         out.append("Dimensions exclues du Business Health Score (non calculables): "
                    + ", ".join(health.excluded_dimensions))
@@ -169,10 +171,10 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
         "recommendations": [
             {
                 "source_insight": i.type, "severity": i.severity,
-                "recommendation": i.recommendation,
+                **message_fields("recommendation", i.recommendation),
                 "confidence": i.confidence.to_dict() if i.confidence is not None else None,
                 "estimated_impact": round(i.estimated_impact, 2) if i.estimated_impact is not None else None,
-                "estimated_impact_basis": i.estimated_impact_basis,
+                **message_fields("estimated_impact_basis", i.estimated_impact_basis),
             }
             for i in insights if i.recommendation
         ],

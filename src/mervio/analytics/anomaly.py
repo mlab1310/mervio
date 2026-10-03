@@ -13,6 +13,7 @@ from ..config import AnomalyConfig
 from .evidence import (
     NO_COMPARISON, VS_BASELINE, Evidence, observed, to_dicts,
 )
+from .messages import Message
 from .timeseries import SeriesPoint
 
 
@@ -57,8 +58,11 @@ class Anomaly:
     delta_pct: Optional[float]
     z_score: Optional[float]
     direction: str  # up | down
+    #: identifiant TECHNIQUE de la methode, deja une cle: ni prose, ni nombre (AN-19 bucket 2)
     method: str
-    criterion: str
+    #: AN-19 / D-085: le critere n'est plus une phrase, c'est une cle + les seuils appliques.
+    #: D-007 exige que le critere utilise soit ECRIT; il l'est, sans etre reecrit a la main.
+    criterion: Message
     severity: str  # low | medium | high
     assessment: str = "neutral"  # favorable | unfavorable | neutral
     evidence: List[Evidence] = field(default_factory=list)
@@ -76,7 +80,10 @@ class Anomaly:
             "delta_pct": round(self.delta_pct, 4) if self.delta_pct is not None else None,
             "z_score": round(self.z_score, 3) if self.z_score is not None else None,
             "direction": self.direction, "assessment": self.assessment, "method": self.method,
-            "criterion": self.criterion, "severity": self.severity,
+            "criterion": self.criterion.text,
+            "criterion_key": self.criterion.key,
+            "criterion_params": dict(self.criterion.params),
+            "severity": self.severity,
             "evidence": to_dicts(self.evidence),
             "baseline_periods": list(self.baseline_periods),
         }
@@ -138,11 +145,14 @@ def detect_anomalies(
     if not (material and (large or statistically_unusual)):
         return []
 
-    criterion = (
-        f"|variation| >= {cfg.min_material_pct:.0%} (materialite) ET "
-        f"(|variation| >= {cfg.pct_threshold:.0%} vs moyenne des {len(baseline)} periodes precedentes"
-        + (f" OU |z| >= {cfg.zscore_threshold}" if z is not None else "") + ")"
-    )
+    # AN-19: deux cles STATIQUES au lieu d'une phrase assemblee par concatenation. Les seuils
+    # sont des parametres -- ils viennent de `AnomalyConfig` (AN-16) et restent auditables.
+    criterion_params = {"min_material_pct": cfg.min_material_pct,
+                        "pct_threshold": cfg.pct_threshold,
+                        "baseline_periods": len(baseline),
+                        "zscore_threshold": cfg.zscore_threshold}
+    criterion = (Message("anomaly.criterion", criterion_params) if z is not None
+                 else Message("anomaly.criterion_without_zscore", criterion_params))
     # AN-15: la preuve DUPLIQUAIT `observed_value`, `expected_value`, `delta`, `delta_pct` et
     # `z_score`, qui existent deja en champs typés sur le meme objet. Elle devient UN fait
     # structure portant la grandeur, sa reference de baseline et sa comparaison -- plus une

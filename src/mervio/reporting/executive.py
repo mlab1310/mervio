@@ -9,9 +9,23 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from ..analytics.messages import (
+    CONFIDENCE_KEY, CRITERION_STATE_KEY, DATA_QUALITY_KEY, SECTION_EMPTY_KEY, SEVERITY_KEY,
+    render,
+)
+
 WIDTH = 78
-_QUALITY_LABEL = {"reliable": "FIABLE", "incomplete": "INCOMPLET", "unavailable": "INDISPONIBLE"}
-_SEVERITY_LABEL = {"high": "ELEVEE", "medium": "MOYENNE", "low": "FAIBLE", "info": "INFO"}
+
+
+def _label(table: dict, value: str, fallback: str) -> str:
+    """Etiquette francaise d'une valeur de contrat (AN-19 / D-085).
+
+    Le catalogue possede le texte; la table possede la correspondance valeur -> cle. Une valeur
+    HORS enumeration ne vient pas du moteur: c'est un rapport malforme, et on rend alors le
+    `fallback` DECLARE par l'appelant plutot que d'inventer une etiquette. Ce n'est pas un
+    repli de catalogue -- le catalogue, lui, ne replie rien.
+    """
+    return render(table[value]) if value in table else fallback
 
 #: ordre d'affichage des indicateurs, partage par KEY KPIs et la tracabilite
 _KPI_ORDER = ("revenue", "orders", "aov", "units", "ad_spend", "roas", "cac",
@@ -47,11 +61,6 @@ SYNTHETIC_BANNER = [
 ]
 
 
-#: libelles des niveaux de confiance (AN-14). Le rendu FR passera au catalogue en AN-19.
-_CONFIDENCE_LABEL = {"low": "faible", "medium": "moyenne", "high": "elevee"}
-#: libelles des etats de critere
-_CRITERION_STATE_LABEL = {"satisfied": "oui", "not_satisfied": "non",
-                          "not_applicable": "sans objet"}
 
 
 def _format_value(value, unit: str, currency: str) -> str:
@@ -108,9 +117,10 @@ def _confidence_lines(confidence, *, prefix: str) -> List[str]:
     if not confidence:
         return [prefix + "non evaluee"]
     level = confidence.get("level", "")
-    lines = [prefix + f"{_CONFIDENCE_LABEL.get(level, level)} (qualitative, pas une probabilite)"]
+    lines = [prefix + f"{_label(CONFIDENCE_KEY, level, level)} "
+             "(qualitative, pas une probabilite)"]
     for criterion in confidence.get("criteria", []):
-        state = _CRITERION_STATE_LABEL.get(criterion["state"], criterion["state"])
+        state = _label(CRITERION_STATE_KEY, criterion["state"], criterion["state"])
         lines.append(f"           - {criterion['criterion']}: {state}")
     return lines
 
@@ -134,7 +144,7 @@ def _wrap(text: str, indent: int = 9, width: int = WIDTH) -> List[str]:
 
 def _insight_block(item: dict, currency: str) -> List[str]:
     pad = " " * 9
-    lines = [f"  [{_SEVERITY_LABEL.get(item['severity'], item['severity'].upper())}]"]
+    lines = [f"  [{_label(SEVERITY_KEY, item['severity'], item['severity'].upper())}]"]
     for index, chunk in enumerate(_wrap(item["fact"])):
         lines.append(("  FACT   : " if index == 0 else pad + "  ") + chunk)
     for evidence in _evidence_lines(item["evidence"], currency):
@@ -206,7 +216,9 @@ def render_executive_report(report: dict) -> str:
         lines += _title(section)
         items = (report.get(key) or []) if legacy else report[key]
         if not items:
-            lines.append("  Aucun element detecte sur les dimensions mesurees.")
+            # AN-19 / D-4: UNE cle par section, jamais la phrase d'une autre. Celle de `setup`
+            # dit ce que la categorie est -- une donnee a brancher, pas un defaut a detecter.
+            lines.append("  " + render(SECTION_EMPTY_KEY[key]))
             continue
         for item in items:
             lines += _insight_block(item, currency)
@@ -226,7 +238,8 @@ def render_executive_report(report: dict) -> str:
             rendered = f"{metric['value']:.2f}"
         else:
             rendered = f"{metric['value']:,.0f}"
-        lines.append(f"  {metric['label']:<32} {rendered:>22}   [{_QUALITY_LABEL[metric['data_quality']]}]")
+        quality = _label(DATA_QUALITY_KEY, metric["data_quality"], metric["data_quality"].upper())
+        lines.append(f"  {metric['label']:<32} {rendered:>22}   [{quality}]")
         for note in metric["notes"]:
             for chunk in _wrap(note, indent=8):
                 lines.append("      . " + chunk)
@@ -395,8 +408,8 @@ def render_executive_report(report: dict) -> str:
         impact = reco.get("estimated_impact")
         level = (reco.get("confidence") or {}).get("level") or "non evaluee"
         lines.append(f"     (origine: {reco['source_insight']}, severite: "
-                     f"{_SEVERITY_LABEL.get(reco['severity'], reco['severity'])}, "
-                     f"confiance: {_CONFIDENCE_LABEL.get(level, level)}, impact: "
+                     f"{_label(SEVERITY_KEY, reco['severity'], reco['severity'])}, "
+                     f"confiance: {_label(CONFIDENCE_KEY, level, level)}, impact: "
                      + (f"{impact:,.2f} {currency})" if impact is not None else "non chiffrable)"))
 
     quality = report["data_quality"]
@@ -410,7 +423,8 @@ def render_executive_report(report: dict) -> str:
                          f"{count['accepted_rows']:>12,}{count['rejected_rows']:>10,}")
     lines.append("")
     for field_quality in quality["fields"]:
-        lines.append(f"  [{_QUALITY_LABEL[field_quality['status']]:<12}] {field_quality['field']:<22}"
+        status = _label(DATA_QUALITY_KEY, field_quality["status"], field_quality["status"].upper())
+        lines.append(f"  [{status:<12}] {field_quality['field']:<22}"
                      f" couverture {field_quality['coverage']:.0%}")
         if field_quality["note"]:
             for chunk in _wrap(field_quality["note"], indent=8):

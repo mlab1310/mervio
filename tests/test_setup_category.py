@@ -247,7 +247,9 @@ def test_an_empty_setup_section_is_still_present_and_rendered(sample):
     text = render_executive_report(empty)
     assert "## SETUP" in text
     block = text[text.index("## SETUP"):text.index("## OPPORTUNITIES")]
-    assert "Aucun element detecte sur les dimensions mesurees." in block
+    # AN-19 / D-4: `setup` a sa PROPRE phrase, pas celle des sections de detection
+    from mervio.analytics.messages import MESSAGES
+    assert MESSAGES["section.setup.empty"] in block
     assert build_llm_context(empty)["findings"]
 
 

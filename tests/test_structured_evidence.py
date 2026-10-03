@@ -307,12 +307,12 @@ def test_the_llm_context_evidence_carries_no_number_in_text(report, declining):
         offenders = []
         for item in context["evidence"]:
             for key, value in item.items():
-                # FRONTIERE AN-15 / AN-19, nommee et non franchie en silence. `criterion` et
-                # `method` ne sont pas des FAITS: ce sont les descriptions de la REGLE, que D-007
-                # exige d'ecrire dans l'objet retourne (<< une variation n'est jamais appelee
-                # anomalie sans que le critere utilise soit ecrit >>). Leurs nombres sont les
-                # SEUILS CONFIGURES, deja centralises par AN-16. AN-19 les remplacera par des
-                # cles de message + parametres; AN-15 structure les faits, pas les textes.
+                # `criterion` et `method` ne sont pas des FAITS: ce sont les descriptions de
+                # la REGLE, que D-007 exige d'ecrire dans l'objet retourne (<< une variation
+                # n'est jamais appelee anomalie sans que le critere utilise soit ecrit >>).
+                # Leurs nombres sont les SEUILS CONFIGURES, deja centralises par AN-16. AN-19
+                # leur a donne une cle (`criterion_key`) sans retirer les seuils du texte: ils
+                # restent lisibles par D-007. Le texte rendu n'est jamais l'identite.
                 if key in ("id", "kind", "period", "message_key", "criterion", "method",
                            "label", "name", "factor", "observed_fact", "statement",
                            "hypothesis", "action", "reason_unavailable", "formula",
@@ -406,34 +406,40 @@ def test_the_text_report_still_renders_evidence(report):
     )
 
 
-# -- FRONTIERE AN-15 / AN-19, explicite -----------------------------------
-def test_rule_descriptions_remain_prose_until_an19(report):
-    """Ce qui reste du texte apres AN-15, et POURQUOI.
+# -- FRONTIERE AN-15 / AN-19, FRANCHIE -----------------------------------
+def test_rule_descriptions_now_carry_a_message_key(report):
+    """Ce que AN-19 a pris, et ce que D-007 impose de garder.
 
-    `Anomaly.criterion` et `Anomaly.method` decrivent la REGLE appliquee, pas le fait mesure.
-    D-007 exige qu'ils soient ecrits dans l'objet retourne: << une variation n'est jamais appelee
-    anomalie sans que le critere utilise soit ecrit >>. Leurs nombres sont les SEUILS CONFIGURES,
-    deja centralises par AN-16 -- ils ne sont donc pas des mesures non ancrees.
+    `Anomaly.criterion` decrit la REGLE appliquee, pas le fait mesure. D-007 exige qu'elle soit
+    ecrite dans l'objet retourne: << une variation n'est jamais appelee anomalie sans que le
+    critere utilise soit ecrit >>. Elle l'est toujours -- mais ce n'est plus une phrase
+    assemblee a la main: une cle statique et les seuils en parametres (AN-19 / D-085).
 
-    AN-15 structure les FAITS; AN-19 remplacera les TEXTES par des cles de message et des
-    parametres. Ce test fige la frontiere pour qu'elle soit lue, pas devinee.
+    `Anomaly.method` reste une chaine, et c'est voulu: c'est deja un IDENTIFIANT technique
+    (`percentage_threshold_vs_rolling_mean`), sans prose ni nombre. Lui donner une entree de
+    catalogue serait traduire un slug.
     """
     anomaly = next(a for a in report["anomalies"] if a["metric"] == "revenue")
-    assert DIGIT.search(anomaly["criterion"]), "le critere porte encore ses seuils, par D-007"
-    assert isinstance(anomaly["method"], str)
-    # mais AUCUNE de ces chaines n'est un fait: les faits sont tous structures
+    assert anomaly["criterion_key"].startswith("anomaly.criterion")
+    assert anomaly["criterion_params"]["pct_threshold"] is not None
+    assert DIGIT.search(anomaly["criterion"]), "les seuils restent lisibles, par D-007"
+    assert re.fullmatch(r"[a-z0-9_]+", anomaly["method"]), "method est un slug, pas de la prose"
+    # et AUCUNE de ces chaines n'est un fait: les faits sont tous structures
     assert all(isinstance(item, dict) for item in anomaly["evidence"])
 
 
-def test_the_engine_texts_still_carry_numbers_and_that_is_an19(report):
-    """`fact`, `hypothesis` et `recommendation` restent de la prose avec des nombres.
+def test_the_engine_texts_now_carry_a_key_and_keep_their_numbers(report):
+    """La ligne de partage, apres AN-19.
 
-    C'est la ligne de partage du roadmap: la ligne AN-15 nomme `evidence`, la ligne AN-19 nomme
-    les cles de message pour les textes. Ce test le constate au lieu de le laisser croire corrige.
+    AN-15 nommait `evidence`; AN-19 nomme les cles de message pour les TEXTES. Le texte rendu
+    reste present et porte toujours ses nombres -- c'est la forme ADDITIVE de D-3, qui garde le
+    champ existant lisible. Ce qui change est l'IDENTITE: elle est la cle, plus la phrase.
     """
     decline = next((i for i in report["critical_issues"] if i["type"] == "revenue_decline"), None)
     assert decline is not None
-    assert DIGIT.search(decline["fact"]), "le FAIT reste de la prose jusqu'a AN-19"
+    assert decline["fact_key"] == "finding.revenue_decline.fact"
+    assert decline["fact_params"]["delta_pct_abs"] is not None
+    assert DIGIT.search(decline["fact"]), "le texte rendu garde ses nombres (D-3)"
     assert all(isinstance(item, dict) for item in decline["evidence"]), (
         "les PREUVES, elles, sont structurees"
     )

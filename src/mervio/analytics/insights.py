@@ -17,6 +17,7 @@ from .evidence import (
     NO_COMPARISON, VS_BASELINE, VS_PREVIOUS_PERIOD, Evidence, finding_id,
     not_observed, observed, to_dicts,
 )
+from .messages import FACTOR_RECOMMENDATION_KEY, Message
 from .anomaly import Anomaly
 from .kpi import Metric, product_performance
 from .profitability import ProfitabilityResult
@@ -46,15 +47,17 @@ class Insight:
     type: str
     severity: str  # high | medium | low | info
     category: str  # critical_issue | warning | setup | opportunity
-    fact: str
+    #: AN-19 / D-085: un constat ne porte plus de prose, il porte une CLE et ses parametres.
+    #: Le texte est derive (`Message.text`), donc il ne peut pas contredire sa cle.
+    fact: Message
     #: precise QUEL objet le constat vise, quand le type peut se repeter (un SKU, une
     #: campagne). Sans lui, deux `low_margin_product` auraient le MEME identifiant.
     scope: Optional[str] = None
     evidence: List[Evidence] = field(default_factory=list)
-    hypothesis: Optional[str] = None
-    recommendation: Optional[str] = None
+    hypothesis: Optional[Message] = None
+    recommendation: Optional[Message] = None
     estimated_impact: Optional[float] = None
-    estimated_impact_basis: Optional[str] = None
+    estimated_impact_basis: Optional[Message] = None
     confidence: Optional[Confidence] = None
 
     @property
@@ -67,12 +70,26 @@ class Insight:
         return {
             "finding_id": self.finding_id,
             "type": self.type, "severity": self.severity, "category": self.category,
-            "fact": self.fact, "evidence": to_dicts(self.evidence), "hypothesis": self.hypothesis,
-            "recommendation": self.recommendation,
+            **message_fields("fact", self.fact),
+            "evidence": to_dicts(self.evidence),
+            **message_fields("hypothesis", self.hypothesis),
+            **message_fields("recommendation", self.recommendation),
             "estimated_impact": round(self.estimated_impact, 2) if self.estimated_impact is not None else None,
-            "estimated_impact_basis": self.estimated_impact_basis,
+            **message_fields("estimated_impact_basis", self.estimated_impact_basis),
             "confidence": self.confidence.to_dict() if self.confidence is not None else None,
         }
+
+
+def message_fields(name: str, message: Optional[Message]) -> Dict[str, object]:
+    """Forme PLATE et ADDITIVE du contrat (D-3): `<name>`, `<name>_key`, `<name>_params`.
+
+    Le champ texte EXISTANT garde son nom et son type, de sorte qu'un consommateur 1.x
+    continue de le lire; la cle et les parametres s'ajoutent a cote. La cle est l'identite,
+    le texte n'en est qu'une representation.
+    """
+    if message is None:
+        return {name: None, f"{name}_key": None, f"{name}_params": None}
+    return {name: message.text, f"{name}_key": message.key, f"{name}_params": dict(message.params)}
 
 
 def build_insights(
@@ -100,11 +117,13 @@ def build_insights(
         primary = root_cause.primary_factor() if root_cause and root_cause.available else None
         insight = Insight(
             type="revenue_decline", severity=revenue_anomaly.severity, category="critical_issue",
-            fact=f"Le CA de {revenue_anomaly.period} est inferieur de "
-                 f"{abs(revenue_anomaly.delta_pct or 0):.1%} a la moyenne des periodes precedentes.",
+            fact=Message("finding.revenue_decline.fact",
+                         {"period": revenue_anomaly.period,
+                          # la valeur absolue est prise ICI, par le moteur: le rendu ne calcule rien
+                          "delta_pct_abs": abs(revenue_anomaly.delta_pct or 0)}),
             evidence=list(revenue_anomaly.evidence),
             estimated_impact=revenue_anomaly.delta,
-            estimated_impact_basis="ecart de CA observe vs baseline glissante, en devise",
+            estimated_impact_basis=Message("impact_basis.revenue_vs_baseline"),
             # AN-14: le constat HERITE la confiance du facteur primaire. Il repose
             # sur lui, donc il ne peut pas etre plus confiant que lui.
             confidence=primary.confidence if primary else None,
@@ -129,8 +148,8 @@ def build_insights(
             insight.hypothesis = primary.hypothesis
             insight.recommendation = _recommendation_for(primary.factor, root_cause)
         else:
-            insight.hypothesis = "Cause non identifiee a partir des donnees disponibles."
-            insight.recommendation = "Verifier manuellement trafic, checkout et disponibilite produit."
+            insight.hypothesis = Message("finding.revenue_decline.hypothesis_not_identified")
+            insight.recommendation = Message("finding.revenue_decline.recommendation_not_identified")
         insights.append(insight)
 
     # 2. autres anomalies, classees selon que l'ecart est favorable ou non
@@ -148,23 +167,32 @@ def build_insights(
                 f"anomaly.{anomaly.metric}.delta_pct", "evidence.anomaly.delta_not_computable",
                 metric_key=anomaly.metric, source="analytics"))
             continue
+        # AN-19: le TYPE du constat reste derive de la metrique (`{metric}_anomaly`) -- c'est un
+        # identifiant. La CLE DE MESSAGE, elle, est statique, et la metrique devient un parametre.
         if anomaly.assessment == "favorable":
             category, severity = "opportunity", "info"
-            hypothesis = "Ecart favorable: comprendre ce qui l'a produit pour tenter de le reproduire."
-            recommendation = f"Identifier ce qui explique l'amelioration de {anomaly.metric} avant qu'elle ne se dissipe."
+            hypothesis = Message("finding.metric_anomaly.hypothesis_favorable")
+            recommendation = Message("finding.metric_anomaly.recommendation_favorable",
+                                     {"metric": anomaly.metric})
         elif anomaly.assessment == "neutral":
             category, severity = "warning", "low"
-            hypothesis = "Ecart inhabituel dont le signe n'est ni bon ni mauvais en soi."
-            recommendation = f"Verifier que la variation de {anomaly.metric} est intentionnelle."
+            hypothesis = Message("finding.metric_anomaly.hypothesis_neutral")
+            recommendation = Message("finding.metric_anomaly.recommendation_neutral",
+                                     {"metric": anomaly.metric})
         else:
             category = "critical_issue" if anomaly.severity == "high" else "warning"
             severity = anomaly.severity
-            hypothesis = "Variation statistiquement inhabituelle: la cause n'est pas etablie par ce moteur."
-            recommendation = f"Verifier {anomaly.metric} dans la source avant toute decision."
+            hypothesis = Message("finding.metric_anomaly.hypothesis_unfavorable")
+            recommendation = Message("finding.metric_anomaly.recommendation_unfavorable",
+                                     {"metric": anomaly.metric})
         insights.append(Insight(
             type=f"{anomaly.metric}_anomaly", severity=severity, category=category,
-            fact=f"{anomaly.metric} sur {anomaly.period}: {anomaly.delta_pct:+.1%} vs baseline."
-                 if anomaly.delta_pct is not None else f"{anomaly.metric}: ecart detecte sur {anomaly.period}.",
+            fact=Message("finding.metric_anomaly.fact",
+                         {"metric": anomaly.metric, "period": anomaly.period,
+                          "delta_pct": anomaly.delta_pct})
+            if anomaly.delta_pct is not None else
+            Message("finding.metric_anomaly.fact_without_delta",
+                    {"metric": anomaly.metric, "period": anomaly.period}),
             evidence=list(anomaly.evidence),
             hypothesis=hypothesis, recommendation=recommendation,
             estimated_impact=None, estimated_impact_basis=None,
@@ -182,7 +210,7 @@ def build_insights(
         # `info` + `setup` disent ce que c'est: une donnee a brancher, pas un probleme.
         insights.append(Insight(
             type="profitability_unavailable", severity="info", category="setup",
-            fact="Le profit de contribution complet n'est pas calculable a partir des donnees fournies.",
+            fact=Message("finding.profitability_unavailable.fact"),
             # AN-15: les limitations etaient de la PROSE. Les faits, eux, sont les composantes
             # de cout manquantes -- deja typées sur `ProfitabilityResult`. Chacune devient un fait
             # NON OBSERVE: aucune valeur fabriquee, et la source manquante est nommee. Le texte
@@ -197,9 +225,9 @@ def build_insights(
                 for component in profitability.components.values()
             ],
             hypothesis=None,
-            recommendation="Renseigner les couts manquants ("
-                           + ", ".join(profitability.missing_components)
-                           + ") pour obtenir une profitabilite reelle plutot qu'un CA.",
+            recommendation=Message(
+                "finding.profitability_unavailable.recommendation",
+                {"components": ", ".join(profitability.missing_components)}),
             estimated_impact=None, estimated_impact_basis=None,
             confidence=_kpi_confidence(dataset),
         ))
@@ -209,8 +237,9 @@ def build_insights(
         if product["gross_margin"] is not None and product["gross_margin"] < cfg.insights.low_product_margin and product["revenue"] > 0:
             insights.append(Insight(
                 type="low_margin_product", severity="medium", category="warning",
-                fact=f"{product['title']} ({product['sku']}) degage une marge brute de "
-                     f"{product['gross_margin']:.1%}.",
+                fact=Message("finding.low_margin_product.fact",
+                             {"title": product["title"], "sku": product["sku"],
+                              "gross_margin": product["gross_margin"]}),
                 scope=product["sku"],
                 evidence=[
                     observed(f"product.{product['sku']}.revenue", "evidence.product.revenue",
@@ -223,8 +252,8 @@ def build_insights(
                              metric_key="units", source="shopify_orders", unit="count",
                              period=period_label, current=float(product["units"])),
                 ],
-                hypothesis="Marge faible: prix, cout d'achat ou remises appliquees.",
-                recommendation="Reevaluer le prix ou le cout d'achat de cette reference.",
+                hypothesis=Message("finding.low_margin_product.hypothesis"),
+                recommendation=Message("finding.low_margin_product.recommendation"),
                 estimated_impact=None, estimated_impact_basis=None,
             confidence=_kpi_confidence(dataset),
             ))
@@ -234,13 +263,14 @@ def build_insights(
     if concentration and concentration.available and concentration.value >= cfg.health.concentration_warning:
         insights.append(Insight(
             type="customer_concentration", severity="medium", category="warning",
-            fact=f"Les 5 plus gros clients representent {concentration.value:.1%} du CA de la periode.",
+            fact=Message("finding.customer_concentration.fact",
+                         {"share": concentration.value}),
             evidence=[observed(
                 "kpi.customer_concentration_top5", "evidence.kpi.value",
                 metric_key="customer_concentration_top5", source="shopify_orders",
                 unit="ratio", period=period_label, current=concentration.value)],
-            hypothesis="Dependance commerciale a un petit nombre de comptes.",
-            recommendation="Diversifier l'acquisition pour reduire le risque de concentration.",
+            hypothesis=Message("finding.customer_concentration.hypothesis"),
+            recommendation=Message("finding.customer_concentration.recommendation"),
             estimated_impact=None, estimated_impact_basis=None,
             confidence=_kpi_confidence(dataset),
         ))
@@ -254,8 +284,9 @@ def build_insights(
         if best["conversions_delta"] > 0:
             insights.append(Insight(
                 type="campaign_opportunity", severity="info", category="opportunity",
-                fact=f"La campagne {best['name']} a augmente ses conversions de "
-                     f"{best['conversions_delta']:.0f} sur la periode.",
+                fact=Message("finding.campaign_opportunity.fact",
+                             {"name": best["name"],
+                              "conversions_delta": best["conversions_delta"]}),
                 scope=best["campaign_id"],
                 evidence=[
                     observed(f"campaign.{best['campaign_id']}.spend",
@@ -270,10 +301,10 @@ def build_insights(
                              previous=best["conversions_previous"],
                              comparison=VS_PREVIOUS_PERIOD),
                 ],
-                hypothesis="Cette campagne absorbe la demande mieux que les autres sur la periode.",
-                recommendation="Tester une hausse de budget maitrisee sur cette campagne et mesurer le CPA.",
+                hypothesis=Message("finding.campaign_opportunity.hypothesis"),
+                recommendation=Message("finding.campaign_opportunity.recommendation"),
                 estimated_impact=None,
-                estimated_impact_basis="impact non chiffrable: aucune donnee de marge par campagne",
+                estimated_impact_basis=Message("impact_basis.campaign_not_quantifiable"),
                 confidence=_kpi_confidence(dataset),
             ))
 
@@ -308,7 +339,7 @@ def _kpi_confidence(dataset) -> Confidence:
                       dict(confidence.criteria, baseline_sufficient=NOT_APPLICABLE))
 
 
-def _recommendation_for(factor: str, analysis: RootCauseAnalysis) -> str:
+def _recommendation_for(factor: str, analysis: RootCauseAnalysis) -> Message:
     """AN-02 / D-075: AUCUNE recommandation checkout tant que le trafic total n'est pas observe.
 
     La branche `conversion_rate` a disparu avec le facteur. Elle recommandait d'auditer le
@@ -319,15 +350,12 @@ def _recommendation_for(factor: str, analysis: RootCauseAnalysis) -> str:
     """
     if factor == "order_volume":
         worst = analysis.campaign_contributors[0] if analysis.campaign_contributors else None
-        suffix = (f" La baisse de conversions est la plus marquee sur {worst['name']}."
-                  if worst and worst["conversions_delta"] < 0 else "")
-        return ("Chercher d'ou vient la demande manquante: le trafic total et la conversion du "
-                "site ne sont pas observes, donc la cause n'est pas etablie. Connecter une mesure "
-                "d'audience pour la trancher." + suffix)
-    if factor == "paid_traffic":
-        return ("Verifier budgets, enchares et taux d'impressions perdues dans Google Ads: "
-                "la variation vient du volume de trafic achete.")
-    if factor == "average_order_value":
-        return ("Analyser le mix produit et le niveau de remise: la variation vient de la valeur "
-                "moyenne des commandes, pas du volume.")
-    return "Verifier le facteur identifie dans l'outil source avant toute decision."
+        # AN-19: la variante avec campagne est une CLE A PART, pas une concatenation. Un suffixe
+        # colle a une phrase ne serait traduisible, ni relisible, ni testable separement.
+        if worst and worst["conversions_delta"] < 0:
+            return Message("recommendation.factor.order_volume_with_campaign",
+                           {"campaign": worst["name"]})
+        return Message("recommendation.factor.order_volume")
+    if factor in FACTOR_RECOMMENDATION_KEY:
+        return Message(FACTOR_RECOMMENDATION_KEY[factor])
+    return Message("recommendation.factor.fallback")

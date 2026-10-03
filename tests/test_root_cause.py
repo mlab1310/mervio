@@ -73,8 +73,11 @@ def test_hypothesis_is_never_stated_as_proven_cause():
             # grandeur non mesuree serait une affirmation gratuite.
             assert factor.observability == "not_observed"
             continue
-        assert "associee" in factor.hypothesis or "insuffisante" in factor.hypothesis
-    assert any("causalite" in lim for lim in analysis.limitations)
+        assert factor.hypothesis.key.startswith("factor.")
+        assert ("associée" in factor.hypothesis.text
+                or "insuffisante" in factor.hypothesis.text)
+    # AN-19: la limite est reconnue par sa CLE, plus par une sous-chaine de sa phrase
+    assert any(lim.key == "root_cause.limitation.no_causality" for lim in analysis.limitations)
 
 
 def test_confidence_is_qualitative_and_never_claims_certainty():
@@ -115,4 +118,9 @@ def test_product_contributors_are_ranked_by_impact():
 
 def test_method_is_documented_in_output():
     analysis = analyse_revenue_change(build(100, 60), CURRENT, PREVIOUS)
-    assert "multiplicative" in analysis.method
+    # AN-19 / D-5: l'enonce precedent decrivait le modele a TROIS facteurs d'avant
+    # AN-01/AN-02 -- il citait un << Taux de conversion >> que AN-02 avait supprime. La
+    # formulation vient desormais du catalogue et decrit la decomposition REELLE.
+    assert analysis.method.key == "root_cause.method"
+    assert "Commandes × Panier moyen" in analysis.method.text
+    assert "Taux de conversion" not in analysis.method.text

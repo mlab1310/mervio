@@ -523,7 +523,9 @@ def report_checks(report: Dict[str, Any], rerun: Dict[str, Any]) -> Dict[str, st
         "recommendations_linked_to_findings": (
             "PASS" if all(r["source_insight"] in insight_types for r in report["recommendations"]) else "FAIL"),
         "root_cause_limits_state_no_causality": (
-            "PASS" if not report["root_causes"] or any("causalite" in l for l in report["root_causes"][0]["limitations"])
+            # AN-19: reconnu par sa CLE de message, plus par une sous-chaine de la phrase
+            "PASS" if not report["root_causes"]
+            or "root_cause.limitation.no_causality" in (report["root_causes"][0].get("limitation_keys") or [])
             or not report["root_causes"][0]["available"] else "FAIL"),
     }
 

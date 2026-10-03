@@ -1,8 +1,14 @@
 """Root Cause Engine v1 (deterministe).
 
-Methode: decomposition multiplicative du CA.
+Methode: decomposition du CA en DEUX COUCHES (AN-01, AN-02).
 
-    Revenue = Clics payants x Taux de conversion x Panier moyen
+    couche A   Revenue = Commandes x Panier moyen          (additive, somme des parts = 1)
+    couche B   Commandes = Clics payants x Commandes par clic paye   (explications, non additives)
+
+L'enonce << Revenue = Clics payants x Taux de conversion x Panier moyen >> decrivait le modele
+a TROIS facteurs d'AVANT AN-01/AN-02, et citait un facteur -- le taux de conversion -- que
+AN-02 a supprime parce qu'il confondait une chute organique avec un probleme de checkout. Le
+texte publie vient desormais du catalogue (`root_cause.method`, AN-19 / D-5).
 
 La contribution de chaque facteur a la variation du CA est mesuree en
 log-ratio, ce qui donne des contributions additives dont la somme vaut 1:
@@ -24,6 +30,7 @@ from ..config import AnomalyConfig, RootCauseConfig
 from .confidence import Confidence, assess, decomposition_interpretable
 from ..domain.models import Dataset
 from .kpi import campaign_performance, product_performance, total_clicks, total_revenue
+from .messages import FACTOR_HYPOTHESIS_KEY, FACTOR_LABEL_KEY, Message, render
 from .periods import Period
 
 
@@ -37,10 +44,22 @@ NOT_OBSERVED = "not_observed"
 _MISSING_SESSIONS = "web_analytics_sessions"
 
 
+def _label(factor: str) -> str:
+    """Libelle francais d'un facteur, LU AU CATALOGUE via une table explicite (AN-19).
+
+    Il entre ensuite dans `observed_fact` comme parametre: le message compose n'a donc pas
+    besoin d'une cle par facteur, et le libelle reste au catalogue, en un seul endroit.
+    """
+    return render(FACTOR_LABEL_KEY[factor])
+
+
 @dataclass
 class CauseFactor:
     factor: str
-    observed_fact: str
+    #: AN-19 / D-085: cle + parametres. Message COMPOSE: le libelle du facteur est un
+    #: PARAMETRE resolu depuis `FACTOR_LABEL_KEY`, ce qui evite de creer les vingt cles
+    #: facteur x variante qu'une cle par combinaison aurait exigees (D-3).
+    observed_fact: Message
     supporting_metric: Optional[str]
     current_value: Optional[float]
     previous_value: Optional[float]
@@ -50,7 +69,7 @@ class CauseFactor:
     #: seul champ serait le melange de referentiels qu'AN-01 supprime.
     contribution: Optional[float]
     confidence: Optional[Confidence]
-    hypothesis: Optional[str]
+    hypothesis: Optional[Message]
     layer: str = LAYER_REVENUE
     observability: str = OBSERVED
     #: couche B: grandeur que ce facteur explique ("order_volume")
@@ -64,14 +83,19 @@ class CauseFactor:
         return {
             "factor": self.factor, "layer": self.layer,
             "observability": self.observability,
-            "observed_fact": self.observed_fact,
+            "observed_fact": self.observed_fact.text,
+            "observed_fact_key": self.observed_fact.key,
+            "observed_fact_params": dict(self.observed_fact.params),
             "supporting_metric": self.supporting_metric,
             "current_value": round(self.current_value, 4) if self.current_value is not None else None,
             "previous_value": round(self.previous_value, 4) if self.previous_value is not None else None,
             "factor_change_pct": round(self.factor_change_pct, 4) if self.factor_change_pct is not None else None,
             "contribution": round(self.contribution, 4) if self.contribution is not None else None,
             "confidence": self.confidence.to_dict() if self.confidence is not None else None,
-            "hypothesis": self.hypothesis,
+            "hypothesis": self.hypothesis.text if self.hypothesis is not None else None,
+            "hypothesis_key": self.hypothesis.key if self.hypothesis is not None else None,
+            "hypothesis_params": (dict(self.hypothesis.params)
+                                  if self.hypothesis is not None else None),
             "explains": self.explains,
             "explains_share": round(self.explains_share, 4) if self.explains_share is not None else None,
             "missing_source": self.missing_source,
@@ -101,7 +125,9 @@ class RootCauseAnalysis:
     previous_period: str
     observed_change_pct: Optional[float]
     observed_change_absolute: Optional[float]
-    method: str
+    #: AN-19 / D-5: l'enonce de la methode vient du catalogue. Le texte precedent decrivait le
+    #: modele a TROIS facteurs d'avant AN-01/AN-02, avec le facteur qu'AN-02 a supprime.
+    method: Message
     #: labels des periodes de baseline, identiques a ceux de l'anomalie (AN-01)
     baseline_periods: List[str] = field(default_factory=list)
     #: niveau de reference: moyenne du CA sur la baseline. Egale EXACTEMENT
@@ -122,7 +148,7 @@ class RootCauseAnalysis:
     factors: List[CauseFactor] = field(default_factory=list)
     product_contributors: List[dict] = field(default_factory=list)
     campaign_contributors: List[dict] = field(default_factory=list)
-    limitations: List[str] = field(default_factory=list)
+    limitations: List[Message] = field(default_factory=list)
     available: bool = True
 
     def primary_factor(self, cfg: Optional[RootCauseConfig] = None) -> Optional[CauseFactor]:
@@ -163,7 +189,8 @@ class RootCauseAnalysis:
             "previous_period": self.previous_period,
             "observed_change_pct": round(self.observed_change_pct, 4) if self.observed_change_pct is not None else None,
             "observed_change_absolute": round(self.observed_change_absolute, 2) if self.observed_change_absolute is not None else None,
-            "method": self.method, "available": self.available,
+            "method": self.method.text, "method_key": self.method.key,
+            "available": self.available,
             "baseline_periods": list(self.baseline_periods),
             "baseline_revenue": round(self.baseline_revenue, 2) if self.baseline_revenue is not None else None,
             "change_vs_previous_period": dict(self.change_vs_previous_period),
@@ -173,7 +200,9 @@ class RootCauseAnalysis:
             "factors": [f.to_dict() for f in self.factors],
             "product_contributors": self.product_contributors,
             "campaign_contributors": self.campaign_contributors,
-            "limitations": self.limitations,
+            # AN-19: le texte reste, la cle s'ajoute a cote (forme additive, D-3)
+            "limitations": [item.text for item in self.limitations],
+            "limitation_keys": [item.key for item in self.limitations],
         }
 
 
@@ -229,9 +258,7 @@ def analyse_revenue_change(
     analysis = RootCauseAnalysis(
         target_metric="revenue", period=current.label, previous_period=previous.label,
         observed_change_pct=_pct(r1, r0), observed_change_absolute=r1 - r0,
-        method="decomposition multiplicative Revenue = Clics x Taux de conversion x Panier moyen "
-               "contre la MEME baseline que l'anomalie (agregats sur la fenetre, puis ratios "
-               "derives); contributions en log-ratio; contributions produit/campagne additives",
+        method=Message("root_cause.method"),
         baseline_periods=[p.label for p in (baseline or [previous])],
         baseline_revenue=r0 if n else None,
         primacy_share=cfg.paid_traffic_primacy_share,
@@ -245,9 +272,7 @@ def analyse_revenue_change(
     )
     if r0 <= 0 or r1 <= 0:
         analysis.available = False
-        analysis.limitations.append(
-            "Decomposition impossible: le CA est nul sur au moins une des deux periodes."
-        )
+        analysis.limitations.append(Message("root_cause.decomposition_impossible"))
         return analysis
 
     c1 = total_clicks(cur_ds)
@@ -277,18 +302,20 @@ def analyse_revenue_change(
         """
         if not v1 or not v0 or v1 <= 0 or v0 <= 0:
             return CauseFactor(
-                factor=key, observed_fact=f"{label}: non calculable", supporting_metric=metric,
+                factor=key,
+                observed_fact=Message("factor.observed_fact_not_computable",
+                                      {"factor": key, "factor_label": label}),
+                supporting_metric=metric,
                 current_value=v1, previous_value=v0, factor_change_pct=None, contribution=None,
                 confidence=assess(baseline_periods=n, min_baseline_periods=min_baseline,
                                   fields_reliable=fields_reliable,
                                   unobserved_competitor=unobserved_competitor,
                                   contribution=None,
                                   shares_interpretable=shares_interpretable),
-                hypothesis="Donnee insuffisante pour evaluer ce facteur.",
+                hypothesis=Message("factor.hypothesis_insufficient_data"),
                 layer=layer, explains=explains,
             )
         change = _pct(v1, v0)
-        reference = (f"vs la baseline de {n} periode(s)" if n > 1 else f"vs {previous.label}")
         share = math.log(v1 / v0) / log_total if log_total else None
         if layer == LAYER_REVENUE:
             contribution, explains_share = share, None
@@ -299,8 +326,16 @@ def analyse_revenue_change(
             contribution = None
             explains_share = (math.log(v1 / v0) / log_orders) if log_orders else None
         magnitude = contribution if contribution is not None else explains_share
+        observed_fact = (
+            Message("factor.observed_fact_vs_baseline",
+                    {"factor": key, "factor_label": label, "change": change,
+                     "period": current.label, "baseline_periods": n})
+            if n > 1 else
+            Message("factor.observed_fact_vs_previous_period",
+                    {"factor": key, "factor_label": label, "change": change,
+                     "period": current.label, "previous_period": previous.label}))
         return CauseFactor(
-            factor=key, observed_fact=f"{label} {change:+.1%} sur {current.label} {reference}",
+            factor=key, observed_fact=observed_fact,
             supporting_metric=metric, current_value=v1, previous_value=v0,
             factor_change_pct=change, contribution=contribution,
             confidence=assess(baseline_periods=n, min_baseline_periods=min_baseline,
@@ -318,7 +353,10 @@ def analyse_revenue_change(
         absence d'effet, la meme faute que << CAC = 0 >>. L'angle mort est DECLARE, jamais comble.
         """
         return CauseFactor(
-            factor=key, observed_fact=f"{label}: non observe", supporting_metric=None,
+            factor=key,
+            observed_fact=Message("factor.observed_fact_not_observed",
+                                  {"factor": key, "factor_label": label}),
+            supporting_metric=None,
             current_value=None, previous_value=None, factor_change_pct=None, contribution=None,
             confidence=None, hypothesis=None, layer=LAYER_ORDER_VOLUME,
             observability=NOT_OBSERVED, explains=explains, explains_share=None,
@@ -340,24 +378,23 @@ def analyse_revenue_change(
     # site expliquent le meme volume et ne sont pas mesures (lecon d'AN-02). Sa dominance est
     # donc confondue, et le critere le dit.
     analysis.factors.append(_observed(
-        "order_volume", "Volume de commandes", "orders", float(o1), o0,
-        "La variation du CA est associee au NOMBRE de commandes.", LAYER_REVENUE,
+        "order_volume", _label("order_volume"), "orders", float(o1), o0,
+        Message(FACTOR_HYPOTHESIS_KEY["order_volume"]), LAYER_REVENUE,
         unobserved_competitor=True))
     analysis.factors.append(_observed(
-        "average_order_value", "Panier moyen", "aov", aov1, aov0,
-        "La variation du CA est associee a la valeur moyenne des commandes "
-        "(mix produit, remises, quantites).", LAYER_REVENUE,
+        "average_order_value", _label("average_order_value"), "aov", aov1, aov0,
+        Message(FACTOR_HYPOTHESIS_KEY["average_order_value"]), LAYER_REVENUE,
         unobserved_competitor=False))
 
     # COUCHE B -- explications du volume de commandes, NON additives
     analysis.factors.append(_observed(
-        "paid_traffic", "Clics payants", "paid_clicks", float(c1), c0,
-        "La variation du volume de commandes est associee au trafic paye achete.",
+        "paid_traffic", _label("paid_traffic"), "paid_clicks", float(c1), c0,
+        Message(FACTOR_HYPOTHESIS_KEY["paid_traffic"]),
         LAYER_ORDER_VOLUME, explains="order_volume", unobserved_competitor=True))
     analysis.factors.append(_unobserved(
-        "organic_traffic", "Trafic organique et direct", "order_volume"))
+        "organic_traffic", _label("organic_traffic"), "order_volume"))
     analysis.factors.append(_unobserved(
-        "site_conversion_rate", "Taux de conversion du site", "order_volume"))
+        "site_conversion_rate", _label("site_conversion_rate"), "order_volume"))
 
     analysis.orders_per_paid_click = {
         "current": round(opc1, 6) if opc1 is not None else None,
@@ -374,9 +411,9 @@ def analyse_revenue_change(
     )
     analysis.campaign_contributors = _campaign_contributors(cur_ds, prev_ds)
     analysis.limitations = [
-        "Les clics payants ne mesurent que Google Ads: le trafic organique et direct n'est pas observe.",
-        "Les contributions decrivent une decomposition arithmetique, pas un lien de causalite demontre.",
-        "Toute hypothese doit etre verifiee dans l'outil source avant decision.",
+        Message("root_cause.limitation.paid_clicks_only"),
+        Message("root_cause.limitation.no_causality"),
+        Message("root_cause.limitation.verify_in_source"),
     ]
     return analysis
 

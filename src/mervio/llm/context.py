@@ -261,6 +261,10 @@ class _ContextBuilder:
                     "type": _slug(item.get("type", "")),
                     "category": self._enum(item.get("category", _CATEGORY[section]), "category", path),
                     "severity": self._enum(item.get("severity"), "severity", path),
+                    # AN-19 / D-085: la cle est l'IDENTITE, `statement` la representation. Elle
+                    # est transmise VERBATIM, donc elle reste EGALE a celle du rapport.
+                    "message_key": _message_key(item.get("fact_key"),
+                                                path + ".message_key"),
                     "statement": self._text(item.get("fact", ""), path + ".statement"),
                     # AN-15: `evidence_text` envoyait des chaines FRANCAISES au modele comme
                     # preuves, donc il ne pouvait pas distinguer un fait mesure d'un texte genere.
@@ -284,9 +288,16 @@ class _ContextBuilder:
                                                              path + ".estimated_impact_basis"),
                     "impact_source": "analytics_engine" if impact is not None else None,
                     "_hypothesis": self._opt_text(item.get("hypothesis"), path + ".hypothesis"),
+                    "_hypothesis_key": _message_key(item.get("hypothesis_key"),
+                                                    path + ".hypothesis_key"),
                 })
+                # AN-19: le rattachement d'une recommandation a son constat se fait par la CLE
+                # et ses parametres, plus par la chaine rendue. Une virgule changee cassait
+                # silencieusement le lien -- une identite ne peut pas etre du texte libre.
                 links.append((finding_id, _slug(item.get("type", "")),
-                              self._opt_text(item.get("recommendation"), path + ".recommendation", flag=False)))
+                              _message_key(item.get("recommendation_key"),
+                                           path + ".recommendation_key"),
+                              _params_signature(item.get("recommendation_params"))))
         return findings, links, facts
 
     def _collect_facts(self, raw: Any, finding_id: str, path: str,
@@ -314,6 +325,8 @@ class _ContextBuilder:
                 "assessment": self._enum(item.get("assessment"), "assessment", path),
                 "severity": self._enum(item.get("severity"), "severity", path),
                 "criterion": self._text(item.get("criterion", ""), path + ".criterion"),
+                "criterion_key": _message_key(item.get("criterion_key"),
+                                              path + ".criterion_key"),
             })
 
         for rc_index, raw in enumerate(_list(report, "root_causes")):
@@ -348,10 +361,15 @@ class _ContextBuilder:
                     "confidence": self._confidence(factor.get("confidence"),
                                                    f"{base}.factors[{f_index}].confidence"),
                     "observed_fact": self._text(factor.get("observed_fact", ""), path + ".observed_fact"),
+                    "observed_fact_key": _message_key(factor.get("observed_fact_key"),
+                                                      path + ".observed_fact_key"),
                 })
                 if factor.get("hypothesis") and (factor.get("contribution") is not None
                                                  or factor.get("explains_share") is not None):
-                    hypotheses.append((factor_id, self._text(factor["hypothesis"], path + ".hypothesis"),
+                    hypotheses.append((factor_id,
+                                       self._text(factor["hypothesis"], path + ".hypothesis"),
+                                       _message_key(factor.get("hypothesis_key"),
+                                                    path + ".hypothesis_key"),
                                        self._confidence(factor.get("confidence"),
                                                         f"{base}.factors[{f_index}].confidence")))
 
@@ -402,22 +420,31 @@ class _ContextBuilder:
                 **_numbers(analysis, ("observed_change_pct", "observed_change_absolute"), base),
                 "primary_factor": _slug(analysis["primary_factor"]) if analysis.get("primary_factor") else None,
                 "method": self._text(analysis.get("method", ""), f"root_causes[{rc_id}].method"),
+                "method_key": _message_key(analysis.get("method_key"),
+                                           f"root_causes[{rc_id}].method_key"),
                 "causality_established": False,
                 "factor_ids": factor_ids,
             })
         return evidence, root_causes, hypotheses
 
     def _hypotheses(self, findings: List[dict], factor_hypotheses: List[tuple]) -> List[dict]:
-        merged: Dict[str, dict] = {}
-        candidates = [(f["id"], f.pop("_hypothesis"), f["confidence"]) for f in findings]
-        for support, statement, confidence in candidates + factor_hypotheses:
+        """AN-19: deux hypotheses sont LA MEME quand leur cle et leurs parametres coincident.
+
+        Avant, l'identite etait la phrase (`merged.get(statement)`): un texte reformule
+        dedoublait l'hypothese, et deux messages differents rendus identiquement fusionnaient.
+        """
+        merged: Dict[tuple, dict] = {}
+        candidates = [(f["id"], f.pop("_hypothesis"), f.pop("_hypothesis_key"), f["confidence"])
+                      for f in findings]
+        for support, statement, key, confidence in candidates + factor_hypotheses:
             if not statement:
                 continue
-            entry = merged.get(statement)
+            identity = (key, statement) if key is None else (key,)
+            entry = merged.get(identity)
             if entry is None:
-                merged[statement] = entry = {
-                    "id": None, "statement": statement, "status": "non_prouvee",
-                    "supports": [], "confidence": confidence,
+                merged[identity] = entry = {
+                    "id": None, "message_key": key, "statement": statement,
+                    "status": "non_prouvee", "supports": [], "confidence": confidence,
                 }
             if support not in entry["supports"]:
                 entry["supports"].append(support)
@@ -435,13 +462,17 @@ class _ContextBuilder:
             reco_id = self._id(f"recommendation.{index + 1}")
             path = f"recommendations[{reco_id}]"
             action = self._text(item.get("recommendation", ""), path + ".action")
+            key = _message_key(item.get("recommendation_key"), path + ".message_key")
+            signature = _params_signature(item.get("recommendation_params"))
             source_type = _slug(item.get("source_insight", ""))
-            source = next((link for link in available if link[1] == source_type and link[2] == action), None)
+            source = next((link for link in available
+                           if link[1] == source_type and link[2] == key and link[3] == signature),
+                          None)
             if source:
                 available.remove(source)
             impact = _number(item.get("estimated_impact"), f"recommendations[{index}].estimated_impact")
             out.append({
-                "id": reco_id, "action": action,
+                "id": reco_id, "message_key": key, "action": action,
                 "source_finding": source[0] if source else None,
                 "severity": self._enum(item.get("severity"), "severity", path),
                 "confidence": self._confidence(item.get("confidence"),
@@ -449,6 +480,8 @@ class _ContextBuilder:
                 "estimated_impact": impact,
                 "estimated_impact_basis": self._opt_text(item.get("estimated_impact_basis"),
                                                          path + ".estimated_impact_basis"),
+                "estimated_impact_basis_key": _message_key(
+                    item.get("estimated_impact_basis_key"), path + ".estimated_impact_basis_key"),
                 "impact_source": "analytics_engine" if impact is not None else None,
             })
         return out
@@ -663,6 +696,20 @@ def _numbers(item: Mapping[str, Any], keys: Iterable[str], path: str) -> Dict[st
 
 #: une cle de message est technique et stable: minuscules, chiffres, `_` et `.` hierarchique
 _MESSAGE_KEY_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)*$")
+
+
+def _params_signature(value: Any) -> str:
+    """Empreinte DETERMINISTE des parametres d'un message (AN-19).
+
+    Deux `low_margin_product` partagent la cle de recommandation et ne sont pourtant pas le
+    meme constat: ce sont leurs parametres qui les distinguent. `sort_keys` rend l'empreinte
+    independante de l'ordre d'insertion.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, Mapping):
+        raise LLMContextError("type invalide: parametres de message")
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def _message_key(value: Any, path: str) -> Optional[str]:

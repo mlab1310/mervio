@@ -44,7 +44,11 @@ def test_large_drop_is_detected():
 def test_anomaly_always_states_its_criterion():
     anomaly = detect_anomalies("revenue", series([100] * 8 + [60]), CFG)[0]
     assert anomaly.criterion
-    assert "15%" in anomaly.criterion and "materialite" in anomaly.criterion
+    # AN-19: le critere est une CLE + ses seuils. D-007 reste tenu -- le critere utilise est
+    # ecrit -- mais il n'est plus une phrase assemblee a la main.
+    assert anomaly.criterion.key in ("anomaly.criterion", "anomaly.criterion_without_zscore")
+    assert anomaly.criterion.params["pct_threshold"] == CFG.pct_threshold
+    assert "15%" in anomaly.criterion.text and "matérialité" in anomaly.criterion.text
     assert anomaly.evidence
 
 
