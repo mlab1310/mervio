@@ -149,10 +149,14 @@ def detect_anomalies(
     # sont des parametres -- ils viennent de `AnomalyConfig` (AN-16) et restent auditables.
     criterion_params = {"min_material_pct": cfg.min_material_pct,
                         "pct_threshold": cfg.pct_threshold,
-                        "baseline_periods": len(baseline),
-                        "zscore_threshold": cfg.zscore_threshold}
-    criterion = (Message("anomaly.criterion", criterion_params) if z is not None
-                 else Message("anomaly.criterion_without_zscore", criterion_params))
+                        "baseline_periods": len(baseline)}
+    # B-3: le seuil de z-score n'est publie QUE s'il a servi a la regle. Le publier sans
+    # cela laissait croire qu'il s'etait applique.
+    if z is None:
+        criterion = Message("anomaly.criterion_without_zscore", criterion_params)
+    else:
+        criterion_params["zscore_threshold"] = cfg.zscore_threshold
+        criterion = Message("anomaly.criterion", criterion_params)
     # AN-15: la preuve DUPLIQUAIT `observed_value`, `expected_value`, `delta`, `delta_pct` et
     # `z_score`, qui existent deja en champs typés sur le meme objet. Elle devient UN fait
     # structure portant la grandeur, sa reference de baseline et sa comparaison -- plus une

@@ -326,13 +326,17 @@ def analyse_revenue_change(
             contribution = None
             explains_share = (math.log(v1 / v0) / log_orders) if log_orders else None
         magnitude = contribution if contribution is not None else explains_share
+        # B-1: le parametre publie porte la precision du CONTRAT (4 decimales, comme
+        # `factors[].factor_change_pct`). `change` lui-meme reste entier: c'est lui qui
+        # alimente `factor_change_pct` et les criteres de confiance.
+        published_change = round(change, 4)
         observed_fact = (
             Message("factor.observed_fact_vs_baseline",
-                    {"factor": key, "factor_label": label, "change": change,
+                    {"factor": key, "factor_label": label, "change": published_change,
                      "period": current.label, "baseline_periods": n})
             if n > 1 else
             Message("factor.observed_fact_vs_previous_period",
-                    {"factor": key, "factor_label": label, "change": change,
+                    {"factor": key, "factor_label": label, "change": published_change,
                      "period": current.label, "previous_period": previous.label}))
         return CauseFactor(
             factor=key, observed_fact=observed_fact,

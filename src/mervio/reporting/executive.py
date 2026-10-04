@@ -18,14 +18,23 @@ WIDTH = 78
 
 
 def _label(table: dict, value: str, fallback: str) -> str:
-    """Etiquette francaise d'une valeur de contrat (AN-19 / D-085).
+    """Etiquette francaise d'une valeur de contrat, TOLERANTE (AN-19 / D-085).
 
-    Le catalogue possede le texte; la table possede la correspondance valeur -> cle. Une valeur
-    HORS enumeration ne vient pas du moteur: c'est un rapport malforme, et on rend alors le
-    `fallback` DECLARE par l'appelant plutot que d'inventer une etiquette. Ce n'est pas un
-    repli de catalogue -- le catalogue, lui, ne replie rien.
+    Reserve aux etiquettes qui repliaient DEJA avant AN-19 (`.get(valeur, valeur)`): severite,
+    confiance, etat de critere. Les rendre strictes serait un changement de comportement non
+    demande. Pour les etiquettes qui LEVAIENT (qualite de donnee), voir `_strict_label`.
     """
     return render(table[value]) if value in table else fallback
+
+
+def _strict_label(table: dict, value: str) -> str:
+    """Etiquette francaise d'une valeur de contrat, STRICTE (B-4).
+
+    `_QUALITY_LABEL[...]` levait avant AN-19, et doit continuer. Une valeur hors enumeration
+    ne vient pas du moteur: c'est un rapport malforme, et le renderer le dit au lieu de
+    fabriquer une etiquette. Le `KeyError` vient de la table, pas du catalogue.
+    """
+    return render(table[value])
 
 #: ordre d'affichage des indicateurs, partage par KEY KPIs et la tracabilite
 _KPI_ORDER = ("revenue", "orders", "aov", "units", "ad_spend", "roas", "cac",
@@ -238,7 +247,7 @@ def render_executive_report(report: dict) -> str:
             rendered = f"{metric['value']:.2f}"
         else:
             rendered = f"{metric['value']:,.0f}"
-        quality = _label(DATA_QUALITY_KEY, metric["data_quality"], metric["data_quality"].upper())
+        quality = _strict_label(DATA_QUALITY_KEY, metric["data_quality"])
         lines.append(f"  {metric['label']:<32} {rendered:>22}   [{quality}]")
         for note in metric["notes"]:
             for chunk in _wrap(note, indent=8):
@@ -423,7 +432,7 @@ def render_executive_report(report: dict) -> str:
                          f"{count['accepted_rows']:>12,}{count['rejected_rows']:>10,}")
     lines.append("")
     for field_quality in quality["fields"]:
-        status = _label(DATA_QUALITY_KEY, field_quality["status"], field_quality["status"].upper())
+        status = _strict_label(DATA_QUALITY_KEY, field_quality["status"])
         lines.append(f"  [{status:<12}] {field_quality['field']:<22}"
                      f" couverture {field_quality['coverage']:.0%}")
         if field_quality["note"]:

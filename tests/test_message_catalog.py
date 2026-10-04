@@ -59,6 +59,9 @@ from mervio.reporting.executive import render_executive_report
 
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLE = ROOT / "data" / "sample"
+#: semaine 2026-W37, close (derniere commande le dernier jour de la periode)
+DATA_DAY = date(2026, 9, 13)
+ANALYSIS_DAY = date(2026, 9, 21)
 DECLINE = Path(__file__).resolve().parent / "fixtures" / "an01_prolonged_decline"
 
 #: modules dont les cles de message doivent etre statiques
@@ -184,7 +187,8 @@ def test_a_message_renders_exactly_when_all_its_parameters_are_given():
 # -- C / D. catalogue statique, aucune cle dynamique --------------------------------------
 
 def test_the_catalogue_is_a_static_mapping_of_strings():
-    assert isinstance(MESSAGES, dict) and MESSAGES
+    from collections.abc import Mapping
+    assert isinstance(MESSAGES, Mapping) and MESSAGES
     for key, template in MESSAGES.items():
         assert isinstance(key, str) and isinstance(template, str)
         assert key == key.strip() and template == template.strip()
@@ -198,13 +202,20 @@ def test_the_catalogue_is_built_without_any_computation():
     relisible ni stable: c'est exactement ce que D-085 interdit.
     """
     tree = ast.parse((ROOT / "src/mervio/analytics/messages.py").read_text(encoding="utf-8"))
+    # B-5: la litterale s'appelle `_CATALOGUE`; `MESSAGES` est sa vue non mutable.
     catalogue = next((node for node in tree.body
                       if isinstance(node, (ast.Assign, ast.AnnAssign))
-                      and any(getattr(t, "id", None) == "MESSAGES"
+                      and any(getattr(t, "id", None) == "_CATALOGUE"
                               for t in ([node.target] if isinstance(node, ast.AnnAssign)
                                         else node.targets))), None)
-    assert catalogue is not None, "MESSAGES doit etre une affectation de module"
-    assert isinstance(catalogue.value, ast.Dict), "MESSAGES doit etre un dictionnaire litteral"
+    assert catalogue is not None, "_CATALOGUE doit etre une affectation de module"
+    assert isinstance(catalogue.value, ast.Dict), "_CATALOGUE doit etre un dictionnaire litteral"
+    exposed = next(node for node in tree.body
+                   if isinstance(node, (ast.Assign, ast.AnnAssign))
+                   and any(getattr(t, "id", None) == "MESSAGES"
+                           for t in ([node.target] if isinstance(node, ast.AnnAssign)
+                                     else node.targets)))
+    assert ast.unparse(exposed.value) == "MappingProxyType(_CATALOGUE)"
     for key, value in zip(catalogue.value.keys, catalogue.value.values):
         assert isinstance(key, ast.Constant) and isinstance(key.value, str), ast.dump(key)
         assert isinstance(value, ast.Constant) and isinstance(value.value, str), ast.dump(value)
@@ -506,3 +517,211 @@ def test_a_factor_label_is_resolved_from_the_catalogue_not_written_inline(declin
         if "factor_label" not in params:
             continue
         assert params["factor_label"] == MESSAGES[FACTOR_LABEL_KEY[factor["factor"]]]
+
+
+# == CLOTURE AN-19: B-1 a B-5 ============================================================
+# Chaque bloc ci-dessous ferme un point de la seconde revue. Ils sont ecrits AVANT la
+# correction et doivent echouer pour la raison nommee dans leur docstring.
+
+#: parametre numerique de message -> contrepartie DEJA publiee par le contrat.
+#: B-1: les deux doivent etre EGALES. Pas << arrondies >>: egales -- c'est la seule
+#: formulation qui marche aussi quand la contrepartie n'est pas arrondie (`gross_margin`).
+NUMERIC_PARAM_COUNTERPARTS = (
+    ("revenue_decline", "fact", "delta_pct_abs", lambda r: abs(_anomaly(r, "revenue")["delta_pct"])),
+    ("refunds_anomaly", "fact", "delta_pct", lambda r: _anomaly(r, "refunds")["delta_pct"]),
+    ("campaign_opportunity", "fact", "conversions_delta",
+     lambda r: max((c["conversions_delta"] for c in r["root_causes"][0]["campaign_contributors"]))),
+)
+
+
+def _anomaly(report: dict, metric: str) -> dict:
+    return next(a for a in report["anomalies"] if a["metric"] == metric)
+
+
+def _finding(report: dict, type_: str) -> dict:
+    return next(i for section in SECTIONS for i in report[section] if i["type"] == type_)
+
+
+def test_b1_numeric_params_match_the_published_value_exactly(report):
+    """B-1: la meme quantite ne doit pas circuler a deux precisions.
+
+    Avant correction, `fact_params.delta_pct` valait 0.6304632651979309 quand
+    `anomalies[].delta_pct` publiait 0.6305, et `observed_fact_params.change` valait
+    -0.2799470549305096 quand `factors[].factor_change_pct` publiait -0.2799. Le rapport
+    affirmait deux fois le meme nombre, differemment.
+    """
+    mismatches = []
+    for type_, field, param, published in NUMERIC_PARAM_COUNTERPARTS:
+        got = _finding(report, type_)[f"{field}_params"][param]
+        expected = published(report)
+        if got != expected:
+            mismatches.append(f"{type_}.{field}_params.{param}: {got!r} != {expected!r}")
+    for factor in report["root_causes"][0]["factors"]:
+        params = factor.get("observed_fact_params") or {}
+        if "change" not in params:
+            continue
+        if params["change"] != factor["factor_change_pct"]:
+            mismatches.append(f"factor {factor['factor']}.change: "
+                              f"{params['change']!r} != {factor['factor_change_pct']!r}")
+    assert not mismatches, "precision dupliquee:\n" + "\n".join(mismatches)
+
+
+def test_b1_the_share_param_matches_the_published_kpi():
+    """Meme regle pour la concentration client, qu'aucun jeu CSV du depot n'emet.
+
+    Six clients de CA inegal: la concentration vaut 0,8582 au contrat et
+    0,8581560283687943 en parametre avant correction -- deux ecritures du meme nombre.
+    Aucun `pytest.skip` ici: la garde anti-faux-vert fait echouer la session sur un test
+    ignore quand la base est obligatoire.
+    """
+    orders = [make_order(f"#{index}", DATA_DAY, f"c1:{index:02d}" + "0" * 30,
+                         [("A", 1, 100.0 + index * 7)]) for index in range(6)]
+    dataset = make_dataset(orders=orders)
+    dataset.quality.set_field("customer_identity", covered=6, total=6)
+    produced = analyze_loaded_dataset(dataset, today=ANALYSIS_DAY)
+    finding = _finding(produced, "customer_concentration")
+    published = produced["customers"]["concentration_top5"]["value"]
+    assert finding["fact_params"]["share"] == published
+    # et la valeur n'est pas un nombre rond: le test aurait sinon passe sans correction
+    assert published != round(published, 2)
+
+
+def test_b1_the_internal_analytic_value_keeps_its_full_precision():
+    """B-1 n'arrondit QUE la frontiere de construction du message.
+
+    La valeur interne du moteur reste entiere: l'arrondi est une propriete du contrat
+    PUBLIE, jamais du calcul. Si les deux coincidaient, c'est le calcul qui aurait ete
+    degrade.
+    """
+    from mervio.analytics.root_cause import analyse_revenue_change
+    from test_root_cause import CURRENT, PREVIOUS, build
+    # 61/97: ratio NON terminant (-0.3711340206185567). Avec un jeu rond (100 -> 60 = -0.4)
+    # le test passerait sans rien prouver.
+    analysis = analyse_revenue_change(build(97, 61), CURRENT, PREVIOUS)
+    factor = next(f for f in analysis.factors
+                  if f.factor_change_pct is not None and "change" in f.observed_fact.params
+                  and f.factor_change_pct != round(f.factor_change_pct, 4))
+    raw, published = factor.factor_change_pct, factor.observed_fact.params["change"]
+    assert published == round(raw, 4)
+    assert raw != published, f"la valeur interne a ete arrondie elle aussi: {raw!r}"
+    # le rendu ne change pas pour autant: l'arrondi du contrat est plus fin que l'affichage
+    assert f"{raw:+.1%}" == f"{published:+.1%}"
+
+
+def test_b2_two_hypotheses_sharing_a_key_with_different_params_stay_distinct(report):
+    """B-2: l'identite d'une hypothese est sa CLE ET SES PARAMETRES.
+
+    Avant correction, `_hypotheses` fusionnait sur la seule cle des qu'une cle existait:
+    deux constats portant le meme message avec des parametres differents devenaient UNE
+    hypothese. C'est le defaut que AN-19 a supprime ailleurs, laisse en place ici.
+    """
+    import copy
+    crafted = copy.deepcopy(report)
+    template = crafted["critical_issues"][0]
+    shared_text = "Variation statistiquement inhabituelle: la cause n'est pas établie par ce moteur."
+
+    def finding(metric):
+        item = copy.deepcopy(template)
+        item.update({
+            "type": f"{metric}_anomaly", "finding_id": f"{metric}_anomaly",
+            "category": "warning", "severity": "low",
+            # MEME texte rendu, parametres DIFFERENTS: sans les parametres, rien ne les separe
+            "hypothesis": shared_text,
+            "hypothesis_key": "finding.metric_anomaly.hypothesis_unfavorable",
+            "hypothesis_params": {"metric": metric},
+        })
+        return item
+
+    crafted["critical_issues"] = []
+    crafted["warnings"] = [finding("orders"), finding("refunds")]
+    crafted["setup"] = []
+    crafted["opportunities"] = []
+    crafted["recommendations"] = []
+    context = build_llm_context(crafted)
+    hypotheses = [h for h in context["hypotheses"] if h["statement"] == shared_text]
+    assert len(hypotheses) == 2, (
+        f"{len(hypotheses)} hypothese(s) pour deux jeux de parametres distincts: "
+        + str([h["supports"] for h in hypotheses]))
+    assert [len(h["supports"]) for h in hypotheses] == [1, 1]
+
+
+def test_b2_the_same_key_with_the_same_params_still_merges(report):
+    """Contre-epreuve: la fusion legitime -- meme message, memes parametres -- doit rester.
+
+    Sans elle, la correction remplacerait une sur-fusion par une sous-fusion.
+    """
+    context = build_llm_context(report)
+    merged = [h for h in context["hypotheses"] if len(h["supports"]) > 1]
+    assert merged, "au moins une hypothese doit encore etre partagee par deux constats"
+
+
+def test_b3_the_zscore_threshold_is_published_only_when_it_was_used():
+    """B-3: un seuil publie alors qu'il n'a pas servi laisse croire qu'il s'est applique."""
+    from mervio.analytics.anomaly import detect_anomalies
+    from test_anomaly import CFG, series
+    without = detect_anomalies("revenue", series([100] * 8 + [60]), CFG)[0]
+    assert without.criterion.key == "anomaly.criterion_without_zscore"
+    assert "zscore_threshold" not in without.criterion.params
+    assert "z" not in without.criterion.text.lower()
+    # et la contre-epreuve: quand le z-score sert, le seuil EST publie
+    with_z = next((a for metric in ("revenue",)
+                   for a in detect_anomalies(metric, series([100, 100, 100, 100, 100, 100, 100, 100, 150]), CFG)), None)
+    if with_z is not None and with_z.criterion.key == "anomaly.criterion":
+        assert with_z.criterion.params["zscore_threshold"] == CFG.zscore_threshold
+
+
+def test_b3_every_published_criterion_declares_only_the_thresholds_it_used(report, declining):
+    for current in (report, declining):
+        for anomaly in current["anomalies"]:
+            params = anomaly["criterion_params"]
+            assert set(params) == set(required_params(anomaly["criterion_key"])), (
+                f"{anomaly['metric']}: {sorted(params)} vs "
+                f"{sorted(required_params(anomaly['criterion_key']))}")
+
+
+def test_b4_an_unknown_data_quality_is_refused_not_relabelled(report):
+    """B-4: `_QUALITY_LABEL[...]` levait avant AN-19; le repli introduit rendait `[BIZARRE]`.
+
+    Une valeur hors enumeration ne vient pas du moteur: c'est un rapport malforme, et le
+    renderer doit le dire au lieu de fabriquer une etiquette.
+    """
+    import copy
+    broken = copy.deepcopy(report)
+    broken["kpis"]["revenue"]["data_quality"] = "bizarre"
+    with pytest.raises(KeyError):
+        render_executive_report(broken)
+
+
+def test_b4_an_unknown_quality_status_is_refused_too(report):
+    import copy
+    broken = copy.deepcopy(report)
+    broken["data_quality"]["fields"][0]["status"] = "bizarre"
+    with pytest.raises(KeyError):
+        render_executive_report(broken)
+
+
+def test_b4_the_tolerant_labels_of_an14_are_untouched(report):
+    """Les quatre autres etiquettes etaient DEJA tolerantes avant AN-19 (`.get(x, x)`):
+    les rendre strictes serait un changement de comportement non demande."""
+    import copy
+    tolerant = copy.deepcopy(report)
+    tolerant["critical_issues"][0]["severity"] = "bizarre"
+    tolerant["critical_issues"][0]["confidence"]["level"] = "etrange"
+    text = render_executive_report(tolerant)
+    assert "[BIZARRE]" in text and "etrange" in text
+
+
+def test_b5_the_catalogue_cannot_be_mutated_at_runtime():
+    """B-5: la staticite etait garantie a la LECTURE du source, pas a l'execution."""
+    with pytest.raises(TypeError):
+        MESSAGES["x.y"] = "injecte"
+    with pytest.raises((TypeError, AttributeError)):
+        MESSAGES.clear()
+    assert "x.y" not in MESSAGES
+
+
+def test_b5_render_still_takes_the_same_arguments():
+    """L'API de `render` ne change pas: seule la mutabilite du catalogue est fermee."""
+    import inspect
+    assert list(inspect.signature(render).parameters) == ["key", "params"]
+    assert render("section.setup.empty") == MESSAGES["section.setup.empty"]

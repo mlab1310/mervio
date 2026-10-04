@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import string
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 
@@ -60,7 +61,9 @@ class Message:
         return render(self.key, self.params)
 
 
-MESSAGES: Dict[str, str] = {
+#: la LITTERALE du catalogue. `MESSAGES` en est la vue non mutable: une garde AST verifie
+#: que cette affectation est bien un dictionnaire litteral de chaines, sans aucun calcul.
+_CATALOGUE: Dict[str, str] = {
     # -- constats: le FAIT ---------------------------------------------------------------
     "finding.revenue_decline.fact":
         "Le CA de {period} est inférieur de {delta_pct_abs:.1%} à la moyenne des périodes "
@@ -213,6 +216,10 @@ MESSAGES: Dict[str, str] = {
     "section.setup.empty": "Aucune donnée à connecter sur les dimensions mesurées.",
     "section.opportunities.empty": "Aucun élément détecté sur les dimensions mesurées.",
 }
+
+#: B-5: la staticite n'etait garantie qu'a la LECTURE du source. `MESSAGES["x"] = ...`
+#: fonctionnait a l'execution. La vue est desormais non mutable; l'API de `render` ne change pas.
+MESSAGES: Mapping[str, str] = MappingProxyType(_CATALOGUE)
 
 #: valeur de contrat -> cle du catalogue. Tables EXPLICITES: elles remplacent une f-string, et
 #: c'est pour cela qu'elles existent (D-085: aucune cle construite depuis une donnee).

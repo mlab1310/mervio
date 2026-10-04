@@ -290,6 +290,7 @@ class _ContextBuilder:
                     "_hypothesis": self._opt_text(item.get("hypothesis"), path + ".hypothesis"),
                     "_hypothesis_key": _message_key(item.get("hypothesis_key"),
                                                     path + ".hypothesis_key"),
+                    "_hypothesis_params": item.get("hypothesis_params"),
                 })
                 # AN-19: le rattachement d'une recommandation a son constat se fait par la CLE
                 # et ses parametres, plus par la chaine rendue. Une virgule changee cassait
@@ -370,6 +371,7 @@ class _ContextBuilder:
                                        self._text(factor["hypothesis"], path + ".hypothesis"),
                                        _message_key(factor.get("hypothesis_key"),
                                                     path + ".hypothesis_key"),
+                                       factor.get("hypothesis_params"),
                                        self._confidence(factor.get("confidence"),
                                                         f"{base}.factors[{f_index}].confidence")))
 
@@ -432,14 +434,20 @@ class _ContextBuilder:
 
         Avant, l'identite etait la phrase (`merged.get(statement)`): un texte reformule
         dedoublait l'hypothese, et deux messages differents rendus identiquement fusionnaient.
+
+        B-2: les PARAMETRES en font partie, comme pour les recommandations. La cle seule
+        aurait fusionne deux constats portant le meme message sur des objets differents --
+        le defaut d'origine, deplace d'un cran. Sans cle (rapport 1.x, ND-04), la phrase
+        reste le seul discriminant disponible.
         """
         merged: Dict[tuple, dict] = {}
-        candidates = [(f["id"], f.pop("_hypothesis"), f.pop("_hypothesis_key"), f["confidence"])
-                      for f in findings]
-        for support, statement, key, confidence in candidates + factor_hypotheses:
+        candidates = [(f["id"], f.pop("_hypothesis"), f.pop("_hypothesis_key"),
+                       f.pop("_hypothesis_params"), f["confidence"]) for f in findings]
+        for support, statement, key, params, confidence in candidates + factor_hypotheses:
             if not statement:
                 continue
-            identity = (key, statement) if key is None else (key,)
+            identity = ((None, statement) if key is None
+                        else (key, _params_signature(params)))
             entry = merged.get(identity)
             if entry is None:
                 merged[identity] = entry = {

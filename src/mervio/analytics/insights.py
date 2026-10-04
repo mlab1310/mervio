@@ -119,8 +119,11 @@ def build_insights(
             type="revenue_decline", severity=revenue_anomaly.severity, category="critical_issue",
             fact=Message("finding.revenue_decline.fact",
                          {"period": revenue_anomaly.period,
-                          # la valeur absolue est prise ICI, par le moteur: le rendu ne calcule rien
-                          "delta_pct_abs": abs(revenue_anomaly.delta_pct or 0)}),
+                          # La valeur absolue est prise ICI, par le moteur: le rendu ne calcule
+                          # rien. B-1: l'arrondi est celui du CONTRAT (4 decimales, comme
+                          # `anomalies[].delta_pct`), applique a la frontiere de construction du
+                          # message -- jamais a la valeur interne du moteur, qui reste entiere.
+                          "delta_pct_abs": round(abs(revenue_anomaly.delta_pct or 0), 4)}),
             evidence=list(revenue_anomaly.evidence),
             estimated_impact=revenue_anomaly.delta,
             estimated_impact_basis=Message("impact_basis.revenue_vs_baseline"),
@@ -189,7 +192,8 @@ def build_insights(
             type=f"{anomaly.metric}_anomaly", severity=severity, category=category,
             fact=Message("finding.metric_anomaly.fact",
                          {"metric": anomaly.metric, "period": anomaly.period,
-                          "delta_pct": anomaly.delta_pct})
+                          # B-1: meme precision que `anomalies[].delta_pct`
+                          "delta_pct": round(anomaly.delta_pct, 4)})
             if anomaly.delta_pct is not None else
             Message("finding.metric_anomaly.fact_without_delta",
                     {"metric": anomaly.metric, "period": anomaly.period}),
@@ -264,7 +268,8 @@ def build_insights(
         insights.append(Insight(
             type="customer_concentration", severity="medium", category="warning",
             fact=Message("finding.customer_concentration.fact",
-                         {"share": concentration.value}),
+                         # B-1: meme precision que `kpis.customer_concentration_top5.value`
+                         {"share": round(concentration.value, 4)}),
             evidence=[observed(
                 "kpi.customer_concentration_top5", "evidence.kpi.value",
                 metric_key="customer_concentration_top5", source="shopify_orders",
