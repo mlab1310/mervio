@@ -78,10 +78,22 @@ def simple_dataset_factory():
 
 
 def test_every_dimension_documents_its_formula_and_thresholds(simple_dataset):
+    """K-6: `thresholds` est un bareme STRUCTURE, ou `None` pour une dimension qui n'en a pas.
+
+    `data_quality` est la seule dans ce cas: sa note est une application lineaire de la part
+    de champs fiables, et `HealthConfig` ne definit aucune echelle pour elle. Sa regle reste
+    lisible dans `formula`, qui, elle, est toujours exigee.
+    """
+    scaleless = []
     for dimension in score_for(simple_dataset).dimensions:
-        assert dimension.formula and dimension.thresholds
+        assert dimension.formula
+        if dimension.thresholds is None:
+            scaleless.append(dimension.key)
+        else:
+            assert all(len(band) == 2 for band in dimension.thresholds), dimension.key
         if not dimension.available:
             assert dimension.reason_unavailable
+    assert scaleless == ["data_quality"], scaleless
 
 
 def test_methodology_states_no_llm(simple_dataset):

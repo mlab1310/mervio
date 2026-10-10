@@ -35,6 +35,19 @@ UNTRUSTED_DATA_POLICY = (
 _SHRINK_ORDER = ("evidence", "findings", "facts", "limitations", "hypotheses",
                  "recommendations", "unavailable_metrics", "root_causes")
 
+#: natures de preuve, DECLAREES (D1). Deux usages, et un seul proprietaire:
+#:
+#:   * la repartition du budget de `evidence` sert les natures a tour de role, dans cet ordre;
+#:   * l'ordre decide seulement qui recoit les places restantes du dernier tour incomplet.
+#:
+#: D1: le budget etait consomme dans l'ordre d'EMISSION (`evidence = finding_facts + evidence`),
+#: de sorte que la POSITION d'un bloc -- et non une propriete de la preuve -- decidait de sa
+#: survie. Mesure sur 57 rapports a l'ancien plafond de 30: dix rapports perdaient la totalite
+#: de leurs contributions de campagne, dont `revenue_decline`, le scenario qui motive
+#: l'explication. Ce n'est pas une priorite metier: c'est un ordre de service DECLARE.
+EVIDENCE_KINDS = ("finding_fact", "anomaly", "root_cause_factor", "product_contribution",
+                  "campaign_contribution")
+
 _ENUMS = {
     "severity": {"high", "medium", "low", "info"},
     "category": {"critical_issue", "warning", "setup", "opportunity"},
@@ -122,7 +135,7 @@ class _ContextBuilder:
             "profitability": profitability,
             "facts": self._bound(facts, self.limits.max_facts, "facts"),
             "findings": self._bound(findings, self.limits.max_findings, "findings"),
-            "evidence": self._bound(evidence, self.limits.max_evidence, "evidence"),
+            "evidence": self.select_evidence(evidence),
             "root_causes": self._bound(root_causes, self.limits.max_root_causes, "root_causes"),
             "hypotheses": self._bound(self._hypotheses(findings, factor_hypotheses),
                                       self.limits.max_hypotheses, "hypotheses"),
@@ -639,6 +652,29 @@ class _ContextBuilder:
             self.truncation[section] = {"total": len(items), "included": min(len(items), limit)}
         return items[:limit]
 
+    def select_evidence(self, items: List[dict]) -> List[dict]:
+        """Preuves transmises, budget reparti ENTRE LES NATURES (D1).
+
+        La troncature de tete eliminait la derniere nature emise. Le budget est desormais servi
+        a tour de role: chaque nature presente garde une preuve avant qu'aucune n'en garde deux.
+        Aucun score nouveau -- `kind` est deja dans la structure, et c'est la seule cle utilisee.
+
+        L'ordre de la liste rendue reste celui d'origine: quand le budget suffit -- le cas sur
+        les 57 rapports mesures -- la sortie est EXACTEMENT celle d'avant.
+        """
+        items = list(items)
+        limit = self.limits.max_evidence
+        self.truncation["evidence"] = {"total": len(items), "included": min(len(items), limit)}
+        return _balanced_by_kind(items, limit)
+
+    def _shrink_evidence(self, items: List[dict]) -> List[dict]:
+        """Reduction de moitie du plafond d'OCTETS, en conservant la repartition (D1).
+
+        Sans cela la garantie aurait un trou: `_finalise` reduit `evidence` en premier, et une
+        coupe de tete y retablirait exactement le defaut corrige au-dessus.
+        """
+        return _balanced_by_kind(items, max(1, len(items) // 2))
+
     def _finalise(self, context: Dict[str, Any]) -> None:
         """Plafond d'octets mesure sur le contexte COMPLET, metadonnees incluses.
 
@@ -655,7 +691,8 @@ class _ContextBuilder:
             section = next((s for s in _SHRINK_ORDER if len(context[s]) > 1), None)
             if section is None:
                 raise LLMContextError("contexte trop volumineux malgre les bornes")
-            context[section] = context[section][: len(context[section]) // 2]
+            context[section] = (self._shrink_evidence(context[section]) if section == "evidence"
+                                else context[section][: len(context[section]) // 2])
             self.truncation.setdefault(section, {"total": 0, "included": 0})["included"] = len(context[section])
 
 
@@ -749,9 +786,50 @@ def _dedupe(items: List[dict], key: str) -> List[dict]:
     return out
 
 
+def _balanced_by_kind(items: List[dict], limit: int) -> List[dict]:
+    """`limit` preuves au plus, le budget servi a tour de role entre les natures presentes.
+
+    Proprietes tenues (D1):
+
+      * aucune nature presente n'est eliminee en entier tant que le budget depasse le nombre de
+        natures;
+      * la selection ne depend pas de l'ordre ENTRE les natures: les tours suivent
+        `EVIDENCE_KINDS`, qui est declaree, et l'ordre INTERNE de chaque nature est celui du
+        moteur -- deja total (F-01, K-4);
+      * l'ordre de sortie est celui de l'entree, donc la sortie est inchangee quand le budget
+        suffit.
+    """
+    if len(items) <= limit:
+        return list(items)
+    buckets: Dict[str, List[int]] = {kind: [] for kind in EVIDENCE_KINDS}
+    for index, item in enumerate(items):
+        buckets.setdefault(item.get("kind"), []).append(index)
+    present = [(kind, positions) for kind, positions in buckets.items() if positions]
+
+    quota = {kind: 0 for kind, _ in present}
+    remaining = limit
+    while remaining:
+        served = False
+        for kind, positions in present:
+            if not remaining:
+                break
+            if quota[kind] < len(positions):
+                quota[kind] += 1
+                remaining -= 1
+                served = True
+        if not served:  # plus rien a servir: le budget depasse ce qui existe
+            break
+    kept = {index for kind, positions in present for index in positions[:quota[kind]]}
+    return [item for index, item in enumerate(items) if index in kept]
+
+
 def _drop_dangling_references(context: Dict[str, Any]) -> None:
     """Apres troncature, une reference ne doit jamais pointer vers un element absent."""
     ids = context_ids(context)
+    # D1: `findings[].evidence_ids` etait le seul renvoi non nettoye. Une preuve ecartee par la
+    # troncature y laissait une reference morte, et le modele est tenu de citer ses preuves.
+    for finding in context["findings"]:
+        finding["evidence_ids"] = [ref for ref in finding["evidence_ids"] if ref in ids]
     for hypothesis in context["hypotheses"]:
         hypothesis["supports"] = [ref for ref in hypothesis["supports"] if ref in ids]
     for recommendation in context["recommendations"]:

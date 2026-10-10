@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from ..errors import ConfigurationError
 
 #: format du contexte produit par build_llm_context()
-CONTRACT_VERSION = "1.0"
+# K-11: 2.0 avec le contrat de rapport. Le contexte a gagne `message_key` sur cinq familles
+# (AN-19), la preuve structuree (AN-15), la confiance qualitative (AN-14) et la section `setup`
+# (AN-18) sans changer de version. `PROMPT_VERSION` et `RESPONSE_SCHEMA_VERSION` ne bougent pas:
+# ni le prompt ni le schema de reponse n'ont change.
+CONTRACT_VERSION = "2.0"
 #: format du prompt (instructions systeme + enveloppe de donnees)
 PROMPT_VERSION = "1.0"
 #: format de la reponse structuree attendue du modele
@@ -54,7 +58,14 @@ class ContextLimits:
 
     max_facts: int = 25
     max_findings: int = 15
-    max_evidence: int = 30
+    #: D1: 30 ne suffisait plus. AN-15 a ajoute les faits de constat a `evidence`, et la
+    #: troncature eliminait la derniere nature emise -- les contributions de campagne. Mesure sur
+    #: 57 rapports (6 scenarios moteur, 17 scenarios de verite terrain a 1 200 / 6 000 / 20 000
+    #: commandes): 45 preuves produites au maximum (`margin_collapse`). 45 est donc la plus
+    #: petite valeur qui transmet TOUT ce que la mesure a observe; au-dela, le budget est reparti
+    #: entre les natures (`context.EVIDENCE_KINDS`) et aucune ne peut plus etre eliminee seule.
+    #: Le plafond d'octets reste la borne de securite: 38 461 octets au pire, sur 64 000.
+    max_evidence: int = 45
     max_hypotheses: int = 10
     max_recommendations: int = 10
     max_root_causes: int = 3

@@ -1,0 +1,6151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mervio:schema:report:2.0",
+  "title": "Mervio Business Health Report -- contrat 2.0",
+  "description": "Definition structurelle FORMELLE du rapport produit par `mervio.analytics`. Ce schema decrit la FORME du rapport; il ne contient aucune regle analytique et n'en remplace aucune. Les vingt-et-une cles de premier niveau sont obligatoires et fermees: il n'existe ni cle `findings`, ni cle `evidence` a la racine -- les constats vivent dans les quatre sections de categorie (AN-18 / D-084) et les preuves dans les objets qu'elles soutiennent (AN-15 / D-082).",
+  "$comment": "`$id` est une URN et non une URL: le depot ne possede aucun domaine ou publier ce schema, et annoncer une adresse qui ne resout pas serait une fausse promesse de resolution. Le fichier est la reference, versionne avec le moteur qui le produit. PERIMETRE: aucune contrainte numerique non demontree n'est posee -- en particulier aucune borne [0, 1] sur les contributions, qui depassent 100 % dans une decomposition degeneree, et aucune echelle 0-100 sur les notes, qui viennent d'un bareme CONFIGURABLE (`config.HealthConfig`). Les patterns ne sont poses que la ou la forme est produite par une fabrique unique (labels de periode, dates ISO, horodatage UTC).",
+  "type": "object",
+  "required": [
+    "_meta",
+    "business_health_score",
+    "period",
+    "executive_summary",
+    "critical_issues",
+    "warnings",
+    "setup",
+    "opportunities",
+    "kpis",
+    "profitability",
+    "customers",
+    "products",
+    "marketing",
+    "time_series",
+    "comparisons",
+    "anomalies",
+    "root_causes",
+    "recommendations",
+    "data_freshness",
+    "data_quality",
+    "limitations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "_meta": {
+      "$ref": "#/$defs/meta"
+    },
+    "business_health_score": {
+      "$ref": "#/$defs/business_health"
+    },
+    "period": {
+      "type": "object",
+      "required": [
+        "current",
+        "previous"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/period_ref"
+        },
+        "previous": {
+          "$ref": "#/$defs/period_ref"
+        }
+      }
+    },
+    "executive_summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "critical_issues": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/finding"
+          },
+          {
+            "properties": {
+              "category": {
+                "const": "critical_issue"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/finding"
+          },
+          {
+            "properties": {
+              "category": {
+                "const": "warning"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/finding"
+          },
+          {
+            "properties": {
+              "category": {
+                "const": "setup"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "opportunities": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/finding"
+          },
+          {
+            "properties": {
+              "category": {
+                "const": "opportunity"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "kpis": {
+      "type": "object",
+      "description": "Les dix-sept KPI du contrat, tous publies. Conteneur DYNAMIQUE ferme: chaque cle redeclare la sienne dans `key`.",
+      "$comment": "`compute_kpis` assigne les dix-sept sans condition. Les nommer -- plutot qu'un `propertyNames` -- est ce qui interdit a la cle du dictionnaire et au champ `key` de divergier.",
+      "required": [
+        "revenue",
+        "orders",
+        "units",
+        "aov",
+        "refunds",
+        "refund_rate",
+        "ad_spend",
+        "paid_clicks",
+        "orders_per_paid_click",
+        "new_customers",
+        "cac",
+        "roas",
+        "gross_margin",
+        "cogs",
+        "payment_fees",
+        "repeat_purchase_rate",
+        "customer_concentration_top5"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "revenue": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "revenue"
+                }
+              }
+            }
+          ]
+        },
+        "orders": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "orders"
+                }
+              }
+            }
+          ]
+        },
+        "units": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "units"
+                }
+              }
+            }
+          ]
+        },
+        "aov": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "aov"
+                }
+              }
+            }
+          ]
+        },
+        "refunds": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "refunds"
+                }
+              }
+            }
+          ]
+        },
+        "refund_rate": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "refund_rate"
+                }
+              }
+            }
+          ]
+        },
+        "ad_spend": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "ad_spend"
+                }
+              }
+            }
+          ]
+        },
+        "paid_clicks": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "paid_clicks"
+                }
+              }
+            }
+          ]
+        },
+        "orders_per_paid_click": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "orders_per_paid_click"
+                }
+              }
+            }
+          ]
+        },
+        "new_customers": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "new_customers"
+                }
+              }
+            }
+          ]
+        },
+        "cac": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "cac"
+                }
+              }
+            }
+          ]
+        },
+        "roas": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "roas"
+                }
+              }
+            }
+          ]
+        },
+        "gross_margin": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "gross_margin"
+                }
+              }
+            }
+          ]
+        },
+        "cogs": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "cogs"
+                }
+              }
+            }
+          ]
+        },
+        "payment_fees": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "payment_fees"
+                }
+              }
+            }
+          ]
+        },
+        "repeat_purchase_rate": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "repeat_purchase_rate"
+                }
+              }
+            }
+          ]
+        },
+        "customer_concentration_top5": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/metric"
+            },
+            {
+              "properties": {
+                "key": {
+                  "const": "customer_concentration_top5"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "profitability": {
+      "$ref": "#/$defs/profitability"
+    },
+    "customers": {
+      "type": "object",
+      "description": "Clients de la periode: agregats et rangs, aucun identifiant (AN-17).",
+      "required": [
+        "total_active",
+        "new_customers",
+        "repeat_purchase_rate",
+        "concentration_top5",
+        "top_customers"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total_active": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "new_customers": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/metric"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "new_customers"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "$comment": "`null` si le KPI n'est pas publie: `assemble_report` teste sa presence."
+        },
+        "repeat_purchase_rate": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/metric"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "repeat_purchase_rate"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "concentration_top5": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/metric"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "customer_concentration_top5"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top_customers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/top_customer"
+          },
+          "maxItems": 5,
+          "description": "Cinq au plus (`report.TOP_CUSTOMERS`): meme perimetre que `customer_concentration_top5`, dont les parts publiees sont les composantes."
+        }
+      }
+    },
+    "products": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/product_row"
+      }
+    },
+    "marketing": {
+      "type": "object",
+      "required": [
+        "campaigns",
+        "ad_spend",
+        "roas",
+        "cac"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "campaigns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/campaign_row"
+          }
+        },
+        "ad_spend": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/metric"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "ad_spend"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roas": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/metric"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "roas"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cac": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/metric"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "cac"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "time_series": {
+      "type": "object",
+      "description": "Une serie par grandeur suivie. Conteneur DYNAMIQUE ferme sur `SERIES_METRICS`.",
+      "required": [
+        "revenue",
+        "orders",
+        "aov",
+        "ad_spend",
+        "paid_clicks",
+        "orders_per_paid_click",
+        "roas",
+        "refunds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "revenue": {
+          "$ref": "#/$defs/series"
+        },
+        "orders": {
+          "$ref": "#/$defs/series"
+        },
+        "aov": {
+          "$ref": "#/$defs/series"
+        },
+        "ad_spend": {
+          "$ref": "#/$defs/series"
+        },
+        "paid_clicks": {
+          "$ref": "#/$defs/series"
+        },
+        "orders_per_paid_click": {
+          "$ref": "#/$defs/series"
+        },
+        "roas": {
+          "$ref": "#/$defs/series"
+        },
+        "refunds": {
+          "$ref": "#/$defs/series"
+        }
+      }
+    },
+    "comparisons": {
+      "type": "object",
+      "description": "Comparaisons periodiques par grandeur. Conteneur DYNAMIQUE ferme sur `SERIES_METRICS`.",
+      "required": [
+        "revenue",
+        "orders",
+        "aov",
+        "ad_spend",
+        "paid_clicks",
+        "orders_per_paid_click",
+        "roas",
+        "refunds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "revenue": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        },
+        "orders": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        },
+        "aov": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        },
+        "ad_spend": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        },
+        "paid_clicks": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        },
+        "orders_per_paid_click": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        },
+        "roas": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        },
+        "refunds": {
+          "type": "object",
+          "description": "Toujours `yoy`, plus la comparaison du decoupage: `wow` en semaine, `mom` en mois.",
+          "$comment": "`compare_all` construit exactement deux types. Les nommer impose que la cle et le champ `kind` concordent.",
+          "required": [
+            "yoy"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "wow": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "wow"
+                    }
+                  }
+                }
+              ]
+            },
+            "mom": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "mom"
+                    }
+                  }
+                }
+              ]
+            },
+            "yoy": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/comparison"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "yoy"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "wow"
+              ],
+              "not": {
+                "required": [
+                  "mom"
+                ]
+              }
+            },
+            {
+              "required": [
+                "mom"
+              ],
+              "not": {
+                "required": [
+                  "wow"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anomaly"
+      }
+    },
+    "root_causes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/root_cause"
+      },
+      "maxItems": 1,
+      "description": "Au plus une analyse: `assemble_report` publie `[root_cause]` ou `[]`."
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/recommendation"
+      }
+    },
+    "data_freshness": {
+      "$ref": "#/$defs/data_freshness"
+    },
+    "data_quality": {
+      "$ref": "#/$defs/data_quality"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Le decoupage est UN: `_meta.grain` est `cfg.grain`, les deux periodes en viennent, et `compare_all` en derive le type de comparaison. Un rapport qui annoncerait un decoupage hebdomadaire et publierait des comparaisons mensuelles serait incoherent.",
+      "if": {
+        "properties": {
+          "_meta": {
+            "properties": {
+              "grain": {
+                "const": "week"
+              }
+            },
+            "required": [
+              "grain"
+            ]
+          }
+        },
+        "required": [
+          "_meta"
+        ]
+      },
+      "then": {
+        "properties": {
+          "period": {
+            "properties": {
+              "current": {
+                "properties": {
+                  "grain": {
+                    "const": "week"
+                  },
+                  "label": {
+                    "pattern": "^\\d{4}-W\\d{2}$"
+                  }
+                }
+              },
+              "previous": {
+                "properties": {
+                  "grain": {
+                    "const": "week"
+                  },
+                  "label": {
+                    "pattern": "^\\d{4}-W\\d{2}$"
+                  }
+                }
+              }
+            }
+          },
+          "comparisons": {
+            "additionalProperties": {
+              "required": [
+                "wow"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "_meta": {
+            "properties": {
+              "grain": {
+                "const": "month"
+              }
+            },
+            "required": [
+              "grain"
+            ]
+          }
+        },
+        "required": [
+          "_meta"
+        ]
+      },
+      "then": {
+        "properties": {
+          "period": {
+            "properties": {
+              "current": {
+                "properties": {
+                  "grain": {
+                    "const": "month"
+                  },
+                  "label": {
+                    "pattern": "^\\d{4}-\\d{2}$"
+                  }
+                }
+              },
+              "previous": {
+                "properties": {
+                  "grain": {
+                    "const": "month"
+                  },
+                  "label": {
+                    "pattern": "^\\d{4}-\\d{2}$"
+                  }
+                }
+              }
+            }
+          },
+          "comparisons": {
+            "additionalProperties": {
+              "required": [
+                "mom"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Score non calculable: aucune dimension n'etait exploitable, donc les six sont exclues et aucun poids n'a ete renormalise.",
+      "if": {
+        "properties": {
+          "business_health_score": {
+            "properties": {
+              "score": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "score"
+            ]
+          }
+        },
+        "required": [
+          "business_health_score"
+        ]
+      },
+      "then": {
+        "properties": {
+          "business_health_score": {
+            "properties": {
+              "excluded_dimensions": {
+                "minItems": 6
+              },
+              "weights_renormalised": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "grain": {
+      "type": "string",
+      "enum": [
+        "week",
+        "month"
+      ],
+      "description": "Decoupage temporel des periodes.",
+      "$comment": "Ferme par `AnalyticsConfig.__post_init__` et par `periods.make_period`, qui levent sur toute autre valeur."
+    },
+    "period_label": {
+      "type": "string",
+      "pattern": "^\\d{4}-(W\\d{2}|\\d{2})$",
+      "description": "Label de periode: `AAAA-Wss` (semaine ISO) ou `AAAA-MM` (mois).",
+      "$comment": "Forme produite par `periods.make_period`, seule fabrique de labels. Contractuelle: un consommateur trie et joint sur ce label."
+    },
+    "iso_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "Date CIVILE LOCALE, `date.isoformat()`."
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\+00:00$",
+      "description": "Instant UTC a la seconde, `datetime.now(timezone.utc).isoformat(timespec=\"seconds\")`."
+    },
+    "finding_category": {
+      "type": "string",
+      "enum": [
+        "critical_issue",
+        "warning",
+        "setup",
+        "opportunity"
+      ],
+      "description": "Categorie d'un constat, dans l'ordre de lecture ratifie (AN-18 / D-084).",
+      "$comment": "`analytics.insights.CATEGORIES`. `setup` n'est pas un probleme de l'entreprise: c'est une donnee non branchee."
+    },
+    "finding_severity": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        "info"
+      ],
+      "description": "Severite d'un CONSTAT.",
+      "$comment": "`analytics.insights.SEVERITY_ORDER` et `messages.SEVERITY_KEY`. VOCABULAIRE DISTINCT de `issue_severity`: un constat metier et un signal d'ingestion ne se classent pas sur la meme echelle, et les confondre ferait passer un `warning` d'ingestion pour une alerte business."
+    },
+    "anomaly_severity": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "description": "Severite d'une ANOMALIE.",
+      "$comment": "`analytics.anomaly._severity` ne rend que ces trois valeurs: `info` n'y est pas atteignable. Sous-ensemble de `finding_severity`, declare a part pour ne pas admettre une valeur que le detecteur ne produit pas."
+    },
+    "issue_severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ],
+      "description": "Severite d'un signal de QUALITE DE DONNEE.",
+      "$comment": "`domain.quality.DataIssue.severity`; les trois valeurs sont les seules passees a `add_issue` dans `src/` (verifie par balayage AST). Ne pas confondre avec `finding_severity`."
+    },
+    "anomaly_direction": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down"
+      ],
+      "description": "Sens de l'ecart observe.",
+      "$comment": "`analytics.anomaly.detect_anomalies`: `\"down\" if delta < 0 else \"up\"`."
+    },
+    "assessment": {
+      "type": "string",
+      "enum": [
+        "favorable",
+        "unfavorable",
+        "neutral"
+      ],
+      "description": "Lecture business de l'ecart, derivee du sens SOUHAITABLE de la metrique.",
+      "$comment": "`analytics.anomaly.assess_direction`: une BAISSE des remboursements est favorable, et c'est la raison d'etre du champ."
+    },
+    "anomaly_method": {
+      "type": "string",
+      "enum": [
+        "percentage_threshold_vs_rolling_mean",
+        "zscore_and_percentage_threshold_vs_rolling_baseline"
+      ],
+      "description": "Methode de detection EFFECTIVEMENT appliquee (D-007).",
+      "$comment": "Identifiant technique, jamais une phrase. Les deux valeurs sont celles de `detect_anomalies`."
+    },
+    "data_quality_status": {
+      "type": "string",
+      "enum": [
+        "reliable",
+        "incomplete",
+        "unavailable"
+      ],
+      "description": "Statut de qualite d'un champ ou d'une metrique.",
+      "$comment": "`domain.quality.QualityStatus`."
+    },
+    "confidence_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "description": "Niveau de confiance QUALITATIF (AN-14 / D-081 option C).",
+      "$comment": "`analytics.confidence.CONFIDENCE_ORDER`. Derive d'un DECOMPTE de criteres: aucun coefficient."
+    },
+    "confidence_criterion": {
+      "type": "string",
+      "enum": [
+        "baseline_sufficient",
+        "fields_reliable",
+        "no_unobserved_competitor",
+        "share_interpretable"
+      ],
+      "description": "Critere de confiance.",
+      "$comment": "`analytics.confidence.CRITERIA_ORDER`, dans son ordre d'exposition."
+    },
+    "criterion_state": {
+      "type": "string",
+      "enum": [
+        "satisfied",
+        "not_satisfied",
+        "not_applicable"
+      ],
+      "description": "Etat d'un critere. `not_applicable` = sans objet: ne soutient ni n'affaiblit la conclusion.",
+      "$comment": "`analytics.confidence.SATISFIED` / `NOT_SATISFIED` / `NOT_APPLICABLE`."
+    },
+    "evidence_observability": {
+      "type": "string",
+      "enum": [
+        "observed",
+        "not_observed"
+      ],
+      "description": "Un fait est MESURE ou declare NON MESURE (D-073).",
+      "$comment": "`analytics.evidence.OBSERVED` / `NOT_OBSERVED`."
+    },
+    "evidence_comparison": {
+      "type": "string",
+      "enum": [
+        "baseline",
+        "previous_period",
+        "none"
+      ],
+      "description": "Reference de la comparaison. Enumeration FERMEE: une part de variation vs baseline et vs periode precedente ne sont pas la meme grandeur (AN-01).",
+      "$comment": "`analytics.evidence.COMPARISONS`."
+    },
+    "evidence_unit": {
+      "type": "string",
+      "enum": [
+        "currency",
+        "count",
+        "ratio",
+        "score",
+        "days"
+      ],
+      "description": "Unite d'un fait structure. Sans elle, un consommateur devine si 0,18 est un ratio ou un montant.",
+      "$comment": "`analytics.evidence.UNITS`. `days` est declaree par la constante et n'a aujourd'hui aucun producteur: le contrat suit la constante, pas l'echantillon."
+    },
+    "metric_unit": {
+      "type": "string",
+      "enum": [
+        "currency",
+        "count",
+        "ratio"
+      ],
+      "description": "Unite d'une metrique de KPI.",
+      "$comment": "Valeurs effectivement produites par les appels `_m(...)` de `analytics.kpi.compute_kpis`. Le commentaire d'annotation de `Metric.unit` cite aussi `percent`, qu'AUCUN chemin n'emet: l'admettre decrirait une forme que le moteur ne produit pas."
+    },
+    "factor_layer": {
+      "type": "string",
+      "enum": [
+        "a",
+        "b"
+      ],
+      "description": "Couche de decomposition: `a` = identite arithmetique du CA (additive), `b` = explications du volume de commandes (non additives).",
+      "$comment": "`analytics.root_cause.LAYER_REVENUE` / `LAYER_ORDER_VOLUME`. Les melanger est le defaut AN-01."
+    },
+    "health_dimension": {
+      "type": "string",
+      "enum": [
+        "revenue_growth",
+        "profitability",
+        "marketing_efficiency",
+        "customer_health",
+        "product_health",
+        "data_quality"
+      ],
+      "description": "Dimension du Business Health Score.",
+      "$comment": "Cles de `config.HealthConfig.weights`, seul proprietaire des poids."
+    },
+    "comparison_kind": {
+      "type": "string",
+      "enum": [
+        "wow",
+        "mom",
+        "yoy"
+      ],
+      "description": "Type de comparaison periodique.",
+      "$comment": "`analytics.timeseries.compare_all`: `wow` sur un decoupage hebdomadaire, `mom` sur un decoupage mensuel, `yoy` toujours."
+    },
+    "freshness_status": {
+      "type": "string",
+      "enum": [
+        "fresh",
+        "stale",
+        "unknown"
+      ],
+      "description": "Statut de fraicheur de la donnee (AN-05 / D-079).",
+      "$comment": "`analytics.pipeline.build_data_freshness`."
+    },
+    "kpi_key": {
+      "type": "string",
+      "enum": [
+        "revenue",
+        "orders",
+        "units",
+        "aov",
+        "refunds",
+        "refund_rate",
+        "ad_spend",
+        "paid_clicks",
+        "orders_per_paid_click",
+        "new_customers",
+        "cac",
+        "roas",
+        "gross_margin",
+        "cogs",
+        "payment_fees",
+        "repeat_purchase_rate",
+        "customer_concentration_top5"
+      ],
+      "description": "Cle de KPI publiee par le moteur.",
+      "$comment": "Les dix-sept cles assignees par `analytics.kpi.compute_kpis`, toutes inconditionnelles."
+    },
+    "series_metric_key": {
+      "type": "string",
+      "enum": [
+        "revenue",
+        "orders",
+        "aov",
+        "ad_spend",
+        "paid_clicks",
+        "orders_per_paid_click",
+        "roas",
+        "refunds"
+      ],
+      "description": "Grandeur suivie en serie temporelle, comparee et surveillee par le detecteur.",
+      "$comment": "Cles de `analytics.pipeline.SERIES_METRICS`: un seul proprietaire pour les series, les comparaisons et les anomalies."
+    },
+    "cost_component_key": {
+      "type": "string",
+      "enum": [
+        "cogs",
+        "payment_fees",
+        "advertising",
+        "refunds",
+        "shipping_cost"
+      ],
+      "description": "Composante de cout d'un profit de contribution COMPLET.",
+      "$comment": "`analytics.profitability.REQUIRED_COMPONENTS`."
+    },
+    "source_key": {
+      "type": "string",
+      "enum": [
+        "shopify_orders",
+        "shopify_products",
+        "stripe",
+        "google_ads"
+      ],
+      "description": "Source de donnee connectee.",
+      "$comment": "Les quatre sources marquees par `quality.mark_source` dans `ingestion/`."
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Fait STRUCTURE qui soutient un constat. Aucune de ses valeurs ne vit dans une phrase.",
+      "$comment": "`analytics.evidence.Evidence.to_dict`. `message_key` reste un IDENTIFIANT PUR sans entree de catalogue (D-2): une preuve se rend depuis ses champs types, et lui donner un gabarit reintroduirait la phrase comme source de verite. Aucune enumeration n'est donc declaree pour lui.",
+      "required": [
+        "fact_id",
+        "message_key",
+        "metric_key",
+        "source",
+        "observability",
+        "period",
+        "comparison",
+        "unit",
+        "current_value",
+        "previous_value",
+        "delta",
+        "delta_pct"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifiant stable du fait, unique dans son bloc."
+        },
+        "message_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cle de rendu technique, jamais du texte libre."
+        },
+        "metric_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observability": {
+          "$ref": "#/$defs/evidence_observability"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/period_label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "comparison": {
+          "$ref": "#/$defs/evidence_comparison"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/evidence_unit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "previous_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "delta": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "delta_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "D-073: un fait NON MESURE a TOUTES ses valeurs nulles. `0` affirmerait une absence d'effet, et une comparaison sans mesure n'a pas d'objet.",
+          "if": {
+            "properties": {
+              "observability": {
+                "const": "not_observed"
+              }
+            },
+            "required": [
+              "observability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "period": {
+                "type": "null"
+              },
+              "unit": {
+                "type": "null"
+              },
+              "current_value": {
+                "type": "null"
+              },
+              "previous_value": {
+                "type": "null"
+              },
+              "delta": {
+                "type": "null"
+              },
+              "delta_pct": {
+                "type": "null"
+              },
+              "comparison": {
+                "const": "none"
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Reciproque: un fait MESURE porte sa mesure et son unite. `analytics.evidence.observed()` exige `unit`, et chacun de ses appelants garde `current` contre `None` (sante, constats, anomalies, couts, campagnes, produits). Un fait observe a valeur nulle serait exactement la contradiction que la distinction `observed`/`not_observed` existe pour empecher.",
+          "if": {
+            "properties": {
+              "observability": {
+                "const": "observed"
+              }
+            },
+            "required": [
+              "observability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "current_value": {
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/evidence_unit"
+              }
+            }
+          }
+        },
+        {
+          "$comment": "`observed()` ramene `comparison` a `none` quand `previous` est absent: une comparaison declaree implique donc une valeur de reference.",
+          "if": {
+            "properties": {
+              "comparison": {
+                "enum": [
+                  "baseline",
+                  "previous_period"
+                ]
+              }
+            },
+            "required": [
+              "comparison"
+            ]
+          },
+          "then": {
+            "properties": {
+              "previous_value": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        {
+          "$comment": "`delta` est DERIVE des deux valeurs, jamais fourni a part: il ne peut pas exister sans elles.",
+          "if": {
+            "properties": {
+              "delta": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "delta"
+            ]
+          },
+          "then": {
+            "properties": {
+              "current_value": {
+                "type": "number"
+              },
+              "previous_value": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "confidence": {
+      "type": "object",
+      "description": "Confiance QUALITATIVE et les quatre criteres qui la produisent (AN-14 / D-081 option C).",
+      "$comment": "`analytics.confidence.Confidence.to_dict`. Les QUATRE criteres sont toujours exposes, `not_applicable` compris: un critere sans objet est DECLARE, pas omis -- c'est la propriete que D-081 option C ratifie, et la seule facon de relire un niveau.",
+      "required": [
+        "level",
+        "criteria"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/confidence_level"
+        },
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "criterion",
+              "state"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "criterion": {
+                "$ref": "#/$defs/confidence_criterion"
+              },
+              "state": {
+                "$ref": "#/$defs/criterion_state"
+              }
+            }
+          },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "description": "Metrique deterministe: valeur, definition, formule, sources, periode et statut de qualite.",
+      "$comment": "`analytics.kpi.Metric.to_dict`. `value` est `null` quand la grandeur est INCONNUE: jamais 0, qui affirmerait une mesure (regle du CAC).",
+      "required": [
+        "key",
+        "label",
+        "value",
+        "unit",
+        "definition",
+        "formula",
+        "sources",
+        "period",
+        "data_quality",
+        "notes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/kpi_key"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unit": {
+          "$ref": "#/$defs/metric_unit"
+        },
+        "definition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "formula": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "period": {
+          "$ref": "#/$defs/period_label"
+        },
+        "data_quality": {
+          "$ref": "#/$defs/data_quality_status"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "description": "Comparaison d'une grandeur a une periode de reference.",
+      "$comment": "`analytics.timeseries.Comparison.to_dict`. `current_period` et `previous_period` restent des chaines libres et non des labels: `compare()` publie le sentinelle `\"-\"` quand le type de comparaison ne correspond pas au decoupage. `compare_all` ne produit pas ce cas, mais le contrat ne doit pas interdire une forme que la fonction publique emet.",
+      "required": [
+        "metric",
+        "kind",
+        "current_period",
+        "previous_period",
+        "current_value",
+        "previous_value",
+        "delta",
+        "pct_change",
+        "available",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/series_metric_key"
+        },
+        "kind": {
+          "$ref": "#/$defs/comparison_kind"
+        },
+        "current_period": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previous_period": {
+          "type": "string",
+          "minLength": 1
+        },
+        "current_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "previous_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "delta": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pct_change": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Comparaison INDISPONIBLE: aucune valeur, et le motif est ECRIT. Les quatre champs sont nuls par construction dans les trois branches de repli de `compare()`.",
+          "if": {
+            "properties": {
+              "available": {
+                "const": false
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "current_value": {
+                "type": "null"
+              },
+              "previous_value": {
+                "type": "null"
+              },
+              "delta": {
+                "type": "null"
+              },
+              "pct_change": {
+                "type": "null"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Comparaison disponible: `reason` reste la chaine vide (valeur par defaut de la dataclasse). D-1 laisse ce champ hors catalogue; il n'est donc pas encore une cle de message.",
+          "if": {
+            "properties": {
+              "available": {
+                "const": true
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "const": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delta": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "delta"
+            ]
+          },
+          "then": {
+            "properties": {
+              "current_value": {
+                "type": "number"
+              },
+              "previous_value": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "series": {
+      "type": "object",
+      "description": "Serie temporelle d'une grandeur, avec sa moyenne mobile.",
+      "$comment": "`analytics.report.assemble_report`. `rolling_window` vient de `AnalyticsConfig.rolling_window`: le rapport publie la fenetre EFFECTIVEMENT appliquee, pas un defaut.",
+      "required": [
+        "points",
+        "rolling_average",
+        "rolling_window"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "period",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "period": {
+                "$ref": "#/$defs/period_label"
+              },
+              "value": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          },
+          "minItems": 2,
+          "description": "Un point par periode d'historique. `AnalyticsConfig` valide `lookback_periods >= 2`."
+        },
+        "rolling_average": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "description": "Meme longueur et meme ordre que `points`."
+        },
+        "rolling_window": {
+          "type": "integer"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "description": "Constat du moteur: FAIT, PREUVES, HYPOTHESE et RECOMMANDATION restent separes.",
+      "$comment": "`analytics.insights.Insight.to_dict`. `type` reste une chaine libre: il est DERIVE de la cle de metrique (`f\"{anomaly.metric}_anomaly\"`), donc l'enumerer dupliquerait `series_metric_key` dans un second proprietaire -- la faute meme qu'AN-16 supprime.",
+      "required": [
+        "finding_id",
+        "type",
+        "severity",
+        "category",
+        "fact",
+        "fact_key",
+        "fact_params",
+        "evidence",
+        "hypothesis",
+        "hypothesis_key",
+        "hypothesis_params",
+        "recommendation",
+        "recommendation_key",
+        "recommendation_params",
+        "estimated_impact",
+        "estimated_impact_basis",
+        "estimated_impact_basis_key",
+        "estimated_impact_basis_params",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identite stable du constat: `{type}` ou `{type}:{scope}` (D-082)."
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "$ref": "#/$defs/finding_severity"
+        },
+        "category": {
+          "$ref": "#/$defs/finding_category"
+        },
+        "fact": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Texte RENDU du fait: une representation derivee de la cle, jamais la reference."
+        },
+        "fact_key": {
+          "type": "string",
+          "enum": [
+            "finding.campaign_opportunity.fact",
+            "finding.customer_concentration.fact",
+            "finding.low_margin_product.fact",
+            "finding.metric_anomaly.fact",
+            "finding.metric_anomaly.fact_without_delta",
+            "finding.profitability_unavailable.fact",
+            "finding.revenue_decline.fact"
+          ]
+        },
+        "fact_params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "hypothesis": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hypothesis_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "factor.average_order_value.hypothesis",
+                "factor.hypothesis_insufficient_data",
+                "factor.order_volume.hypothesis",
+                "factor.paid_traffic.hypothesis",
+                "finding.campaign_opportunity.hypothesis",
+                "finding.customer_concentration.hypothesis",
+                "finding.low_margin_product.hypothesis",
+                "finding.metric_anomaly.hypothesis_favorable",
+                "finding.metric_anomaly.hypothesis_neutral",
+                "finding.metric_anomaly.hypothesis_unfavorable",
+                "finding.revenue_decline.hypothesis_not_identified"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hypothesis_params": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recommendation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommendation_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "finding.campaign_opportunity.recommendation",
+                "finding.customer_concentration.recommendation",
+                "finding.low_margin_product.recommendation",
+                "finding.metric_anomaly.recommendation_favorable",
+                "finding.metric_anomaly.recommendation_neutral",
+                "finding.metric_anomaly.recommendation_unfavorable",
+                "finding.profitability_unavailable.recommendation",
+                "finding.revenue_decline.recommendation_not_identified",
+                "recommendation.factor.average_order_value",
+                "recommendation.factor.fallback",
+                "recommendation.factor.order_volume",
+                "recommendation.factor.order_volume_with_campaign",
+                "recommendation.factor.paid_traffic"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recommendation_params": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimated_impact": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Chiffrage en devise, `null` des qu'il n'est pas calculable. Aucun impact n'est invente."
+        },
+        "estimated_impact_basis": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimated_impact_basis_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "impact_basis.campaign_not_quantifiable",
+                "impact_basis.revenue_vs_baseline"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimated_impact_basis_params": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/confidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "`insights.message_fields`: le texte, la cle et les parametres d'un meme message sont publies ensemble ou pas du tout. Un texte sans cle n'aurait plus d'identite (c'est par leur TEXTE que `llm/context.py` fusionnait les hypotheses), et une cle sans parametres ne se rendrait pas.",
+          "anyOf": [
+            {
+              "properties": {
+                "hypothesis": {
+                  "type": "null"
+                },
+                "hypothesis_key": {
+                  "type": "null"
+                },
+                "hypothesis_params": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "hypothesis": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "hypothesis_key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "hypothesis_params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "$comment": "`insights.message_fields`: le texte, la cle et les parametres d'un meme message sont publies ensemble ou pas du tout. Un texte sans cle n'aurait plus d'identite (c'est par leur TEXTE que `llm/context.py` fusionnait les hypotheses), et une cle sans parametres ne se rendrait pas.",
+          "anyOf": [
+            {
+              "properties": {
+                "recommendation": {
+                  "type": "null"
+                },
+                "recommendation_key": {
+                  "type": "null"
+                },
+                "recommendation_params": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "recommendation": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "recommendation_key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "recommendation_params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "$comment": "`insights.message_fields`: le texte, la cle et les parametres d'un meme message sont publies ensemble ou pas du tout. Un texte sans cle n'aurait plus d'identite (c'est par leur TEXTE que `llm/context.py` fusionnait les hypotheses), et une cle sans parametres ne se rendrait pas.",
+          "anyOf": [
+            {
+              "properties": {
+                "estimated_impact_basis": {
+                  "type": "null"
+                },
+                "estimated_impact_basis_key": {
+                  "type": "null"
+                },
+                "estimated_impact_basis_params": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "estimated_impact_basis": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "estimated_impact_basis_key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "estimated_impact_basis_params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_key": {
+                "const": "finding.campaign_opportunity.fact"
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fact_params": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "conversions_delta"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "conversions_delta": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_key": {
+                "const": "finding.customer_concentration.fact"
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fact_params": {
+                "type": "object",
+                "required": [
+                  "share"
+                ],
+                "properties": {
+                  "share": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_key": {
+                "const": "finding.low_margin_product.fact"
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fact_params": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "sku",
+                  "gross_margin"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "sku": {
+                    "type": "string"
+                  },
+                  "gross_margin": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_key": {
+                "const": "finding.metric_anomaly.fact"
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fact_params": {
+                "type": "object",
+                "required": [
+                  "metric",
+                  "period",
+                  "delta_pct"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  },
+                  "period": {
+                    "type": "string"
+                  },
+                  "delta_pct": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_key": {
+                "const": "finding.metric_anomaly.fact_without_delta"
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fact_params": {
+                "type": "object",
+                "required": [
+                  "metric",
+                  "period"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  },
+                  "period": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_key": {
+                "const": "finding.profitability_unavailable.fact"
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fact_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_key": {
+                "const": "finding.revenue_decline.fact"
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fact_params": {
+                "type": "object",
+                "required": [
+                  "period",
+                  "delta_pct_abs"
+                ],
+                "properties": {
+                  "period": {
+                    "type": "string"
+                  },
+                  "delta_pct_abs": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.campaign_opportunity.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.customer_concentration.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.low_margin_product.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.metric_anomaly.recommendation_favorable"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "metric"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.metric_anomaly.recommendation_neutral"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "metric"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.metric_anomaly.recommendation_unfavorable"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "metric"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.profitability_unavailable.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "components"
+                ],
+                "properties": {
+                  "components": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.revenue_decline.recommendation_not_identified"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.average_order_value"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.fallback"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.order_volume"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.order_volume_with_campaign"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "campaign"
+                ],
+                "properties": {
+                  "campaign": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.paid_traffic"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "recommendation": {
+      "type": "object",
+      "description": "Recommandation extraite d'un constat, avec le constat qui la porte.",
+      "$comment": "`analytics.report.assemble_report`: un element par constat PORTEUR d'une recommandation. `source_insight` est le `type` du constat, pas son `finding_id`.",
+      "required": [
+        "source_insight",
+        "severity",
+        "recommendation",
+        "recommendation_key",
+        "recommendation_params",
+        "confidence",
+        "estimated_impact",
+        "estimated_impact_basis",
+        "estimated_impact_basis_key",
+        "estimated_impact_basis_params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source_insight": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "$ref": "#/$defs/finding_severity"
+        },
+        "recommendation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recommendation_key": {
+          "type": "string",
+          "enum": [
+            "finding.campaign_opportunity.recommendation",
+            "finding.customer_concentration.recommendation",
+            "finding.low_margin_product.recommendation",
+            "finding.metric_anomaly.recommendation_favorable",
+            "finding.metric_anomaly.recommendation_neutral",
+            "finding.metric_anomaly.recommendation_unfavorable",
+            "finding.profitability_unavailable.recommendation",
+            "finding.revenue_decline.recommendation_not_identified",
+            "recommendation.factor.average_order_value",
+            "recommendation.factor.fallback",
+            "recommendation.factor.order_volume",
+            "recommendation.factor.order_volume_with_campaign",
+            "recommendation.factor.paid_traffic"
+          ]
+        },
+        "recommendation_params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/confidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimated_impact": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "estimated_impact_basis": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimated_impact_basis_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "impact_basis.campaign_not_quantifiable",
+                "impact_basis.revenue_vs_baseline"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimated_impact_basis_params": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "`insights.message_fields`: le texte, la cle et les parametres d'un meme message sont publies ensemble ou pas du tout. Un texte sans cle n'aurait plus d'identite (c'est par leur TEXTE que `llm/context.py` fusionnait les hypotheses), et une cle sans parametres ne se rendrait pas.",
+          "anyOf": [
+            {
+              "properties": {
+                "estimated_impact_basis": {
+                  "type": "null"
+                },
+                "estimated_impact_basis_key": {
+                  "type": "null"
+                },
+                "estimated_impact_basis_params": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "estimated_impact_basis": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "estimated_impact_basis_key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "estimated_impact_basis_params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.campaign_opportunity.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.customer_concentration.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.low_margin_product.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.metric_anomaly.recommendation_favorable"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "metric"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.metric_anomaly.recommendation_neutral"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "metric"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.metric_anomaly.recommendation_unfavorable"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "metric"
+                ],
+                "properties": {
+                  "metric": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.profitability_unavailable.recommendation"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "components"
+                ],
+                "properties": {
+                  "components": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "finding.revenue_decline.recommendation_not_identified"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.average_order_value"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.fallback"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.order_volume"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.order_volume_with_campaign"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "required": [
+                  "campaign"
+                ],
+                "properties": {
+                  "campaign": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recommendation_key": {
+                "const": "recommendation.factor.paid_traffic"
+              }
+            },
+            "required": [
+              "recommendation_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recommendation_params": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "anomaly": {
+      "type": "object",
+      "description": "Ecart juge anormal, avec le critere EFFECTIVEMENT applique (D-007).",
+      "$comment": "`analytics.anomaly.Anomaly.to_dict`.",
+      "required": [
+        "metric",
+        "period",
+        "observed_value",
+        "expected_value",
+        "delta",
+        "delta_pct",
+        "z_score",
+        "direction",
+        "assessment",
+        "method",
+        "criterion",
+        "criterion_key",
+        "criterion_params",
+        "severity",
+        "evidence",
+        "baseline_periods"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/series_metric_key"
+        },
+        "period": {
+          "$ref": "#/$defs/period_label"
+        },
+        "observed_value": {
+          "type": "number"
+        },
+        "expected_value": {
+          "type": "number"
+        },
+        "delta": {
+          "type": "number"
+        },
+        "delta_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "`null` quand la valeur attendue est nulle: aucune variation relative n'est alors definie."
+        },
+        "z_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "direction": {
+          "$ref": "#/$defs/anomaly_direction"
+        },
+        "assessment": {
+          "$ref": "#/$defs/assessment"
+        },
+        "method": {
+          "$ref": "#/$defs/anomaly_method"
+        },
+        "criterion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "criterion_key": {
+          "type": "string",
+          "enum": [
+            "anomaly.criterion",
+            "anomaly.criterion_without_zscore"
+          ]
+        },
+        "criterion_params": {
+          "type": "object",
+          "properties": {
+            "min_material_pct": {
+              "type": "number"
+            },
+            "pct_threshold": {
+              "type": "number"
+            },
+            "baseline_periods": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "zscore_threshold": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "severity": {
+          "$ref": "#/$defs/anomaly_severity"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "minItems": 1
+        },
+        "baseline_periods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/period_label"
+          },
+          "minItems": 1,
+          "description": "Periodes EFFECTIVEMENT retenues comme baseline (AN-01). Une baseline non declaree ne peut etre ni verifiee, ni reutilisee par la decomposition."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "B-3: le seuil de z-score n'est publie QUE s'il a servi a la regle. Le publier sans cela laissait croire qu'il s'etait applique.",
+          "if": {
+            "properties": {
+              "criterion_key": {
+                "const": "anomaly.criterion_without_zscore"
+              }
+            },
+            "required": [
+              "criterion_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "z_score": {
+                "type": "null"
+              },
+              "criterion_params": {
+                "required": [
+                  "min_material_pct",
+                  "pct_threshold",
+                  "baseline_periods"
+                ],
+                "not": {
+                  "required": [
+                    "zscore_threshold"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "criterion_key": {
+                "const": "anomaly.criterion"
+              }
+            },
+            "required": [
+              "criterion_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "z_score": {
+                "type": "number"
+              },
+              "criterion_params": {
+                "required": [
+                  "min_material_pct",
+                  "pct_threshold",
+                  "baseline_periods",
+                  "zscore_threshold"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "health_dimension_score": {
+      "type": "object",
+      "description": "Note d'une dimension du Business Health Score, ou sa non-calculabilite DECLAREE.",
+      "$comment": "`analytics.health.DimensionScore.to_dict`. Une dimension non calculable est EXCLUE et listee, jamais approximee: la noter recompenserait l'absence de donnee.",
+      "required": [
+        "key",
+        "label",
+        "score",
+        "weight",
+        "available",
+        "formula",
+        "thresholds",
+        "evidence",
+        "reason_unavailable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/health_dimension"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "weight": {
+          "type": "number",
+          "description": "Poids CONFIGURE de la dimension, avant renormalisation."
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "formula": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Regle de notation. `\"-\"` quand la dimension n'est pas notee."
+        },
+        "thresholds": {
+          "description": "Bareme `[[seuil, score], ...]`, ou `null` pour une dimension sans echelle (K-6).",
+          "$comment": "K-6: ce champ publiait `str(cfg.revenue_growth_thresholds)`, soit un `repr()` Python presente comme contrat. Les couples viennent de `config.HealthConfig`, qui valide leur monotonie (AN-16).",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": {
+                  "type": "number"
+                }
+              },
+              "minItems": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "reason_unavailable": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Dimension NOTEE: la note existe et aucun motif d'indisponibilite n'est publie (valeur par defaut de la dataclasse).",
+          "if": {
+            "properties": {
+              "available": {
+                "const": true
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "type": "number"
+              },
+              "reason_unavailable": {
+                "const": ""
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Dimension EXCLUE: aucune note, et le motif est ECRIT. Les six branches d'exclusion de `compute_business_health` en fournissent toutes un.",
+          "if": {
+            "properties": {
+              "available": {
+                "const": false
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "type": "null"
+              },
+              "reason_unavailable": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "$comment": "K-6: `data_quality` est la SEULE dimension sans bareme -- sa note est une application lineaire de la part de champs fiables, et `HealthConfig` ne definit aucune echelle pour elle. Lui en inventer une lui donnerait un second proprietaire (AN-16). Le conditionnel est bilateral pour qu'une seconde dimension ne puisse pas s'y glisser en silence.",
+          "if": {
+            "properties": {
+              "key": {
+                "const": "data_quality"
+              }
+            },
+            "required": [
+              "key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "thresholds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "key": {
+                "not": {
+                  "const": "data_quality"
+                }
+              }
+            },
+            "required": [
+              "key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "thresholds": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "business_health": {
+      "type": "object",
+      "description": "Business Health Score: somme ponderee des dimensions calculables, renormalisee. AUCUN LLM n'y intervient.",
+      "$comment": "`analytics.health.BusinessHealth.to_dict`.",
+      "required": [
+        "score",
+        "interpretation",
+        "dimensions",
+        "excluded_dimensions",
+        "weights_renormalised",
+        "methodology"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "score": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "`null` quand aucune dimension n'est exploitable."
+        },
+        "interpretation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/health_dimension_score"
+          },
+          "minItems": 6,
+          "maxItems": 6,
+          "description": "Les six dimensions, exclues comprises: une dimension non calculable est DECLAREE, pas retiree.",
+          "allOf": [
+            {
+              "$comment": "Les six dimensions de `HealthConfig.weights` sont toutes presentes, une fois chacune.",
+              "contains": {
+                "properties": {
+                  "key": {
+                    "const": "revenue_growth"
+                  }
+                },
+                "required": [
+                  "key"
+                ]
+              }
+            },
+            {
+              "$comment": "Les six dimensions de `HealthConfig.weights` sont toutes presentes, une fois chacune.",
+              "contains": {
+                "properties": {
+                  "key": {
+                    "const": "profitability"
+                  }
+                },
+                "required": [
+                  "key"
+                ]
+              }
+            },
+            {
+              "$comment": "Les six dimensions de `HealthConfig.weights` sont toutes presentes, une fois chacune.",
+              "contains": {
+                "properties": {
+                  "key": {
+                    "const": "marketing_efficiency"
+                  }
+                },
+                "required": [
+                  "key"
+                ]
+              }
+            },
+            {
+              "$comment": "Les six dimensions de `HealthConfig.weights` sont toutes presentes, une fois chacune.",
+              "contains": {
+                "properties": {
+                  "key": {
+                    "const": "customer_health"
+                  }
+                },
+                "required": [
+                  "key"
+                ]
+              }
+            },
+            {
+              "$comment": "Les six dimensions de `HealthConfig.weights` sont toutes presentes, une fois chacune.",
+              "contains": {
+                "properties": {
+                  "key": {
+                    "const": "product_health"
+                  }
+                },
+                "required": [
+                  "key"
+                ]
+              }
+            },
+            {
+              "$comment": "Les six dimensions de `HealthConfig.weights` sont toutes presentes, une fois chacune.",
+              "contains": {
+                "properties": {
+                  "key": {
+                    "const": "data_quality"
+                  }
+                },
+                "required": [
+                  "key"
+                ]
+              }
+            }
+          ]
+        },
+        "excluded_dimensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/health_dimension"
+          },
+          "maxItems": 6,
+          "uniqueItems": true
+        },
+        "weights_renormalised": {
+          "type": "boolean"
+        },
+        "methodology": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "cost_component": {
+      "type": "object",
+      "description": "Composante de cout, disponible ou explicitement absente.",
+      "$comment": "`analytics.profitability.CostComponent.to_dict`. `available` est derive de `value is not None`: les deux ne peuvent pas se contredire.",
+      "required": [
+        "key",
+        "label",
+        "value",
+        "available",
+        "source",
+        "note"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/cost_component_key"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Source qui porte le cout, ou `non connecte`."
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "available": {
+                "const": true
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "available": {
+                "const": false
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "profitability": {
+      "type": "object",
+      "description": "Profit de contribution. Revenue != Profit: une composante manquante rend le profit COMPLET indisponible, jamais approxime.",
+      "$comment": "`analytics.profitability.ProfitabilityResult.to_dict`.",
+      "required": [
+        "period",
+        "revenue",
+        "data_available",
+        "contribution_profit",
+        "contribution_margin",
+        "partial_contribution_profit",
+        "partial_contribution_margin",
+        "included_components",
+        "missing_components",
+        "components",
+        "limitations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "period": {
+          "$ref": "#/$defs/period_label"
+        },
+        "revenue": {
+          "type": "number"
+        },
+        "data_available": {
+          "type": "boolean"
+        },
+        "contribution_profit": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "contribution_margin": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "partial_contribution_profit": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "partial_contribution_margin": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "included_components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cost_component_key"
+          },
+          "uniqueItems": true
+        },
+        "missing_components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cost_component_key"
+          },
+          "uniqueItems": true
+        },
+        "components": {
+          "type": "object",
+          "description": "Les cinq composantes requises, toujours publiees.",
+          "required": [
+            "cogs",
+            "payment_fees",
+            "advertising",
+            "refunds",
+            "shipping_cost"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cogs": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/cost_component"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "cogs"
+                    }
+                  }
+                }
+              ]
+            },
+            "payment_fees": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/cost_component"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "payment_fees"
+                    }
+                  }
+                }
+              ]
+            },
+            "advertising": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/cost_component"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "advertising"
+                    }
+                  }
+                }
+              ]
+            },
+            "refunds": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/cost_component"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "refunds"
+                    }
+                  }
+                }
+              ]
+            },
+            "shipping_cost": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/cost_component"
+                },
+                {
+                  "properties": {
+                    "key": {
+                      "const": "shipping_cost"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Profit COMPLET disponible: aucune composante ne manque, donc aucune limitation n'est emise (`compute_profitability` ne les ecrit que dans la branche inverse).",
+          "if": {
+            "properties": {
+              "data_available": {
+                "const": true
+              }
+            },
+            "required": [
+              "data_available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "contribution_profit": {
+                "type": "number"
+              },
+              "contribution_margin": {
+                "type": "number"
+              },
+              "missing_components": {
+                "maxItems": 0
+              },
+              "limitations": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Profit COMPLET indisponible: il n'est pas chiffre, et ce qui manque est ECRIT. Le profit PARTIEL reste publie a part, avec la liste des couts inclus et exclus.",
+          "if": {
+            "properties": {
+              "data_available": {
+                "const": false
+              }
+            },
+            "required": [
+              "data_available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "contribution_profit": {
+                "type": "null"
+              },
+              "contribution_margin": {
+                "type": "null"
+              },
+              "limitations": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "row_count": {
+      "type": "object",
+      "description": "Comptage brut d'une source: lignes lues, lignes exploitees.",
+      "required": [
+        "source",
+        "rows",
+        "accepted_rows",
+        "rejected_rows"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/source_key"
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "accepted_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rejected_rows": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "field_quality": {
+      "type": "object",
+      "description": "Statut de couverture d'un champ exploite par le moteur.",
+      "$comment": "`domain.quality.FieldQuality.to_dict`. `field` reste une chaine: les noms suivis sont une couverture d'INGESTION, sans constante qui les declare, et les enumerer ici leur donnerait un proprietaire dans le contrat de rapport.",
+      "required": [
+        "field",
+        "status",
+        "coverage",
+        "note"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/data_quality_status"
+        },
+        "coverage": {
+          "type": "number"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "data_issue": {
+      "type": "object",
+      "description": "Signal de qualite leve par l'ingestion ou la reconciliation.",
+      "$comment": "`domain.quality.DataIssue.to_dict`. `kind` reste une chaine: les trente-cinq genres sont des litteraux repartis dans les connecteurs, sans constante qui les ferme, et un signal d'ingestion n'est pas un vocabulaire de contrat de rapport.",
+      "required": [
+        "source",
+        "kind",
+        "severity",
+        "message",
+        "count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "$ref": "#/$defs/issue_severity"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "data_quality": {
+      "type": "object",
+      "description": "Qualite de la donnee: sources chargees, comptages, devises observees, champs suivis et signaux.",
+      "$comment": "`domain.quality.DataQualityReport.to_dict`. Principe non negociable: l'utilisateur ne doit jamais croire que Mervio connait une donnee qu'il ne possede pas.",
+      "required": [
+        "sources_loaded",
+        "row_counts",
+        "observed_currencies",
+        "fields",
+        "issues",
+        "reliable_field_ratio"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sources_loaded": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source_key"
+          },
+          "uniqueItems": true
+        },
+        "row_counts": {
+          "type": "object",
+          "description": "Comptage par source. Conteneur DYNAMIQUE ferme: les cles sont les quatre sources de `set_rows`, et chaque valeur redeclare la sienne.",
+          "$comment": "Les quatre sources sont nommees pour que la cle et le champ `source` ne puissent pas divergier; `propertyNames` seul ne l'exprimerait pas.",
+          "additionalProperties": false,
+          "properties": {
+            "shopify_orders": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/row_count"
+                },
+                {
+                  "properties": {
+                    "source": {
+                      "const": "shopify_orders"
+                    }
+                  }
+                }
+              ]
+            },
+            "shopify_products": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/row_count"
+                },
+                {
+                  "properties": {
+                    "source": {
+                      "const": "shopify_products"
+                    }
+                  }
+                }
+              ]
+            },
+            "stripe": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/row_count"
+                },
+                {
+                  "properties": {
+                    "source": {
+                      "const": "stripe"
+                    }
+                  }
+                }
+              ]
+            },
+            "google_ads": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/row_count"
+                },
+                {
+                  "properties": {
+                    "source": {
+                      "const": "google_ads"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "observed_currencies": {
+          "type": "object",
+          "description": "Codes devise observes par source datee. Conteneur DYNAMIQUE ferme sur les deux sources qui portent une devise.",
+          "$comment": "`observe_currency` est appele par `ingestion/shopify.py` (`shopify`) et `ingestion/stripe.py` (`stripe`). Les codes sont normalises en majuscules et jamais vides.",
+          "additionalProperties": false,
+          "properties": {
+            "shopify": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "stripe": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          }
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field_quality"
+          }
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/data_issue"
+          }
+        },
+        "reliable_field_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Part des champs suivis classes `reliable`, ou `null` si aucun champ n'est suivi."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "`reliable_ratio()` rend `None` si et seulement si aucun champ n'est suivi: le conditionnel est bilateral.",
+          "if": {
+            "properties": {
+              "fields": {
+                "maxItems": 0
+              }
+            },
+            "required": [
+              "fields"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reliable_field_ratio": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fields": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "fields"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reliable_field_ratio": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cause_factor": {
+      "type": "object",
+      "description": "Facteur de la decomposition du CA, OBSERVE ou declare NON OBSERVE (D-073).",
+      "$comment": "`analytics.root_cause.CauseFactor.to_dict`. `contribution` n'existe qu'en couche A: une contribution est une part de la variation du CA, et la couche B explique la variation du VOLUME.",
+      "required": [
+        "factor",
+        "layer",
+        "observability",
+        "observed_fact",
+        "observed_fact_key",
+        "observed_fact_params",
+        "supporting_metric",
+        "current_value",
+        "previous_value",
+        "factor_change_pct",
+        "contribution",
+        "confidence",
+        "hypothesis",
+        "hypothesis_key",
+        "hypothesis_params",
+        "explains",
+        "explains_share",
+        "missing_source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "factor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layer": {
+          "$ref": "#/$defs/factor_layer"
+        },
+        "observability": {
+          "$ref": "#/$defs/evidence_observability"
+        },
+        "observed_fact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observed_fact_key": {
+          "type": "string",
+          "enum": [
+            "factor.observed_fact_not_computable",
+            "factor.observed_fact_not_observed",
+            "factor.observed_fact_vs_baseline",
+            "factor.observed_fact_vs_previous_period"
+          ]
+        },
+        "observed_fact_params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "supporting_metric": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "previous_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "factor_change_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "contribution": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Part de la variation du CA, en log-ratio. AUCUNE borne: une decomposition degeneree publie des parts hors [0, 1] (mesure: +1,5899 compense par -0,5899), et c'est precisement ce que le critere `share_interpretable` sert a signaler."
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/confidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hypothesis": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hypothesis_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "factor.average_order_value.hypothesis",
+                "factor.hypothesis_insufficient_data",
+                "factor.order_volume.hypothesis",
+                "factor.paid_traffic.hypothesis",
+                "finding.campaign_opportunity.hypothesis",
+                "finding.customer_concentration.hypothesis",
+                "finding.low_margin_product.hypothesis",
+                "finding.metric_anomaly.hypothesis_favorable",
+                "finding.metric_anomaly.hypothesis_neutral",
+                "finding.metric_anomaly.hypothesis_unfavorable",
+                "finding.revenue_decline.hypothesis_not_identified"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hypothesis_params": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explains": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Couche B: grandeur que ce facteur explique."
+        },
+        "explains_share": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Couche B observee: part de la variation de `explains` imputable a ce facteur. Non bornee, meme raison que `contribution`."
+        },
+        "missing_source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Facteur NON observe: source qui manque. Obligatoire dans ce cas (D-073)."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "`insights.message_fields`: le texte, la cle et les parametres d'un meme message sont publies ensemble ou pas du tout. Un texte sans cle n'aurait plus d'identite (c'est par leur TEXTE que `llm/context.py` fusionnait les hypotheses), et une cle sans parametres ne se rendrait pas.",
+          "anyOf": [
+            {
+              "properties": {
+                "hypothesis": {
+                  "type": "null"
+                },
+                "hypothesis_key": {
+                  "type": "null"
+                },
+                "hypothesis_params": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "hypothesis": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "hypothesis_key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "hypothesis_params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "$comment": "D-073: un facteur NON OBSERVE a tous ses champs chiffres et interpretatifs nuls -- `contribution: 0.0` AFFIRMERAIT une absence d'effet, la meme faute que << CAC = 0 >>. L'angle mort est DECLARE: `missing_source` nomme la source qui manque.",
+          "if": {
+            "properties": {
+              "observability": {
+                "const": "not_observed"
+              }
+            },
+            "required": [
+              "observability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "observed_fact_key": {
+                "const": "factor.observed_fact_not_observed"
+              },
+              "supporting_metric": {
+                "type": "null"
+              },
+              "current_value": {
+                "type": "null"
+              },
+              "previous_value": {
+                "type": "null"
+              },
+              "factor_change_pct": {
+                "type": "null"
+              },
+              "contribution": {
+                "type": "null"
+              },
+              "explains_share": {
+                "type": "null"
+              },
+              "confidence": {
+                "type": "null"
+              },
+              "hypothesis": {
+                "type": "null"
+              },
+              "hypothesis_key": {
+                "type": "null"
+              },
+              "hypothesis_params": {
+                "type": "null"
+              },
+              "missing_source": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Reciproque: un facteur observe ne declare aucune source manquante, et son fait observe est l'un des trois enonces de mesure.",
+          "if": {
+            "properties": {
+              "observability": {
+                "const": "observed"
+              }
+            },
+            "required": [
+              "observability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "missing_source": {
+                "type": "null"
+              },
+              "observed_fact_key": {
+                "enum": [
+                  "factor.observed_fact_vs_baseline",
+                  "factor.observed_fact_vs_previous_period",
+                  "factor.observed_fact_not_computable"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Facteur NON CALCULABLE (une des deux valeurs est nulle ou negative): aucune part n'est publiee, et l'hypothese le dit.",
+          "if": {
+            "properties": {
+              "observed_fact_key": {
+                "const": "factor.observed_fact_not_computable"
+              }
+            },
+            "required": [
+              "observed_fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "factor_change_pct": {
+                "type": "null"
+              },
+              "contribution": {
+                "type": "null"
+              },
+              "explains_share": {
+                "type": "null"
+              },
+              "hypothesis_key": {
+                "const": "factor.hypothesis_insufficient_data"
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Couche A: identite arithmetique du CA. Elle n'explique aucune autre grandeur.",
+          "if": {
+            "properties": {
+              "layer": {
+                "const": "a"
+              }
+            },
+            "required": [
+              "layer"
+            ]
+          },
+          "then": {
+            "properties": {
+              "explains": {
+                "type": "null"
+              },
+              "explains_share": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Couche B: elle explique le VOLUME DE COMMANDES, donc elle ne porte jamais de contribution au CA (AN-01).",
+          "if": {
+            "properties": {
+              "layer": {
+                "const": "b"
+              }
+            },
+            "required": [
+              "layer"
+            ]
+          },
+          "then": {
+            "properties": {
+              "contribution": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observed_fact_key": {
+                "const": "factor.observed_fact_not_computable"
+              }
+            },
+            "required": [
+              "observed_fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "observed_fact_params": {
+                "type": "object",
+                "required": [
+                  "factor",
+                  "factor_label"
+                ],
+                "properties": {
+                  "factor": {
+                    "type": "string"
+                  },
+                  "factor_label": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observed_fact_key": {
+                "const": "factor.observed_fact_not_observed"
+              }
+            },
+            "required": [
+              "observed_fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "observed_fact_params": {
+                "type": "object",
+                "required": [
+                  "factor",
+                  "factor_label"
+                ],
+                "properties": {
+                  "factor": {
+                    "type": "string"
+                  },
+                  "factor_label": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observed_fact_key": {
+                "const": "factor.observed_fact_vs_baseline"
+              }
+            },
+            "required": [
+              "observed_fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "observed_fact_params": {
+                "type": "object",
+                "required": [
+                  "factor",
+                  "factor_label",
+                  "change",
+                  "period",
+                  "baseline_periods"
+                ],
+                "properties": {
+                  "factor": {
+                    "type": "string"
+                  },
+                  "factor_label": {
+                    "type": "string"
+                  },
+                  "change": {
+                    "type": "number"
+                  },
+                  "period": {
+                    "type": "string"
+                  },
+                  "baseline_periods": {
+                    "type": "integer"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observed_fact_key": {
+                "const": "factor.observed_fact_vs_previous_period"
+              }
+            },
+            "required": [
+              "observed_fact_key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "observed_fact_params": {
+                "type": "object",
+                "required": [
+                  "factor",
+                  "factor_label",
+                  "change",
+                  "period",
+                  "previous_period"
+                ],
+                "properties": {
+                  "factor": {
+                    "type": "string"
+                  },
+                  "factor_label": {
+                    "type": "string"
+                  },
+                  "change": {
+                    "type": "number"
+                  },
+                  "period": {
+                    "type": "string"
+                  },
+                  "previous_period": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "product_contributor": {
+      "type": "object",
+      "description": "Contribution d'un article a la variation du CA.",
+      "required": [
+        "sku",
+        "label",
+        "current_revenue",
+        "previous_revenue",
+        "delta",
+        "contribution"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sku": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "current_revenue": {
+          "type": "number"
+        },
+        "previous_revenue": {
+          "type": "number"
+        },
+        "delta": {
+          "type": "number"
+        },
+        "contribution": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "campaign_contributor": {
+      "type": "object",
+      "description": "Contribution d'une campagne, comparee a la periode precedente.",
+      "required": [
+        "campaign_id",
+        "name",
+        "spend_current",
+        "spend_previous",
+        "spend_change_pct",
+        "conversions_current",
+        "conversions_previous",
+        "conversions_change_pct",
+        "cvr_current",
+        "cvr_previous",
+        "conversions_delta"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "spend_current": {
+          "type": "number"
+        },
+        "spend_previous": {
+          "type": "number"
+        },
+        "spend_change_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "conversions_current": {
+          "type": "number"
+        },
+        "conversions_previous": {
+          "type": "number"
+        },
+        "conversions_change_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cvr_current": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cvr_previous": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "conversions_delta": {
+          "type": "number"
+        }
+      }
+    },
+    "root_cause": {
+      "type": "object",
+      "description": "Decomposition de la variation du CA contre la MEME baseline que l'anomalie (AN-01). Le moteur produit des HYPOTHESES, jamais des causalites prouvees.",
+      "$comment": "`analytics.root_cause.RootCauseAnalysis.to_dict`.",
+      "required": [
+        "target_metric",
+        "period",
+        "previous_period",
+        "observed_change_pct",
+        "observed_change_absolute",
+        "method",
+        "method_key",
+        "available",
+        "baseline_periods",
+        "baseline_revenue",
+        "change_vs_previous_period",
+        "orders_per_paid_click",
+        "primacy_share",
+        "primary_factor",
+        "factors",
+        "product_contributors",
+        "campaign_contributors",
+        "limitations",
+        "limitation_keys"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "target_metric": {
+          "const": "revenue",
+          "description": "Seule grandeur decomposee aujourd'hui."
+        },
+        "period": {
+          "$ref": "#/$defs/period_label"
+        },
+        "previous_period": {
+          "$ref": "#/$defs/period_label"
+        },
+        "observed_change_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "observed_change_absolute": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method_key": {
+          "const": "root_cause.method"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "baseline_periods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/period_label"
+          },
+          "minItems": 1
+        },
+        "baseline_revenue": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Moyenne du CA sur la baseline. Egale EXACTEMENT `anomalies[].expected_value` du CA: c'est l'objet d'AN-01."
+        },
+        "change_vs_previous_period": {
+          "type": "object",
+          "description": "Comparaison a la periode precedente, CONSERVEE mais etiquetee a part et SANS contribution.",
+          "$comment": "Une contribution rattachee a un autre referentiel serait le melange qu'AN-01 supprime.",
+          "required": [
+            "previous_period",
+            "current_revenue",
+            "previous_revenue",
+            "delta",
+            "pct"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "previous_period": {
+              "$ref": "#/$defs/period_label"
+            },
+            "current_revenue": {
+              "type": "number"
+            },
+            "previous_revenue": {
+              "type": "number"
+            },
+            "delta": {
+              "type": "number"
+            },
+            "pct": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "orders_per_paid_click": {
+          "type": "object",
+          "description": "Commandes TOTALES rapportees aux SEULS clics payants: une preuve, jamais un taux de conversion du site.",
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "baseline": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "note": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "primacy_share": {
+          "type": "number",
+          "description": "Seuil de primaute de la couche B EFFECTIVEMENT applique (D-089)."
+        },
+        "primary_factor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Jamais un facteur NON observe (D-073)."
+        },
+        "factors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cause_factor"
+          }
+        },
+        "product_contributors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/product_contributor"
+          },
+          "maxItems": 5
+        },
+        "campaign_contributors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/campaign_contributor"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "limitation_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "root_cause.decomposition_impossible",
+              "root_cause.limitation.no_causality",
+              "root_cause.limitation.paid_clicks_only",
+              "root_cause.limitation.verify_in_source"
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Decomposition IMPOSSIBLE (CA nul sur l'une des deux periodes): `analyse_revenue_change` rend la main avant d'ecrire quoi que ce soit, donc aucun facteur, aucun contributeur, aucune preuve de conversion -- et la seule limitation publiee est celle qui le dit.",
+          "if": {
+            "properties": {
+              "available": {
+                "const": false
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "factors": {
+                "maxItems": 0
+              },
+              "product_contributors": {
+                "maxItems": 0
+              },
+              "campaign_contributors": {
+                "maxItems": 0
+              },
+              "primary_factor": {
+                "type": "null"
+              },
+              "orders_per_paid_click": {
+                "maxProperties": 0
+              },
+              "limitations": {
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "limitation_keys": {
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "const": "root_cause.decomposition_impossible"
+                }
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Decomposition FAITE: la variation relative est definie (la baseline est strictement positive), les facteurs sont publies, et la preuve `orders_per_paid_click` porte ses trois champs.",
+          "if": {
+            "properties": {
+              "available": {
+                "const": true
+              }
+            },
+            "required": [
+              "available"
+            ]
+          },
+          "then": {
+            "properties": {
+              "observed_change_pct": {
+                "type": "number"
+              },
+              "observed_change_absolute": {
+                "type": "number"
+              },
+              "baseline_revenue": {
+                "type": "number"
+              },
+              "factors": {
+                "minItems": 1
+              },
+              "orders_per_paid_click": {
+                "required": [
+                  "current",
+                  "baseline",
+                  "note"
+                ]
+              },
+              "limitation_keys": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "data_freshness": {
+      "type": "object",
+      "description": "Fraicheur de la donnee (AN-05 / D-079). Disjointe du choix de periode: un export arrete 40 jours plus tot produit une periode parfaitement close, analysee, et pourtant perimee.",
+      "$comment": "`analytics.pipeline.build_data_freshness`. `analysis_date` est le parametre `today`, JAMAIS l'horloge murale: `_meta.generated_at` est le seul champ non deterministe autorise (D-058).",
+      "required": [
+        "latest_data_day",
+        "analysis_date",
+        "delay_days",
+        "threshold_days",
+        "status",
+        "message_key",
+        "sources"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "latest_data_day": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/iso_date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analysis_date": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/iso_date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delay_days": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Retard en jours calendaires. Peut etre negatif si l'analyse precede la derniere donnee."
+        },
+        "threshold_days": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seuil configure. `AnalyticsConfig` valide `freshness_stale_days >= 1`."
+        },
+        "status": {
+          "$ref": "#/$defs/freshness_status"
+        },
+        "message_key": {
+          "type": "string",
+          "enum": [
+            "data_freshness.fresh",
+            "data_freshness.stale",
+            "data_freshness.unknown"
+          ]
+        },
+        "sources": {
+          "type": "object",
+          "description": "Dernier jour civil local par source datee. Une source sans ligne rend `null`, jamais la date d'une AUTRE source.",
+          "required": [
+            "shopify_orders",
+            "google_ads",
+            "stripe"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "shopify_orders": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/iso_date"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "google_ads": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/iso_date"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stripe": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/iso_date"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "`status` et `message_key` sont derives du MEME calcul (`_FRESHNESS_KEYS[status]`): ils ne peuvent pas se contredire.",
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "message_key": {
+                "const": "data_freshness.unknown"
+              },
+              "delay_days": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "$comment": "Statut connu: le retard est calcule, donc la date d'analyse ET la derniere donnee existent toutes deux.",
+          "if": {
+            "properties": {
+              "status": {
+                "const": "fresh"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "message_key": {
+                "const": "data_freshness.fresh"
+              },
+              "delay_days": {
+                "type": "integer"
+              },
+              "latest_data_day": {
+                "$ref": "#/$defs/iso_date"
+              },
+              "analysis_date": {
+                "$ref": "#/$defs/iso_date"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "stale"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "message_key": {
+                "const": "data_freshness.stale"
+              },
+              "delay_days": {
+                "type": "integer"
+              },
+              "latest_data_day": {
+                "$ref": "#/$defs/iso_date"
+              },
+              "analysis_date": {
+                "$ref": "#/$defs/iso_date"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "meta": {
+      "type": "object",
+      "description": "Metadonnees du rapport. Le MOTEUR possede cette structure: la couche application n'en renseigne que des valeurs (K-5).",
+      "$comment": "`analytics.report.assemble_report`. L'ordre d'insertion des cles est l'ordre des octets, et l'egalite byte-for-byte CLI/persiste en depend (D-058); JSON Schema ne l'exprime pas, et c'est `tests/test_determinism_f01.py` qui le tient.",
+      "required": [
+        "report_contract",
+        "engine",
+        "engine_version",
+        "generated_at",
+        "currency",
+        "grain",
+        "llm_used",
+        "dataset_is_synthetic",
+        "analysis_label",
+        "note",
+        "synthetic_data_warning"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "report_contract": {
+          "const": "2.0",
+          "description": "Version du CONTRAT de rapport (K-2). Distincte d'`engine_version`: le contrat decrit la FORME, le moteur le CALCUL."
+        },
+        "engine": {
+          "const": "mervio-analytics"
+        },
+        "engine_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Version du moteur de calcul. Libre: elle bouge sans rupture de contrat."
+        },
+        "generated_at": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/utc_timestamp"
+            }
+          ],
+          "description": "Horloge murale a la generation. SEUL champ non deterministe du rapport, exclu de la comparaison byte-for-byte (D-058, reserve 1)."
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Devise des montants, ou `unknown` quand l'export n'en declare aucune: jamais une devise supposee."
+        },
+        "grain": {
+          "$ref": "#/$defs/grain"
+        },
+        "llm_used": {
+          "type": "boolean",
+          "description": "Aucun LLM n'intervient dans le calcul; le champ reste un booleen pour que la question ait une reponse lisible dans le rapport."
+        },
+        "dataset_is_synthetic": {
+          "type": "boolean",
+          "description": "K-5: la cle existe TOUJOURS, y compris a `false`. Elle n'etait ajoutee que lorsque le jeu etait synthetique, ce qui donnait deux formes a un seul contrat."
+        },
+        "analysis_label": {
+          "type": "string",
+          "description": "Libelle de livraison. Chaine VIDE quand l'appelant n'en fournit pas: la cle existe quand meme."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "synthetic_data_warning": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "period_ref": {
+      "type": "object",
+      "description": "Intervalle analyse, en dates CIVILES LOCALES. `end` est INCLUSIVE.",
+      "$comment": "`analytics.periods.Period.to_dict`.",
+      "required": [
+        "label",
+        "grain",
+        "start",
+        "end"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/period_label"
+        },
+        "grain": {
+          "$ref": "#/$defs/grain"
+        },
+        "start": {
+          "$ref": "#/$defs/iso_date"
+        },
+        "end": {
+          "$ref": "#/$defs/iso_date"
+        }
+      }
+    },
+    "product_row": {
+      "type": "object",
+      "description": "Performance d'un article sur la periode.",
+      "$comment": "`analytics.kpi.product_performance`. Ordre TOTAL: CA decroissant puis `sku` (K-4).",
+      "required": [
+        "sku",
+        "title",
+        "revenue",
+        "units",
+        "cogs",
+        "gross_profit",
+        "gross_margin",
+        "cogs_known"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sku": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string"
+        },
+        "revenue": {
+          "type": "number"
+        },
+        "units": {
+          "type": "integer"
+        },
+        "cogs": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "gross_profit": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "gross_margin": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cogs_known": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Sans cout produit connu, aucune marge n'est publiee: elle serait inventee.",
+          "if": {
+            "properties": {
+              "cogs_known": {
+                "const": false
+              }
+            },
+            "required": [
+              "cogs_known"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cogs": {
+                "type": "null"
+              },
+              "gross_profit": {
+                "type": "null"
+              },
+              "gross_margin": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "campaign_row": {
+      "type": "object",
+      "description": "Performance d'une campagne sur la periode.",
+      "$comment": "`analytics.kpi.campaign_performance`. Ordre TOTAL: depense decroissante puis `campaign_id` (K-4).",
+      "required": [
+        "campaign_id",
+        "name",
+        "spend",
+        "impressions",
+        "clicks",
+        "conversions",
+        "conversion_value",
+        "roas",
+        "cpc",
+        "cvr",
+        "cpa"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "spend": {
+          "type": "number"
+        },
+        "impressions": {
+          "type": "integer"
+        },
+        "clicks": {
+          "type": "integer"
+        },
+        "conversions": {
+          "type": "number"
+        },
+        "conversion_value": {
+          "type": "number"
+        },
+        "roas": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cpc": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cvr": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cpa": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "top_customer": {
+      "type": "object",
+      "description": "Un des cinq plus gros clients de la periode, DECRIT et non designe (AN-17).",
+      "$comment": "`analytics.report.top_customers`. AUCUN identifiant client: le pseudonyme publie ici survivait indefiniment a l'effacement (D-056), car `reports_forbid_update` interdit de modifier un rapport persiste. Le rang porte la meme information analytique sans designer personne; le CA absolu reste derivable (`revenue_share` x `kpis.revenue.value`). `additionalProperties: false` est ce qui empeche un identifiant de revenir.",
+      "required": [
+        "rank",
+        "orders",
+        "revenue_share"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rank": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Rang par CA decroissant; a egalite, ordre de premiere apparition dans les commandes."
+        },
+        "orders": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "revenue_share": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Part du CA de la periode. `null` quand le CA de periode est nul: jamais 0.0, comme pour le KPI."
+        }
+      }
+    }
+  }
+}

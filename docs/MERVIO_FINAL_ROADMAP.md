@@ -80,8 +80,8 @@ Instantané scellé, immuable
   ↓  workers/handlers.py (import, analysis, purge)      PARTIEL — bibliothèque, aucun processus
 Moteur : KPI → séries → anomalies → cause → santé → insights
   ↓  analytics/*                                        DÉMONTRÉ (v1, angles morts déclarés)
-Rapport JSON (octets exacts + jsonb + SHA-256)            DÉMONTRÉ
-  ↓  llm/* (contexte 1.0, validateur, mock)             PARTIEL — aucun appelant de production
+Rapport JSON — contrat 2.0, schéma versionné                DÉMONTRÉ
+  ↓  llm/* (contexte 2.0, validateur, mock)             PARTIEL — aucun appelant de production
 Explication                                               NON DÉMONTRÉ
   ↓
 API / Frontend / Shopify / Actions / Facturation          NON DÉMONTRÉ (absents)
@@ -91,7 +91,7 @@ API / Frontend / Shopify / Actions / Facturation          NON DÉMONTRÉ (absent
 
 | Capacité | Preuve |
 |---|---|
-| Suite complète | 1097 tests passés avec PostgreSQL 17.11, 0 ignoré ; 796 + 301 ignorés sans base |
+| Suite complète | **3594 collectés — 3594 passés — 0 échec — 0 ignoré**, sur PostgreSQL 17 réel (état 004.5 ; `MERVIO_EXPECTED_TESTS = 3594`, égalité exacte imposée par la CI) |
 | Isolation des tenants | RLS `ENABLE` + `FORCE`, clés étrangères composites, tests dépôt + SQL brut |
 | Reproductibilité | rapport persisté = rapport CLI, octet pour octet |
 | Immuabilité | déclencheurs sur instantanés, lignes canoniques, rapports et audit |
@@ -106,7 +106,7 @@ API / Frontend / Shopify / Actions / Facturation          NON DÉMONTRÉ (absent
 | Capacité | Limite |
 |---|---|
 | Validation sur données réelles | 1 registre reconstruit (OH5, 106 commandes), aucune remise partielle, aucune date de remboursement |
-| Couverture analytique | 17 scénarios synthétiques. **Précision :** 10 scénarios sur 17 déclarent au moins un `KNOWN_GAP` (vérifié dans `synthetic/scenarios.py`) ; seuls 7 sont entièrement couverts. Un `KNOWN_GAP` compte comme « réussi » quand le moteur **ne** trouve **pas** la vérité. « 170/170 » ne mesure donc pas une couverture. |
+| Couverture analytique | 17 scénarios synthétiques, 61 attentes. **Précision (mesure 004.5, D-076) :** **12** scénarios sur 17 déclarent au moins un `KNOWN_GAP` ; **5** sont entièrement couverts — `AOV_decline`, `healthy_store`, `refund_spike`, `revenue_drop`, `traffic_drop`. Un `KNOWN_GAP` compte comme « réussi » quand le moteur **ne** trouve **pas** la vérité : 17/17 satisfaits ne mesure donc pas une couverture. |
 | Worker | `Worker.run_forever` existe ; pas d'entrée processus, pas de SIGTERM, pas de reprise périodique, liste de tenants explicite |
 | Journalisation | JSON + corrélation + rédaction ; appelée seulement par un benchmark |
 | Débit de file | 1 460 travaux/s mesurés **avec un gestionnaire vide** sur un seul tenant |
@@ -118,7 +118,7 @@ API / Frontend / Shopify / Actions / Facturation          NON DÉMONTRÉ (absent
 - Un vrai modèle LLM, son taux de rejet, sa latence, son coût.
 - Un export Shopify natif ; les formats Stripe et Google Ads réels.
 - Import et analyse **en tant que travaux** à 100 k et 1 M de commandes.
-- Fuseau horaire de la boutique (aucune colonne `stores.timezone`).
+- Fuseau horaire **de la boutique** : le découpage est paramétrable depuis 004.5 (AN-06, défaut `UTC`), mais `stores.timezone` — présente en base depuis la révision `0011` — n'est **ni écrite, ni lue** par le moteur.
 - Effacement RGPD, suppression d'organisation, sauvegarde et restauration.
 - Déploiement, supervision, alertes.
 
@@ -496,6 +496,33 @@ de fichiers par des objets appartenant au tenant, et figer le contrat de donnée
 
 ### Mission 004.5 — Report Contract 2.0 & Analytics Correctness
 
+> **ÉTAT : IMPLÉMENTÉE ET VALIDÉE** — **3594 / 3594 tests GREEN**, 0 échec, 0 ignoré.
+> Arbre de travail **non commité** à la rédaction de cette ligne.
+>
+> | Livré | Référence |
+> |---|---|
+> | AN-01 … AN-19 — les onze défauts du tableau ci-dessous | commits `93cf963` → `f3717bd` |
+> | **Report Contract 2.0** — 21 clés, `_meta.report_contract = "2.0"` | [`REPORT_CONTRACT.md`](REPORT_CONTRACT.md), D-091 |
+> | **Schéma JSON versionné et publié** — Draft 2020-12, 53 `$defs`, 70 conditionnels, `$id urn:mervio:schema:report:2.0` | [`schemas/report/2.0.json`](../schemas/report/2.0.json) |
+> | `ENGINE_VERSION` **0.2.0**, `CONTRACT_VERSION` **2.0** ; prompt et réponse inchangés en 1.0 | [`VERSIONS.md`](VERSIONS.md), D-095, D-097 |
+> | **D-076 = 5 scénarios entièrement couverts** — mesuré : 61 attentes, 44 MATCH, 17 KNOWN_GAP, 17/17 satisfaits à 20 000 commandes | `tests/test_synthetic_scenarios.py` |
+> | **Goldens régénérés** par le mécanisme canonique, 552 différences sémantiques auditées, **UNKNOWN = 0** | `tests/golden/llm_context/` |
+> | **D1 — rétention des preuves du contexte LLM** : `max_evidence` 30 → 45 et budget réparti entre natures | D-096 |
+> | Décisions journalisées **D-091 à D-097** | [`DECISIONS.md`](DECISIONS.md) |
+> | Correspondance 1.x → 2.0, **sans convertisseur** | [`REPORT_CONTRACT_1X_TO_2_0.md`](REPORT_CONTRACT_1X_TO_2_0.md) |
+>
+> **Défauts découverts en cours de mission et corrigés** : D1 (les contributions de campagne
+> sortaient du contexte LLM — 10 rapports sur 57 les perdaient en totalité) et les références
+> `findings[].evidence_ids` pendantes après troncature.
+>
+> **Observations documentées, volontairement NON corrigées** (hors périmètre, aucune n'affecte un
+> contrat) : `profitability.components.shipping_cost.source = "non connecte"` — un libellé
+> français dans un emplacement d'identifiant, épinglé par un test ; le repli `freshness or {}`
+> de `assemble_report`, inatteignable depuis le pipeline ; la sentinelle `"-"` de
+> `timeseries.compare`, inatteignable via `compare_all`.
+>
+> Handoff : [`MISSION_004_5_HANDOFF.md`](MISSION_004_5_HANDOFF.md).
+
 **Priority:** P0
 
 **Objective**
@@ -593,6 +620,13 @@ et identité octet pour octet CLI/persisté maintenue.
 - Suite LLM verte sur le contrat 2.0.
 
 **Definition of Done** — ADR « Report Contract 2.0 », table de correspondance 1.x → 2.0, goldens justifiés, CI verte.
+
+> **Atteinte.** ADR → [`REPORT_CONTRACT.md`](REPORT_CONTRACT.md) (le dépôt n'a pas de convention
+> `ADR_*.md` : chaque contrat a son document de référence nommé, comme
+> [`LLM_CONTRACT.md`](LLM_CONTRACT.md)). Correspondance →
+> [`REPORT_CONTRACT_1X_TO_2_0.md`](REPORT_CONTRACT_1X_TO_2_0.md). Goldens → régénérés par
+> `MERVIO_UPDATE_GOLDEN=1`, chaque différence classée, **UNKNOWN = 0**. CI → `MERVIO_EXPECTED_TESTS`
+> porté à **3594** ; suite complète verte en local sur PostgreSQL 17 réel, exécution CI à lancer.
 
 **What this unlocks** — un contrat de rapport exposable ; le LLM et l'interface sur une base stable.
 

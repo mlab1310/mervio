@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from ..config import REPORT_CONTRACT
 from ..domain.models import Customer
 from .insights import CATEGORIES, SECTION_OF, message_fields
 from .kpi import campaign_performance, product_performance
@@ -126,13 +127,22 @@ def assemble_report(dataset, window, period, prior, kpis, profitability, series,
         }
 
     return {
+        # K-2 / K-5: le moteur possede la STRUCTURE COMPLETE de `_meta`. Les deux points
+        # d'entree publiaient deux formes -- `application/service.annotate_report` CREAIT
+        # `analysis_label` et `dataset_is_synthetic`, cette derniere seulement quand le jeu
+        # etait synthetique. Les cles existent desormais toujours, dans un ordre fixe (l'ordre
+        # d'insertion est l'ordre des octets, et l'egalite CLI/persiste en depend); la couche
+        # application n'en renseigne plus que les VALEURS.
         "_meta": {
+            "report_contract": REPORT_CONTRACT,
             "engine": "mervio-analytics",
             "engine_version": engine_version,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "currency": currency,
             "grain": cfg.grain,
             "llm_used": False,
+            "dataset_is_synthetic": False,
+            "analysis_label": "",
             "note": "Tous les chiffres de ce rapport sont calcules de maniere deterministe. "
                     "Aucun LLM n'intervient dans le calcul.",
             "synthetic_data_warning": SYNTHETIC_MARKER,

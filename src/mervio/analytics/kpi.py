@@ -274,7 +274,11 @@ def product_performance(ds: Dataset) -> List[dict]:
         if entry["cogs_known"] and entry["revenue"]:
             entry["gross_profit"] = entry["revenue"] - entry["cogs"]
             entry["gross_margin"] = entry["gross_profit"] / entry["revenue"]
-    return sorted(acc.values(), key=lambda e: e["revenue"], reverse=True)
+    # K-4: cle TOTALE. `key=e["revenue"], reverse=True` laissait l'ordre d'insertion decider
+    # a revenu EGAL -- donc l'ordre d'apparition des articles dans l'export. `data/sample` n'a
+    # aucune egalite, et F-01 n'a jamais couvert ce tableau: le defaut ne s'est jamais montre.
+    # `sku` est unique, donc la cle n'admet plus d'egalite.
+    return sorted(acc.values(), key=lambda e: (-e["revenue"], e["sku"]))
 
 
 def campaign_performance(ds: Dataset) -> List[dict]:
@@ -297,4 +301,5 @@ def campaign_performance(ds: Dataset) -> List[dict]:
         entry["cpc"] = (entry["spend"] / entry["clicks"]) if entry["clicks"] else None
         entry["cvr"] = (entry["conversions"] / entry["clicks"]) if entry["clicks"] else None
         entry["cpa"] = (entry["spend"] / entry["conversions"]) if entry["conversions"] else None
-    return sorted(acc.values(), key=lambda e: e["spend"], reverse=True)
+    # K-4: cle TOTALE, meme raison. `campaign_id` est unique.
+    return sorted(acc.values(), key=lambda e: (-e["spend"], e["campaign_id"]))

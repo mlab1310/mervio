@@ -34,7 +34,9 @@ def context(request):
 
 # -- contrat ---------------------------------------------------------------
 def test_context_is_versioned(context, sample_report):
-    assert context["contract_version"] == CONTRACT_VERSION == "1.0"
+    # K-11: le contexte passe au contrat 2.0 avec le rapport. `PROMPT_VERSION` et
+    # `RESPONSE_SCHEMA_VERSION` restent a "1.0" (test_llm_provider.py les tient).
+    assert context["contract_version"] == CONTRACT_VERSION == "2.0"
     assert context["engine_version"] == sample_report["_meta"]["engine_version"]
 
 

@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mervio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Mervio core analytics engine - deterministic e-commerce business intelligence"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "moto>=5,<6"]
+dev = ["pytest>=8.0", "moto>=5,<6", "jsonschema>=4.23,<5"]
 # Mission 004.1: persistance PostgreSQL. Jamais requise par le moteur ni par la CLI.
 persistence = ["psycopg[binary]>=3.2,<4", "alembic>=1.13,<2"]
 # Mission 004.4.4 (D-055): pilote ObjectStore compatible S3. Extra OPTIONNEL, importe a la

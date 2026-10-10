@@ -5,7 +5,7 @@ source de vérité : il ne calcule aucun KPI, ne modifie ni le rapport ni le
 Business Health Score, et son explication est un artefact séparé.
 
 ```
-Analytics Engine ─► rapport déterministe ─► build_llm_context()  contexte 1.0 borné
+Analytics Engine ─► rapport déterministe ─► build_llm_context()  contexte 2.0 borné
                                           ─► build_request()      2 canaux séparés
                                           ─► call_provider()      délai + tentatives bornés
                                           ─► validate_response()  schéma fermé + ancrage
@@ -21,7 +21,7 @@ rapport reste `_meta.llm_used = false`.
 
 | Constante | Valeur | Couvre |
 |---|---|---|
-| `CONTRACT_VERSION` | `1.0` | forme du contexte |
+| `CONTRACT_VERSION` | `2.0` | forme du contexte |
 | `PROMPT_VERSION` | `1.0` | instructions système + enveloppe |
 | `RESPONSE_SCHEMA_VERSION` | `1.0` | réponse attendue du modèle |
 
@@ -29,27 +29,43 @@ Toute évolution de forme incrémente la version concernée. Les instantanés
 `tests/golden/llm_context/*.json` échouent sur tout changement non versionné
 (régénération : `MERVIO_UPDATE_GOLDEN=1 python -m pytest tests/test_llm_golden.py`).
 
-## Contexte 1.0 (`build_llm_context`)
+**004.5 (D-095 / K-11).** Le contexte passe à `2.0` **avec** le rapport
+([`REPORT_CONTRACT.md`](REPORT_CONTRACT.md)) : il a gagné la preuve structurée (AN-15), la
+confiance qualitative (AN-14), les clés de message (AN-19), la section `setup` (AN-18) et le bloc
+`data_freshness` (AN-05). `PROMPT_VERSION` et `RESPONSE_SCHEMA_VERSION` **ne bougent pas** : ni
+les instructions système ni le schéma de réponse n'ont changé. `build_prompt` refuse un contexte
+dont la version ne correspond pas à la constante du module. Matrice : [`VERSIONS.md`](VERSIONS.md).
+
+## Contexte 2.0 (`build_llm_context`)
 
 | Section | Contenu | Identifiants |
 |---|---|---|
 | `business_health` | score **recopié**, interprétation, dimensions, exclusions ; `computed_by = analytics_engine` | `health.score`, `health.<dimension>` |
 | `profitability` | profit / marge **complets** (null si incomplet), profit partiel, composantes ; `partial_is_not_profit = true` | `profitability` |
 | `facts` | KPI disponibles : valeur, unité, période, qualité, formule, sources, notes | `kpi.<metric>` |
-| `findings` | constats du moteur (critique / alerte / opportunité), impact **seulement** s'il vient du moteur | `finding.<n>` |
-| `evidence` | anomalies, facteurs de cause racine, contributions produit et campagne | `anomaly.<metric>`, `root_cause.<n>.factor.<f>`, `root_cause.<n>.product.<rang>`, `root_cause.<n>.campaign.<rang>` |
-| `root_causes` | synthèse de décomposition ; `causality_established = false` | `root_cause.<n>` |
-| `hypotheses` | énoncés non prouvés (`status = non_prouvee`) et les éléments qu'ils visent | `hypothesis.<n>` |
+| `findings` | constats du moteur (critique / alerte / **setup** / opportunité), `finding_id` stable, `message_key`, confiance **qualitative**, impact **seulement** s'il vient du moteur | `finding.<n>` |
+| `evidence` | faits des constats, anomalies, facteurs de cause racine, contributions produit et campagne — chacun un **fait structuré** (AN-15) | `finding.<n>.fact.<n>`, `anomaly.<metric>`, `root_cause.<n>.factor.<f>`, `root_cause.<n>.product.<rang>`, `root_cause.<n>.campaign.<rang>` |
+| `root_causes` | synthèse de décomposition ; `causality_established = false` ; `method_key` | `root_cause.<n>` |
+| `hypotheses` | énoncés non prouvés (`status = non_prouvee`), `message_key`, et les éléments qu'ils visent | `hypothesis.<n>` |
 | `recommendations` | action, constat source, sévérité, impact du moteur | `recommendation.<n>` |
 | `limitations` | limites du rapport | `limitation.<n>` |
 | `unavailable_metrics` | KPI à `null` + profit et marge de contribution si incomplets, avec la raison | `unavailable.<metric>` |
 | `data_quality` | sources, ratio de champs fiables, statut par champ, incidents **sans leur message** | — |
+| `data_freshness` | dernière donnée, date d'analyse, retard, seuil, statut, `message_key` (AN-05) | `data_freshness` |
 | `untrusted_content` | chemins des champs qui ressemblent à une instruction | — |
 | `truncation` | `total` / `included` par collection | — |
 
-Jamais repris : horodatage, identifiant d'analyse, chemin de fichier,
-identifiant client (même pseudonymisé), email, SKU, identifiant de campagne,
-message d'incident brut.
+Jamais repris : horodatage, identifiant d'analyse, chemin de fichier, **identifiant client**
+(même pseudonymisé), e-mail, message d'incident brut. Le bloc `customers` du rapport n'est jamais
+copié — y compris pour un rapport 1.x qui porte encore son pseudonyme (AN-17 / ND-04).
+
+**Rectification 004.5.** Cette liste annonçait aussi « SKU, identifiant de campagne ». C'est
+devenu faux : les identifiants stables d'AN-15 / D-082 en portent une forme technique —
+`finding_id = low_margin_product:sku-a`, `fact_id = campaign.11122336.conversions`. Un SKU et un
+identifiant de campagne sont des **objets métier du marchand**, pas une donnée personnelle ;
+AN-17 porte sur l'identification d'un **client**. Les textes de source (titre d'article, nom de
+campagne) traversent, eux, l'hygiène de `safety.sanitize_text` : mesuré sur le scénario hostile,
+l'adresse e-mail écrite dans un titre d'article arrive **masquée** et signalée.
 
 ### Bornes (`ContextLimits`, valeurs par défaut)
 
@@ -57,17 +73,38 @@ message d'incident brut.
 |---|---|---|---|
 | `max_facts` | 25 | `max_limitations` | 15 |
 | `max_findings` | 15 | `max_unavailable_metrics` | 25 |
-| `max_evidence` | 30 | `max_contributors` (par analyse) | 5 |
+| `max_evidence` | **45** | `max_contributors` (par analyse) | 5 |
 | `max_hypotheses` | 10 | `max_health_dimensions` | 10 |
 | `max_recommendations` | 10 | `max_quality_fields` / `max_quality_issues` | 20 / 15 |
 | `max_root_causes` | 3 | `max_strings_per_item` | 5 |
 | `max_text_length` | 300 | `max_context_bytes` | 64 000 |
 
-Le plafond d'octets est mesuré sur le contexte **complet**. S'il est dépassé,
-les sections sont réduites de moitié dans un ordre fixe (preuves, constats,
-faits, limites, hypothèses, recommandations, indisponibles, causes), puis les
-références orphelines sont retirées. Si rien ne peut plus être réduit :
-`LLMContextError`. Résultat identique quel que soit `PYTHONHASHSEED` (testé).
+### Rétention des preuves (D-096 / D1)
+
+`max_evidence` valait 30, et la troncature coupait la **tête** de liste. AN-15 ayant ajouté les
+faits de constat **en tête**, les contributions produit et campagne — émises en dernier —
+sortaient du contexte. Mesure sur 57 rapports : **28 tronqués, 10 perdant la totalité de leurs
+contributions de campagne**, dont `revenue_decline`, le scénario qui motive l'explication.
+
+Deux changements, et il faut les deux :
+
+1. **`max_evidence = 45`** — la plus petite valeur qui transmet tout ce que la mesure a observé
+   (45 produites au maximum). Relever le plafond **ne suffit pas** : le nombre de preuves suit le
+   nombre de constats, donc les données.
+2. **Le budget se répartit entre natures de preuve** (`context.EVIDENCE_KINDS`, constante
+   **déclarée**) : chaque nature présente garde une preuve avant qu'aucune n'en garde deux.
+   L'ordre de sortie reste celui d'origine, donc la sortie est inchangée quand le budget suffit.
+   La sélection ne dépend **pas** de l'ordre entre les natures — vérifié sur les 120
+   permutations — et aucun score métier n'est inventé : `kind` est déjà dans la structure.
+
+Le plafond d'octets est mesuré sur le contexte **complet** et reste la borne de sécurité : 38 461
+octets au pire sur 64 000. S'il est dépassé, les sections sont réduites de moitié dans un ordre
+fixe (preuves, constats, faits, limites, hypothèses, recommandations, indisponibles, causes) — la
+réduction des **preuves** passe par la même répartition, sinon la garantie aurait un trou. Puis
+les références orphelines sont retirées, `findings[].evidence_ids` **comprises** : une preuve
+écartée ne doit pas laisser une référence morte, le modèle étant tenu de citer ses preuves. Si
+rien ne peut plus être réduit : `LLMContextError`. Résultat identique quel que soit
+`PYTHONHASHSEED` (testé).
 
 ### Rapport malformé
 

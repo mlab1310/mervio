@@ -13,7 +13,11 @@ La mission 001 construit la chaîne **jusqu'au rapport structuré inclus**.
 La mission 002 ajoute la couche d'interprétation LLM au-dessus du rapport,
 sans le modifier : contexte versionné et borné, abstraction fournisseur,
 validation de la réponse. Aucun fournisseur réel n'est branché. Contrat
-complet : `LLM_CONTRACT.md`.
+complet : [`LLM_CONTRACT.md`](LLM_CONTRACT.md).
+
+La mission 004.5 donne au rapport un **contrat versionné et formellement défini** —
+[`REPORT_CONTRACT.md`](REPORT_CONTRACT.md), version 2.0 — sans changer la place du rapport dans
+la chaîne. Versions et propriétaires : [`VERSIONS.md`](VERSIONS.md).
 
 ## Arborescence
 
@@ -36,15 +40,18 @@ src/mervio/
     stripe.py          paiements + frais + remboursements
     google_ads.py      performance campagne journalière
   analytics/
-    periods.py         découpage temporel déterministe
+    periods.py         découpage temporel déterministe (fuseau de la boutique)
     kpi.py             KPI Engine
     profitability.py   profit de contribution
     timeseries.py      séries, WoW/MoM/YoY, moyennes mobiles
     anomaly.py         détection v1
-    root_cause.py      décomposition multiplicative
+    root_cause.py      décomposition du CA en deux couches (AN-01, AN-02)
     health.py          Business Health Score
+    confidence.py      confiance qualitative et ses critères (AN-14)
+    evidence.py        faits structurés — aucune preuve en prose (AN-15)
+    messages.py        catalogue statique des textes du moteur (AN-19)
     insights.py        FACT / EVIDENCE / HYPOTHESIS / RECOMMENDATION
-    report.py          assemblage du JSON de sortie
+    report.py          assemblage du JSON de sortie (contrat 2.0)
     pipeline.py        orchestration (point d'entrée réutilisable)
   application/
     imports.py         détection de source, validation de fichier
@@ -56,7 +63,7 @@ src/mervio/
     writers.py         report.json / report.txt / data_quality.json
   llm/
     contract.py        versions, bornes, instructions système immuables
-    context.py         rapport -> contexte LLM 1.0 borné (aucun appel)
+    context.py         rapport -> contexte LLM 2.0 borné (aucun appel)
     safety.py          hygiène des textes non fiables, masquage PII / secrets
     prompt.py          canal système / enveloppe de données séparés
     provider.py        interface fournisseur, délai et tentatives bornés
@@ -64,6 +71,11 @@ src/mervio/
     response.py        validation du schéma et ancrage de la réponse
     service.py         explain_report() — ne lève pas, ne modifie pas le rapport
   cli/main.py          analyze / validate / demo
+```
+
+```
+schemas/
+  report/2.0.json      définition formelle du contrat de rapport — artefact de TEST
 ```
 
 ## Couches et dépendances
@@ -96,6 +108,13 @@ l'est (D-054). C'est ce qui permet de prouver les trois pilotes par une seule su
 5. **Pas d'I/O dans la logique métier.** `pipeline.run_analysis()` retourne un
    dict ; seule la CLI écrit sur disque. C'est ce qui rend le portage FastAPI
    mécanique.
+6. **Le schéma de rapport ne garde aucun chemin de lecture.**
+   `schemas/report/2.0.json` est un **artefact de validation en test**. Aucun module de `src/`
+   ne connaît `jsonschema` ni ce fichier, et `jsonschema` est déclaré en dépendance
+   **dev/test** seulement — `pyproject.toml [dev]`, `requirements.txt`, `requirements.lock` —
+   et **absent** de `requirements-runtime.lock` : le cœur analytique reste sans dépendance
+   runtime (D-004). Conséquence voulue : un rapport 1.x déjà persisté ne peut pas être rejeté à
+   la lecture par le contrat 2.0. Une garde statique vérifie les deux propriétés.
 
 ## Chemin vers le SaaS
 

@@ -19,7 +19,20 @@
       {
         "available": true,
         "evidence": [
-          "CA +62.5% (2026-W37 vs 2026-W36)"
+          {
+            "comparison": "none",
+            "current_value": 0.625,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "health_revenue_growth_change",
+            "message_key": "evidence.health.revenue_growth",
+            "metric_key": "revenue",
+            "observability": "observed",
+            "period": "2026-W37",
+            "previous_value": null,
+            "source": "shopify_orders",
+            "unit": "ratio"
+          }
         ],
         "id": "health.revenue_growth",
         "key": "revenue_growth",
@@ -31,8 +44,34 @@
       {
         "available": true,
         "evidence": [
-          "marge de contribution PARTIELLE: 66.3%",
-          "couts exclus (mineurs): shipping_cost"
+          {
+            "comparison": "none",
+            "current_value": 0.6631,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "health_profitability_partial_margin",
+            "message_key": "evidence.health.partial_margin",
+            "metric_key": "contribution_profit",
+            "observability": "observed",
+            "period": null,
+            "previous_value": null,
+            "source": "analytics",
+            "unit": "ratio"
+          },
+          {
+            "comparison": "none",
+            "current_value": null,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "cost_shipping_cost",
+            "message_key": "evidence.cost.not_observed",
+            "metric_key": "shipping_cost",
+            "observability": "not_observed",
+            "period": null,
+            "previous_value": null,
+            "source": "analytics",
+            "unit": null
+          }
         ],
         "id": "health.profitability",
         "key": "profitability",
@@ -44,7 +83,20 @@
       {
         "available": true,
         "evidence": [
-          "ROAS 8.12"
+          {
+            "comparison": "none",
+            "current_value": 8.124,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "health_marketing_efficiency_roas",
+            "message_key": "evidence.kpi.value",
+            "metric_key": "roas",
+            "observability": "observed",
+            "period": null,
+            "previous_value": null,
+            "source": "google_ads",
+            "unit": "ratio"
+          }
         ],
         "id": "health.marketing_efficiency",
         "key": "marketing_efficiency",
@@ -56,8 +108,34 @@
       {
         "available": true,
         "evidence": [
-          "taux de reachat intra-periode 0.0%",
-          "penalite de concentration: top 5 clients = 61.5% du CA (seuil 40%, -15 pts)"
+          {
+            "comparison": "none",
+            "current_value": 0.0,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "health_customer_health_repeat_rate",
+            "message_key": "evidence.kpi.value",
+            "metric_key": "repeat_purchase_rate",
+            "observability": "observed",
+            "period": null,
+            "previous_value": null,
+            "source": "shopify_orders",
+            "unit": "ratio"
+          },
+          {
+            "comparison": "none",
+            "current_value": 0.6154,
+            "delta": 0.2154,
+            "delta_pct": 0.5385,
+            "fact_id": "health_customer_health_concentration",
+            "message_key": "evidence.health.concentration_penalty",
+            "metric_key": "customer_concentration_top5",
+            "observability": "observed",
+            "period": null,
+            "previous_value": 0.4,
+            "source": "shopify_orders",
+            "unit": "ratio"
+          }
         ],
         "id": "health.customer_health",
         "key": "customer_health",
@@ -69,8 +147,34 @@
       {
         "available": true,
         "evidence": [
-          "marge brute ponderee 80.6%",
-          "couverture cout: 100% du CA article"
+          {
+            "comparison": "none",
+            "current_value": 0.8062,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "health_product_health_weighted_margin",
+            "message_key": "evidence.kpi.value",
+            "metric_key": "product_gross_margin",
+            "observability": "observed",
+            "period": null,
+            "previous_value": null,
+            "source": "shopify_products",
+            "unit": "ratio"
+          },
+          {
+            "comparison": "none",
+            "current_value": 1.0,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "health_product_health_coverage",
+            "message_key": "evidence.health.cost_coverage",
+            "metric_key": "data_quality_coverage",
+            "observability": "observed",
+            "period": null,
+            "previous_value": null,
+            "source": "shopify_products",
+            "unit": "ratio"
+          }
         ],
         "id": "health.product_health",
         "key": "product_health",
@@ -82,7 +186,20 @@
       {
         "available": true,
         "evidence": [
-          "100% des champs suivis sont fiables"
+          {
+            "comparison": "none",
+            "current_value": 1.0,
+            "delta": null,
+            "delta_pct": null,
+            "fact_id": "health_data_quality_reliable_share",
+            "message_key": "evidence.health.reliable_fields",
+            "metric_key": "data_quality_coverage",
+            "observability": "observed",
+            "period": null,
+            "previous_value": null,
+            "source": "analytics",
+            "unit": "ratio"
+          }
         ],
         "id": "health.data_quality",
         "key": "data_quality",
@@ -99,8 +216,15 @@
     "score": 85,
     "weights_renormalised": false
   },
-  "contract_version": "1.0",
+  "contract_version": "2.0",
   "currency": "EUR",
+  "data_freshness": {
+    "delay_days": 1,
+    "id": "data_freshness",
+    "message_key": "data_freshness.fresh",
+    "status": "fresh",
+    "threshold_days": 14
+  },
   "data_quality": {
     "fields": [
       {
@@ -138,11 +262,172 @@
       "google_ads"
     ]
   },
-  "engine_version": "0.1.0",
+  "engine_version": "0.2.0",
   "evidence": [
     {
+      "comparison": "baseline",
+      "current_value": 30.0,
+      "delta": -10.0,
+      "delta_pct": -0.25,
+      "fact_id": "anomaly_orders",
+      "id": "finding.1.fact.1",
+      "kind": "finding_fact",
+      "message_key": "evidence.anomaly.observed_vs_baseline",
+      "metric_key": "orders",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": 40.0,
+      "source": "analytics",
+      "unit": "count"
+    },
+    {
+      "comparison": "baseline",
+      "current_value": 0.0379,
+      "delta": -0.0126,
+      "delta_pct": -0.25,
+      "fact_id": "anomaly_orders_per_paid_click",
+      "id": "finding.2.fact.1",
+      "kind": "finding_fact",
+      "message_key": "evidence.anomaly.observed_vs_baseline",
+      "metric_key": "orders_per_paid_click",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": 0.0506,
+      "source": "analytics",
+      "unit": "ratio"
+    },
+    {
+      "comparison": "none",
+      "current_value": 0.6154,
+      "delta": null,
+      "delta_pct": null,
+      "fact_id": "kpi_customer_concentration_top5",
+      "id": "finding.3.fact.1",
+      "kind": "finding_fact",
+      "message_key": "evidence.kpi.value",
+      "metric_key": "customer_concentration_top5",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": null,
+      "source": "shopify_orders",
+      "unit": "ratio"
+    },
+    {
+      "comparison": "none",
+      "current_value": 630.0,
+      "delta": null,
+      "delta_pct": null,
+      "fact_id": "cost_cogs",
+      "id": "finding.4.fact.1",
+      "kind": "finding_fact",
+      "message_key": "evidence.cost.observed",
+      "metric_key": "cogs",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": null,
+      "source": "shopify_products",
+      "unit": "currency"
+    },
+    {
+      "comparison": "none",
+      "current_value": 65.0,
+      "delta": null,
+      "delta_pct": null,
+      "fact_id": "cost_payment_fees",
+      "id": "finding.4.fact.2",
+      "kind": "finding_fact",
+      "message_key": "evidence.cost.observed",
+      "metric_key": "payment_fees",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": null,
+      "source": "stripe",
+      "unit": "currency"
+    },
+    {
+      "comparison": "none",
+      "current_value": 400.05,
+      "delta": null,
+      "delta_pct": null,
+      "fact_id": "cost_advertising",
+      "id": "finding.4.fact.3",
+      "kind": "finding_fact",
+      "message_key": "evidence.cost.observed",
+      "metric_key": "advertising",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": null,
+      "source": "google_ads",
+      "unit": "currency"
+    },
+    {
+      "comparison": "none",
+      "current_value": 0.0,
+      "delta": null,
+      "delta_pct": null,
+      "fact_id": "cost_refunds",
+      "id": "finding.4.fact.4",
+      "kind": "finding_fact",
+      "message_key": "evidence.cost.observed",
+      "metric_key": "refunds",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": null,
+      "source": "shopify_orders",
+      "unit": "currency"
+    },
+    {
+      "comparison": "none",
+      "current_value": null,
+      "delta": null,
+      "delta_pct": null,
+      "fact_id": "cost_shipping_cost",
+      "id": "finding.4.fact.5",
+      "kind": "finding_fact",
+      "message_key": "evidence.cost.not_observed",
+      "metric_key": "shipping_cost",
+      "observability": "not_observed",
+      "period": null,
+      "previous_value": null,
+      "source": "non_connecte",
+      "unit": null
+    },
+    {
+      "comparison": "baseline",
+      "current_value": 108.3333,
+      "delta": 58.3333,
+      "delta_pct": 1.1667,
+      "fact_id": "anomaly_aov",
+      "id": "finding.5.fact.1",
+      "kind": "finding_fact",
+      "message_key": "evidence.anomaly.observed_vs_baseline",
+      "metric_key": "aov",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": 50.0,
+      "source": "analytics",
+      "unit": "currency"
+    },
+    {
+      "comparison": "baseline",
+      "current_value": 8.124,
+      "delta": 3.1246,
+      "delta_pct": 0.625,
+      "fact_id": "anomaly_roas",
+      "id": "finding.6.fact.1",
+      "kind": "finding_fact",
+      "message_key": "evidence.anomaly.observed_vs_baseline",
+      "metric_key": "roas",
+      "observability": "observed",
+      "period": "2026-W37",
+      "previous_value": 4.9994,
+      "source": "analytics",
+      "unit": "ratio"
+    },
+    {
       "assessment": "favorable",
-      "criterion": "|variation| >= 8% (materialite) ET (|variation| >= 15% vs moyenne des 8 periodes precedentes)",
+      "criterion": "|variation| >= 8% (matérialité) ET (|variation| >= 15% vs moyenne des 8 périodes précédentes)",
+      "criterion_key": "anomaly.criterion_without_zscore",
       "delta": 1250.0,
       "delta_pct": 0.625,
       "direction": "up",
@@ -157,7 +442,8 @@
     },
     {
       "assessment": "unfavorable",
-      "criterion": "|variation| >= 8% (materialite) ET (|variation| >= 15% vs moyenne des 8 periodes precedentes)",
+      "criterion": "|variation| >= 8% (matérialité) ET (|variation| >= 15% vs moyenne des 8 périodes précédentes)",
+      "criterion_key": "anomaly.criterion_without_zscore",
       "delta": -10.0,
       "delta_pct": -0.25,
       "direction": "down",
@@ -172,7 +458,8 @@
     },
     {
       "assessment": "favorable",
-      "criterion": "|variation| >= 8% (materialite) ET (|variation| >= 15% vs moyenne des 8 periodes precedentes)",
+      "criterion": "|variation| >= 8% (matérialité) ET (|variation| >= 15% vs moyenne des 8 périodes précédentes)",
+      "criterion_key": "anomaly.criterion_without_zscore",
       "delta": 58.3333,
       "delta_pct": 1.1667,
       "direction": "up",
@@ -187,14 +474,15 @@
     },
     {
       "assessment": "unfavorable",
-      "criterion": "|variation| >= 8% (materialite) ET (|variation| >= 15% vs moyenne des 8 periodes precedentes)",
+      "criterion": "|variation| >= 8% (matérialité) ET (|variation| >= 15% vs moyenne des 8 périodes précédentes)",
+      "criterion_key": "anomaly.criterion_without_zscore",
       "delta": -0.0126,
       "delta_pct": -0.25,
       "direction": "down",
       "expected_value": 0.0506,
-      "id": "anomaly.paid_conversion_rate",
+      "id": "anomaly.orders_per_paid_click",
       "kind": "anomaly",
-      "metric": "paid_conversion_rate",
+      "metric": "orders_per_paid_click",
       "observed_value": 0.0379,
       "period": "2026-W37",
       "severity": "medium",
@@ -202,7 +490,8 @@
     },
     {
       "assessment": "favorable",
-      "criterion": "|variation| >= 8% (materialite) ET (|variation| >= 15% vs moyenne des 8 periodes precedentes)",
+      "criterion": "|variation| >= 8% (matérialité) ET (|variation| >= 15% vs moyenne des 8 périodes précédentes)",
+      "criterion_key": "anomaly.criterion_without_zscore",
       "delta": 3.1246,
       "delta_pct": 0.625,
       "direction": "up",
@@ -216,40 +505,94 @@
       "z_score": null
     },
     {
-      "confidence": 0.8,
+      "confidence": "medium",
       "contribution": 1.5925,
       "current_value": 108.3333,
+      "explains": null,
+      "explains_share": null,
       "factor": "average_order_value",
       "factor_change_pct": 1.1667,
       "id": "root_cause.1.factor.average_order_value",
       "kind": "root_cause_factor",
-      "observed_fact": "Panier moyen +116.7% entre 2026-W36 et 2026-W37",
+      "layer": "a",
+      "missing_source": null,
+      "observability": "observed",
+      "observed_fact": "Panier moyen +116.7% sur 2026-W37 vs la baseline de 8 période(s)",
+      "observed_fact_key": "factor.observed_fact_vs_baseline",
       "previous_value": 50.0,
       "supporting_metric": "aov"
     },
     {
-      "confidence": 0.45,
+      "confidence": "medium",
       "contribution": -0.5925,
-      "current_value": 0.0379,
-      "factor": "conversion_rate",
+      "current_value": 30.0,
+      "explains": null,
+      "explains_share": null,
+      "factor": "order_volume",
       "factor_change_pct": -0.25,
-      "id": "root_cause.1.factor.conversion_rate",
+      "id": "root_cause.1.factor.order_volume",
       "kind": "root_cause_factor",
-      "observed_fact": "Taux de conversion sur trafic paye -25.0% entre 2026-W36 et 2026-W37",
-      "previous_value": 0.0506,
-      "supporting_metric": "paid_conversion_rate"
+      "layer": "a",
+      "missing_source": null,
+      "observability": "observed",
+      "observed_fact": "Volume de commandes -25.0% sur 2026-W37 vs la baseline de 8 période(s)",
+      "observed_fact_key": "factor.observed_fact_vs_baseline",
+      "previous_value": 40.0,
+      "supporting_metric": "orders"
     },
     {
-      "confidence": 0.2,
-      "contribution": 0.0,
-      "current_value": 791,
+      "confidence": "medium",
+      "contribution": null,
+      "current_value": 791.0,
+      "explains": "order_volume",
+      "explains_share": -0.0,
       "factor": "paid_traffic",
       "factor_change_pct": 0.0,
       "id": "root_cause.1.factor.paid_traffic",
       "kind": "root_cause_factor",
-      "observed_fact": "Clics payants (proxy de trafic) +0.0% entre 2026-W36 et 2026-W37",
-      "previous_value": 791,
-      "supporting_metric": "clicks"
+      "layer": "b",
+      "missing_source": null,
+      "observability": "observed",
+      "observed_fact": "Clics payants +0.0% sur 2026-W37 vs la baseline de 8 période(s)",
+      "observed_fact_key": "factor.observed_fact_vs_baseline",
+      "previous_value": 791.0,
+      "supporting_metric": "paid_clicks"
+    },
+    {
+      "confidence": null,
+      "contribution": null,
+      "current_value": null,
+      "explains": "order_volume",
+      "explains_share": null,
+      "factor": "organic_traffic",
+      "factor_change_pct": null,
+      "id": "root_cause.1.factor.organic_traffic",
+      "kind": "root_cause_factor",
+      "layer": "b",
+      "missing_source": "web_analytics_sessions",
+      "observability": "not_observed",
+      "observed_fact": "Trafic organique et direct: non observé",
+      "observed_fact_key": "factor.observed_fact_not_observed",
+      "previous_value": null,
+      "supporting_metric": null
+    },
+    {
+      "confidence": null,
+      "contribution": null,
+      "current_value": null,
+      "explains": "order_volume",
+      "explains_share": null,
+      "factor": "site_conversion_rate",
+      "factor_change_pct": null,
+      "id": "root_cause.1.factor.site_conversion_rate",
+      "kind": "root_cause_factor",
+      "layer": "b",
+      "missing_source": "web_analytics_sessions",
+      "observability": "not_observed",
+      "observed_fact": "Taux de conversion du site: non observé",
+      "observed_fact_key": "factor.observed_fact_not_observed",
+      "previous_value": null,
+      "supporting_metric": null
     },
     {
       "contribution": 0.64,
@@ -408,9 +751,9 @@
     {
       "data_quality": "incomplete",
       "formula": "sum(ad.clicks)",
-      "id": "kpi.clicks",
+      "id": "kpi.paid_clicks",
       "label": "Clics payants",
-      "metric": "clicks",
+      "metric": "paid_clicks",
       "notes": [
         "proxy: le trafic organique et direct n'est pas mesure (GA4 non connecte)"
       ],
@@ -424,9 +767,9 @@
     {
       "data_quality": "incomplete",
       "formula": "orders / paid_clicks",
-      "id": "kpi.paid_conversion_rate",
-      "label": "Taux de conversion (trafic paye)",
-      "metric": "paid_conversion_rate",
+      "id": "kpi.orders_per_paid_click",
+      "label": "Commandes par clic paye",
+      "metric": "orders_per_paid_click",
       "notes": [
         "approximation: toutes les commandes ne proviennent pas du trafic paye"
       ],
@@ -567,93 +910,100 @@
   "findings": [
     {
       "category": "warning",
-      "confidence": 0.9,
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
-      "evidence_text": [
-        "Cout de transport reel: l'export Shopify contient le port FACTURE au client, pas le cout transporteur",
-        "Profit de contribution complet non calculable a partir des donnees disponibles. Le profit partiel ci-dessus exclut: Cout de transport reel."
+      "evidence_ids": [
+        "finding.1.fact.1"
       ],
+      "finding_id": "orders_anomaly",
       "id": "finding.1",
       "impact_source": null,
-      "severity": "medium",
-      "statement": "Le profit de contribution complet n'est pas calculable a partir des donnees fournies.",
-      "type": "profitability_unavailable"
-    },
-    {
-      "category": "warning",
-      "confidence": 0.6,
-      "estimated_impact": null,
-      "estimated_impact_basis": null,
-      "evidence_text": [
-        "Part du CA realisee par les 5 plus gros clients."
-      ],
-      "id": "finding.2",
-      "impact_source": null,
-      "severity": "medium",
-      "statement": "Les 5 plus gros clients representent 61.5% du CA de la periode.",
-      "type": "customer_concentration"
-    },
-    {
-      "category": "warning",
-      "confidence": 0.45,
-      "estimated_impact": null,
-      "estimated_impact_basis": null,
-      "evidence_text": [
-        "orders observe sur 2026-W37: 30.00",
-        "attendu (moyenne 8 periodes): 40.00",
-        "ecart relatif: -25.0%"
-      ],
-      "id": "finding.3",
-      "impact_source": null,
+      "message_key": "finding.metric_anomaly.fact",
       "severity": "medium",
       "statement": "orders sur 2026-W37: -25.0% vs baseline.",
       "type": "orders_anomaly"
     },
     {
       "category": "warning",
-      "confidence": 0.45,
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
-      "evidence_text": [
-        "paid_conversion_rate observe sur 2026-W37: 0.04",
-        "attendu (moyenne 8 periodes): 0.05",
-        "ecart relatif: -25.0%"
+      "evidence_ids": [
+        "finding.2.fact.1"
       ],
+      "finding_id": "orders_per_paid_click_anomaly",
+      "id": "finding.2",
+      "impact_source": null,
+      "message_key": "finding.metric_anomaly.fact",
+      "severity": "medium",
+      "statement": "orders_per_paid_click sur 2026-W37: -25.0% vs baseline.",
+      "type": "orders_per_paid_click_anomaly"
+    },
+    {
+      "category": "warning",
+      "confidence": "high",
+      "estimated_impact": null,
+      "estimated_impact_basis": null,
+      "evidence_ids": [
+        "finding.3.fact.1"
+      ],
+      "finding_id": "customer_concentration",
+      "id": "finding.3",
+      "impact_source": null,
+      "message_key": "finding.customer_concentration.fact",
+      "severity": "medium",
+      "statement": "Les 5 plus gros clients représentent 61.5% du CA de la période.",
+      "type": "customer_concentration"
+    },
+    {
+      "category": "setup",
+      "confidence": "high",
+      "estimated_impact": null,
+      "estimated_impact_basis": null,
+      "evidence_ids": [
+        "finding.4.fact.1",
+        "finding.4.fact.2",
+        "finding.4.fact.3",
+        "finding.4.fact.4",
+        "finding.4.fact.5"
+      ],
+      "finding_id": "profitability_unavailable",
       "id": "finding.4",
       "impact_source": null,
-      "severity": "medium",
-      "statement": "paid_conversion_rate sur 2026-W37: -25.0% vs baseline.",
-      "type": "paid_conversion_rate_anomaly"
+      "message_key": "finding.profitability_unavailable.fact",
+      "severity": "info",
+      "statement": "Le profit de contribution complet n'est pas calculable à partir des données fournies.",
+      "type": "profitability_unavailable"
     },
     {
       "category": "opportunity",
-      "confidence": 0.45,
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
-      "evidence_text": [
-        "aov observe sur 2026-W37: 108.33",
-        "attendu (moyenne 8 periodes): 50.00",
-        "ecart relatif: +116.7%"
+      "evidence_ids": [
+        "finding.5.fact.1"
       ],
+      "finding_id": "aov_anomaly",
       "id": "finding.5",
       "impact_source": null,
+      "message_key": "finding.metric_anomaly.fact",
       "severity": "info",
       "statement": "aov sur 2026-W37: +116.7% vs baseline.",
       "type": "aov_anomaly"
     },
     {
       "category": "opportunity",
-      "confidence": 0.45,
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
-      "evidence_text": [
-        "roas observe sur 2026-W37: 8.12",
-        "attendu (moyenne 8 periodes): 5.00",
-        "ecart relatif: +62.5%"
+      "evidence_ids": [
+        "finding.6.fact.1"
       ],
+      "finding_id": "roas_anomaly",
       "id": "finding.6",
       "impact_source": null,
+      "message_key": "finding.metric_anomaly.fact",
       "severity": "info",
       "statement": "roas sur 2026-W37: +62.5% vs baseline.",
       "type": "roas_anomaly"
@@ -661,28 +1011,31 @@
   ],
   "hypotheses": [
     {
-      "confidence": 0.6,
+      "confidence": "high",
       "id": "hypothesis.1",
-      "statement": "Dependance commerciale a un petit nombre de comptes.",
+      "message_key": "finding.metric_anomaly.hypothesis_unfavorable",
+      "statement": "Variation statistiquement inhabituelle: la cause n'est pas établie par ce moteur.",
       "status": "non_prouvee",
       "supports": [
+        "finding.1",
         "finding.2"
       ]
     },
     {
-      "confidence": 0.45,
+      "confidence": "high",
       "id": "hypothesis.2",
-      "statement": "Variation statistiquement inhabituelle: la cause n'est pas etablie par ce moteur.",
+      "message_key": "finding.customer_concentration.hypothesis",
+      "statement": "Dépendance commerciale à un petit nombre de comptes.",
       "status": "non_prouvee",
       "supports": [
-        "finding.3",
-        "finding.4"
+        "finding.3"
       ]
     },
     {
-      "confidence": 0.45,
+      "confidence": "high",
       "id": "hypothesis.3",
-      "statement": "Ecart favorable: comprendre ce qui l'a produit pour tenter de le reproduire.",
+      "message_key": "finding.metric_anomaly.hypothesis_favorable",
+      "statement": "Écart favorable: comprendre ce qui l'a produit pour tenter de le reproduire.",
       "status": "non_prouvee",
       "supports": [
         "finding.5",
@@ -690,27 +1043,30 @@
       ]
     },
     {
-      "confidence": 0.8,
+      "confidence": "medium",
       "id": "hypothesis.4",
-      "statement": "La variation du CA est associee a la valeur moyenne des commandes (mix produit, remises, quantites).",
+      "message_key": "factor.average_order_value.hypothesis",
+      "statement": "La variation du CA est associée à la valeur moyenne des commandes (mix produit, remises, quantités).",
       "status": "non_prouvee",
       "supports": [
         "root_cause.1.factor.average_order_value"
       ]
     },
     {
-      "confidence": 0.45,
+      "confidence": "medium",
       "id": "hypothesis.5",
-      "statement": "La variation du CA est associee a la capacite du site a convertir le trafic (parcours d'achat, prix, disponibilite, checkout).",
+      "message_key": "factor.order_volume.hypothesis",
+      "statement": "La variation du CA est associée au NOMBRE de commandes.",
       "status": "non_prouvee",
       "supports": [
-        "root_cause.1.factor.conversion_rate"
+        "root_cause.1.factor.order_volume"
       ]
     },
     {
-      "confidence": 0.2,
+      "confidence": "medium",
       "id": "hypothesis.6",
-      "statement": "La variation du CA est associee au volume de trafic paye achete.",
+      "message_key": "factor.paid_traffic.hypothesis",
+      "statement": "La variation du volume de commandes est associée au trafic payé acheté.",
       "status": "non_prouvee",
       "supports": [
         "root_cause.1.factor.paid_traffic"
@@ -728,15 +1084,15 @@
     },
     {
       "id": "limitation.3",
-      "statement": "Les clics payants ne mesurent que Google Ads: le trafic organique et direct n'est pas observe."
+      "statement": "Les clics payants ne mesurent que Google Ads: le trafic organique et direct n'est pas observé."
     },
     {
       "id": "limitation.4",
-      "statement": "Les contributions decrivent une decomposition arithmetique, pas un lien de causalite demontre."
+      "statement": "Les contributions décrivent une décomposition arithmétique, pas un lien de causalité démontré."
     },
     {
       "id": "limitation.5",
-      "statement": "Toute hypothese doit etre verifiee dans l'outil source avant decision."
+      "statement": "Toute hypothèse doit être vérifiée dans l'outil source avant décision."
     },
     {
       "id": "limitation.6",
@@ -764,64 +1120,76 @@
   },
   "recommendations": [
     {
-      "action": "Renseigner les couts manquants (shipping_cost) pour obtenir une profitabilite reelle plutot qu'un CA.",
-      "confidence": 0.9,
+      "action": "Vérifier orders dans la source avant toute décision.",
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
+      "estimated_impact_basis_key": null,
       "id": "recommendation.1",
       "impact_source": null,
+      "message_key": "finding.metric_anomaly.recommendation_unfavorable",
       "severity": "medium",
       "source_finding": "finding.1"
     },
     {
-      "action": "Diversifier l'acquisition pour reduire le risque de concentration.",
-      "confidence": 0.6,
+      "action": "Vérifier orders_per_paid_click dans la source avant toute décision.",
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
+      "estimated_impact_basis_key": null,
       "id": "recommendation.2",
       "impact_source": null,
+      "message_key": "finding.metric_anomaly.recommendation_unfavorable",
       "severity": "medium",
       "source_finding": "finding.2"
     },
     {
-      "action": "Verifier orders dans la source avant toute decision.",
-      "confidence": 0.45,
+      "action": "Diversifier l'acquisition pour réduire le risque de concentration.",
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
+      "estimated_impact_basis_key": null,
       "id": "recommendation.3",
       "impact_source": null,
+      "message_key": "finding.customer_concentration.recommendation",
       "severity": "medium",
       "source_finding": "finding.3"
     },
     {
-      "action": "Verifier paid_conversion_rate dans la source avant toute decision.",
-      "confidence": 0.45,
+      "action": "Identifier ce qui explique l'amélioration de aov avant qu'elle ne se dissipe.",
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
+      "estimated_impact_basis_key": null,
       "id": "recommendation.4",
       "impact_source": null,
-      "severity": "medium",
-      "source_finding": "finding.4"
-    },
-    {
-      "action": "Identifier ce qui explique l'amelioration de aov avant qu'elle ne se dissipe.",
-      "confidence": 0.45,
-      "estimated_impact": null,
-      "estimated_impact_basis": null,
-      "id": "recommendation.5",
-      "impact_source": null,
+      "message_key": "finding.metric_anomaly.recommendation_favorable",
       "severity": "info",
       "source_finding": "finding.5"
     },
     {
-      "action": "Identifier ce qui explique l'amelioration de roas avant qu'elle ne se dissipe.",
-      "confidence": 0.45,
+      "action": "Identifier ce qui explique l'amélioration de roas avant qu'elle ne se dissipe.",
+      "confidence": "high",
       "estimated_impact": null,
       "estimated_impact_basis": null,
-      "id": "recommendation.6",
+      "estimated_impact_basis_key": null,
+      "id": "recommendation.5",
       "impact_source": null,
+      "message_key": "finding.metric_anomaly.recommendation_favorable",
       "severity": "info",
       "source_finding": "finding.6"
+    },
+    {
+      "action": "Renseigner les coûts manquants (shipping_cost) pour obtenir une profitabilité réelle plutôt qu'un CA.",
+      "confidence": "high",
+      "estimated_impact": null,
+      "estimated_impact_basis": null,
+      "estimated_impact_basis_key": null,
+      "id": "recommendation.6",
+      "impact_source": null,
+      "message_key": "finding.profitability_unavailable.recommendation",
+      "severity": "info",
+      "source_finding": "finding.4"
     }
   ],
   "root_causes": [
@@ -830,11 +1198,14 @@
       "causality_established": false,
       "factor_ids": [
         "root_cause.1.factor.average_order_value",
-        "root_cause.1.factor.conversion_rate",
-        "root_cause.1.factor.paid_traffic"
+        "root_cause.1.factor.order_volume",
+        "root_cause.1.factor.paid_traffic",
+        "root_cause.1.factor.organic_traffic",
+        "root_cause.1.factor.site_conversion_rate"
       ],
       "id": "root_cause.1",
-      "method": "decomposition multiplicative Revenue = Clics x Taux de conversion x Panier moyen, contributions en log-ratio; contributions produit/campagne additives",
+      "method": "Décomposition du revenu : Revenu = Commandes × Panier moyen. Les commandes sont ensuite expliquées par les clics payants et les commandes par clic payé.",
+      "method_key": "root_cause.method",
       "observed_change_absolute": 1250.0,
       "observed_change_pct": 0.625,
       "period": "2026-W37",
@@ -858,8 +1229,8 @@
       "total": 0
     },
     "evidence": {
-      "included": 12,
-      "total": 12
+      "included": 24,
+      "total": 24
     },
     "facts": {
       "included": 17,

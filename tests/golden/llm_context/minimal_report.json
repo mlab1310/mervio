@@ -18,8 +18,15 @@
     "score": null,
     "weights_renormalised": false
   },
-  "contract_version": "1.0",
+  "contract_version": "2.0",
   "currency": "EUR",
+  "data_freshness": {
+    "delay_days": null,
+    "id": "data_freshness",
+    "message_key": null,
+    "status": "unknown",
+    "threshold_days": null
+  },
   "data_quality": {
     "fields": [],
     "issues": [],

@@ -223,7 +223,10 @@ def test_each_health_threshold_scale_is_configurable(scale, dimension):
     before = {d["key"]: d for d in _report()["business_health_score"]["dimensions"]}
     after = {d["key"]: d for d in _report(config)["business_health_score"]["dimensions"]}
 
-    assert after[dimension]["thresholds"] == str(flat), (
+    # K-6: le bareme publie est une STRUCTURE, plus un `repr()` Python. La propriete mesuree
+    # est la meme -- la valeur configuree atteint la dimension -- et la comparaison est
+    # desormais faite sur la donnee, pas sur sa mise en texte.
+    assert after[dimension]["thresholds"] == [list(band) for band in flat], (
         f"{scale} n'atteint pas la dimension {dimension}: bareme non consomme"
     )
     assert before[dimension]["thresholds"] != after[dimension]["thresholds"]

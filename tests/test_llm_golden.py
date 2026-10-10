@@ -41,11 +41,39 @@ def test_golden_semantics_healthy_business():
 
 
 def test_golden_semantics_revenue_decline():
+    """AN-02 / D-075: le facteur `conversion_rate` n'existe plus, et l'attente suit l'arbitrage.
+
+    Il confondait une baisse ORGANIQUE avec un probleme de checkout: << commandes totales /
+    clics PAYANTS >> baisse aussi quand le trafic gratuit chute, sans qu'aucun checkout soit en
+    cause. La decomposition est desormais CA = commandes x panier moyen (couche A), les commandes
+    etant expliquees par les clics payants (couche B); le trafic organique et la conversion du
+    site sont DECLARES non observes (D-073).
+
+    L'attente n'est pas affaiblie: le facteur primaire est NOMME, l'ancien est INTERDIT, les deux
+    angles morts sont EXIGES avec leurs valeurs nulles, et aucune recommandation checkout n'est
+    admise -- la regle meme que D-075 ratifie.
+    """
     context = build_llm_context(SCENARIOS["revenue_decline"]())
     decline = next(f for f in context["findings"] if f["type"] == "revenue_decline")
     assert decline["category"] == "critical_issue" and decline["estimated_impact"] < 0
-    assert context["root_causes"][0]["primary_factor"] == "conversion_rate"
-    assert context["root_causes"][0]["causality_established"] is False
+    analysis = context["root_causes"][0]
+    assert analysis["primary_factor"] == "order_volume"
+    assert analysis["causality_established"] is False
+
+    factors = {item["factor"]: item for item in context["evidence"]
+               if item["kind"] == "root_cause_factor"}
+    assert "conversion_rate" not in factors, "AN-02 a supprime ce facteur"
+    assert factors["order_volume"]["layer"] == "a"
+    assert factors["paid_traffic"]["layer"] == "b"
+    assert factors["paid_traffic"]["explains"] == "order_volume"
+    for blind_spot in ("organic_traffic", "site_conversion_rate"):
+        item = factors[blind_spot]
+        assert item["observability"] == "not_observed"
+        assert item["contribution"] is None and item["explains_share"] is None
+        assert item["missing_source"] == "web_analytics_sessions"
+
+    actions = " ".join(item["action"] for item in context["recommendations"]).lower()
+    assert "checkout" not in actions and "tunnel de conversion" not in actions
 
 
 def test_golden_semantics_missing_profitability():

@@ -10,7 +10,11 @@ from dataclasses import dataclass, field
 from datetime import timezone, tzinfo
 from typing import Dict, Tuple
 
-ENGINE_VERSION = "0.1.0"
+ENGINE_VERSION = "0.2.0"
+#: version du CONTRAT DE RAPPORT, publiee dans `_meta.report_contract` (K-2).
+#: Distincte d'`ENGINE_VERSION`: le contrat decrit la FORME du rapport, le moteur son CALCUL.
+#: D-058 avait explicitement differe ce champ a 004.5 pour n'avoir qu'une seule rupture.
+REPORT_CONTRACT = "2.0"
 
 
 def resolve_timezone(name: str) -> tzinfo:

@@ -104,9 +104,16 @@ def _new_id() -> str:
 
 
 def annotate_report(report: dict, *, synthetic: bool, label: str) -> dict:
-    """Metadonnees de livraison ajoutees au rapport du moteur (CLI et analyses persistees)."""
-    if synthetic:
-        report["_meta"]["dataset_is_synthetic"] = True
+    """Renseigne les metadonnees de livraison du rapport (CLI et analyses persistees).
+
+    K-5: cette fonction AJOUTAIT deux cles a `_meta`, et `dataset_is_synthetic` seulement
+    lorsque le jeu etait synthetique -- de sorte que le contrat avait deux formes selon le
+    point d'entree, et meme deux formes au sein d'un seul. La structure appartient desormais
+    au moteur (`analytics.report.assemble_report`): on n'ecrit plus que des VALEURS, dans des
+    cles qui existent deja. Rien n'est perdu: le libelle et le marqueur synthetique restent
+    publies, et le marqueur l'est maintenant aussi quand il vaut `false`.
+    """
+    report["_meta"]["dataset_is_synthetic"] = bool(synthetic)
     report["_meta"]["analysis_label"] = label
     return report
 
