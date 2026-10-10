@@ -1,0 +1,20 @@
+# Faux positifs historiques de la regle generic-api-key, commit d1101ca
+# (AN-02, mission 004.5).
+#
+# Dans ce commit, trois appels de constructeur passent un parametre nomme factor
+# alimente par une variable au nom de trois lettres k-e-y, immediatement suivi d un
+# parametre textuel construit par f-string. La regle y voit un mot-cle de type cle
+# suivi d une chaine delimitee, et capture le nom du parametre suivant comme valeur
+# (15 caracteres, entropie 3.64). Aucun secret, reel ou factice, n est implique.
+#
+# Le motif a ete retire de l arbre par e8ca47a: HEAD ne le contient plus. Seuls les
+# objets de d1101ca le portent encore, et gitleaks git analyse les patchs, donc le
+# scan de l historique complet continue de le voir.
+#
+# L exception est volontairement limitee aux fingerprints EXACTS, au format
+# commit:fichier:regle:ligne. Gitleaks exige l egalite stricte: une entree tronquee
+# n elargit pas la portee, elle cesse simplement de s appliquer. Toute reapparition
+# du meme motif dans un autre commit, ou sur une autre ligne, reste detectee.
+d1101ca3f7d664923f9a7bffd601b1b48d3da55e:src/mervio/analytics/root_cause.py:generic-api-key:260
+d1101ca3f7d664923f9a7bffd601b1b48d3da55e:src/mervio/analytics/root_cause.py:generic-api-key:277
+d1101ca3f7d664923f9a7bffd601b1b48d3da55e:src/mervio/analytics/root_cause.py:generic-api-key:292
