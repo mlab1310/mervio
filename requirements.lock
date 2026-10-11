@@ -45,5 +45,5 @@ six==1.17.0
 SQLAlchemy==2.0.53
 typing_extensions==4.16.0
 urllib3==2.8.0
-Werkzeug==3.1.8
+Werkzeug==3.1.9
 xmltodict==1.0.4
