@@ -691,7 +691,7 @@ membres et invitations (005.1), facturation (005.0), provenance détaillée (lec
 `recommendation_states`, `idempotency_keys`, rate limit), `settings.py`, `pyproject.toml` (extra `api`),
 `Dockerfile`, `docker-compose.yml`.
 
-**Database impact** — migration `0008` : `recommendation_states`, `idempotency_keys`, `rate_limit_buckets`,
+**Database impact** — migration `0018` (D-104 : `0008` était périmé, `0008_admin_audit` est prise depuis 004.3) : `recommendation_states`, `idempotency_keys`, `rate_limit_buckets`,
 politique `users`, actions d'audit.
 
 **API impact** — création de `/v1`.
