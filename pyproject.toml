@@ -20,7 +20,7 @@ s3 = ["boto3>=1.34,<2"]
 # `uvicorn` est NU: l'extra `standard` tire httptools, uvloop, watchfiles, python-dotenv et
 # click pour une performance dont l'objectif mesure (p95 < 300 ms en lecture persistee) n'a
 # pas besoin, et sa cloture entrerait TOUTE dans l'image.
-api = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+api = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "psycopg-pool>=3.2,<4"]
 
 [project.scripts]
 mervio = "mervio.cli:main"

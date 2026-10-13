@@ -31,6 +31,9 @@ PERMISSIVE = frozenset({"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PS
 #: Licences acceptees APRES revue, pour une distribution nommee et une raison ecrite.
 #: psycopg: LGPL-3.0, utilise comme bibliotheque dynamique non modifiee; aucune obligation
 #: de publication du code de Mervio (ADR-004.1-001).
+# psycopg-pool: MEME projet que psycopg, donc meme licence et MEME raison -- bibliotheque
+# dynamique non modifiee, importee, jamais recompilee ni derivee (004.6, D-099). La revue est
+# nommee par distribution, comme les autres: elle n'elargit pas la politique generale.
 # certifi: MPL-2.0, copyleft PAR FICHIER. Ses obligations de divulgation portent sur les fichiers
 # MPL MODIFIES et DISTRIBUES. Mervio n'a ni modifie ni distribue certifi: c'est une dependance de
 # TEST uniquement (moto -> responses -> requests), absente de requirements-runtime.lock et de
@@ -42,6 +45,7 @@ PERMISSIVE = frozenset({"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PS
 REVIEWED: Dict[str, frozenset] = {
     "psycopg": frozenset({"LGPL-3.0-only"}),
     "psycopg-binary": frozenset({"LGPL-3.0-only"}),
+    "psycopg-pool": frozenset({"LGPL-3.0-only"}),
     "certifi": frozenset({"MPL-2.0"}),
     "python-dateutil": frozenset({"Dual License"}),
     "cffi": frozenset({"MIT-0"}),

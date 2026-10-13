@@ -23,6 +23,9 @@ jsonschema>=4.23,<5
 # `uvicorn` NU, sans l'extra `standard` -- voir pyproject.toml.
 fastapi>=0.115,<1
 uvicorn>=0.30,<1
+# D-099: pool de connexions de l'API. Meme projet que `psycopg`, donc meme licence et
+# meme usage -- bibliotheque dynamique non modifiee.
+psycopg-pool>=3.2,<4
 
 # Client de test de l'API, EN TEST UNIQUEMENT: `fastapi.testclient` en depend. Jamais une
 # dependance runtime, et absent de `requirements-runtime.lock`.

@@ -26,8 +26,14 @@ class Database:
     """Fabrique de transactions sur une connexion applicative verifiee.
 
     Une instance detient au plus une connexion (autocommit, chaque unite de
-    travail est un bloc de transaction explicite). Non partagee entre threads;
-    le pool de connexions arrive avec l'API (004.3).
+    travail est un bloc de transaction explicite). Ses REQUETES ne sont pas
+    partagees entre threads -- une exception deliberee:
+    `cancel_current_statement` est appelee depuis le fil du gardien de bail
+    (`workers/worker.py`), qui tient par ailleurs son propre `Database`.
+
+    L'API n'utilise PAS cette classe: son pool est `pool.DatabasePool`, un
+    composant distinct (D-099, 004.6). Sous un pool, << la connexion courante >>
+    n'aurait plus de sens pour l'annulation ci-dessus, d'ou la separation.
     """
 
     def __init__(self, url: str, *, application_name: Optional[str] = None, connect_timeout: Optional[int] = None,

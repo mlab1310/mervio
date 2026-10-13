@@ -47,6 +47,7 @@ packaging==26.3
 pluggy==1.6.0
 psycopg==3.3.5
 psycopg-binary==3.3.5 ; implementation_name != "pypy"
+psycopg-pool==3.3.3
 pycparser==3.0
 pydantic==2.14.1
 pydantic_core==2.50.1
