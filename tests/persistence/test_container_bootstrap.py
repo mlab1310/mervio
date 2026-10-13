@@ -442,8 +442,11 @@ def test_migration_head_provides_the_service_identity_function_under_the_migrato
     assert grants == (True, False, False)
     with psycopg.connect(boot.url("worker"), autocommit=True) as conn:
         principal = conn.execute("SELECT app_ensure_service_principal()").fetchone()[0]
-        assert conn.execute("SELECT idp_subject, kind FROM users WHERE id = %s", (principal,)).fetchone() == (
-            f"service:{boot.roles['worker']}", "service")
+        # SEC-05 (revision 0018): par la fonction a cle exacte. Un principal de SERVICE passe
+        # son filtre sans contexte tenant, ce que le worker n'a pas a ce stade.
+        assert conn.execute(
+            "SELECT idp_subject, kind FROM public.app_user_identities(ARRAY[%s]::uuid[])",
+            (principal,)).fetchone() == (f"service:{boot.roles['worker']}", "service")
     with psycopg.connect(boot.url("app"), autocommit=True) as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT app_ensure_service_principal()")

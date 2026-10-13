@@ -237,8 +237,12 @@ def test_the_erasure_functions_are_untouched(owner):
     definers = [r[0] for r in owner.execute(
         "SELECT p.proname FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace "
         "AND p.prosecdef ORDER BY 1").fetchall()]
+    # SEC-05 (revision `0018`) ajoute cinq definisseurs: voir son en-tete. Ils sont nommes ici
+    # pour que l'inventaire reste une liste DECIDEE, et non deduite du catalogue.
     assert definers == sorted([
         "app_ensure_service_principal", "app_finalize_raw_object_purge", "app_redact_customer",
+        "app_current_service_id", "app_ensure_user", "app_find_user",
+        "app_organization_members", "app_user_identities",
         *[name for name, _ in PURGE_FUNCTIONS]])
     for name in ("app_redact_customer", "app_finalize_raw_object_purge"):
         body = owner.execute("SELECT p.prosrc FROM pg_proc p WHERE p.proname = %s", (name,)).fetchone()[0]

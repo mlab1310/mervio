@@ -196,7 +196,7 @@ def test_the_complete_demonstration_runs_through_the_product_commands(pg, tmp_pa
     # 5. le rapport est persiste et lisible par le proprietaire
     database = Database(pg.url("app"))
     try:
-        owner_id = database.connection().execute("SELECT id FROM users WHERE idp_subject = %s",
+        owner_id = database.connection().execute("SELECT id FROM public.app_find_user(%s)",
                                                  (OWNER,)).fetchone()[0]
         session = TenantSession(database, TenantContext(uuid.UUID(organization), owner_id))
         stored = analyses.get_report(session, uuid.UUID(store), uuid.UUID(analysed["result"]["report_id"]))

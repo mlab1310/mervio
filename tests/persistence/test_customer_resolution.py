@@ -72,8 +72,16 @@ def _resolve(database, tenant, identity=KNOWN_IDENTITY, *, actor, master=TEST_MA
 
 
 def _owner_subject(db, tenant) -> str:
-    with db.transaction() as conn:
-        return conn.execute("SELECT idp_subject FROM users WHERE id = %s", (tenant.owner_id,)).fetchone()[0]
+    """Sujet du proprietaire, lu comme le ferait le proprietaire lui-meme.
+
+    SEC-05 (revision `0018`): `idp_subject` est hors de portee du role applicatif, et
+    `app_user_identities` n'accorde un sujet humain qu'a l'interesse ou a un co-membre --
+    delibere, parce que `SELECT id FROM users` reste permis et qu'un filtre laxiste y
+    retablirait l'enumeration complete. La lecture se fait donc EN CONTEXTE.
+    """
+    with db.transaction(organization_id=tenant.organization_id, user_id=tenant.owner_id) as conn:
+        return conn.execute("SELECT idp_subject FROM public.app_user_identities(ARRAY[%s]::uuid[])",
+                            (tenant.owner_id,)).fetchone()[0]
 
 
 def _digest(owner, organization_id) -> dict:

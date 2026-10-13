@@ -239,12 +239,20 @@ def test_the_hygiene_changes_no_privilege_and_adds_no_definer(owner):
     # s'execute avec les privileges de celui-ci; appelee directement elle est refusee, faute
     # d'`EXECUTE` (`REVOKE ALL ... FROM PUBLIC`, aucun `GRANT`). La surface privilegiee du
     # depot n'augmente donc que des sept operations, pas de huit.
+    # SEC-05 (revision `0018`): la surface privilegiee gagne CINQ entrees, et ce test est la
+    # pour que cela se decide au lieu de se subir. `app_current_service_id` passe INVOKER ->
+    # DEFINER parce qu'elle lisait `idp_subject`, desormais hors de portee du role applicatif,
+    # et qu'elle alimente les politiques RLS du worker; son garde-fou `pg_has_role` est
+    # conserve et elle ne rend toujours qu'UNE ligne, celle du role connecte. Les quatre
+    # autres sont les acces a cle EXACTE qui remplacent la lecture de table.
     assert definers == [("app_close_organization",), ("app_close_store",),
-                        ("app_destroy_identity_key",), ("app_ensure_service_principal",),
-                        ("app_finalize_raw_object_purge",), ("app_purge_finalize_raw_object",),
+                        ("app_current_service_id",), ("app_destroy_identity_key",),
+                        ("app_ensure_service_principal",), ("app_ensure_user",),
+                        ("app_finalize_raw_object_purge",), ("app_find_user",),
+                        ("app_organization_members",), ("app_purge_finalize_raw_object",),
                         ("app_purge_tenant_data",), ("app_redact_customer",),
                         ("app_tombstone_organization",), ("app_tombstone_organization_stores",),
-                        ("app_tombstone_store",)]
+                        ("app_tombstone_store",), ("app_user_identities",)]
     assert owner.execute("SELECT has_function_privilege('public', 'app_ensure_service_principal()', "
                          "'EXECUTE')").fetchone()[0] is False
     for function in ("analysis_runs_require_sealed_snapshot()", "canonical_rows_guard_sealed()"):

@@ -34,9 +34,17 @@ def test_pg_temp_can_shadow_an_unqualified_name_but_not_a_qualified_one(worker_c
     worker_conn.execute("INSERT INTO pg_temp.users VALUES (%s, 'forged', 'service')", (uuid.uuid4(),))
     # nom NON qualifie: PostgreSQL lit la table temporaire (le vecteur)
     assert worker_conn.execute("SELECT idp_subject FROM users").fetchall() == [("forged",)]
-    # nom qualifie (ce que fait 0009): PostgreSQL lit la vraie table
-    real = worker_conn.execute("SELECT idp_subject FROM public.users WHERE id = %s", (principal.id,)).fetchone()
-    assert real == (principal.subject,)
+    # nom qualifie (ce que fait 0009): PostgreSQL lit la vraie table.
+    # SEC-05 (revision `0018`): `idp_subject` n'est plus lisible par le role applicatif, dont
+    # le worker herite. La demonstration porte donc sur `kind`, encore accordee -- et elle est
+    # MEILLEURE ainsi: la table temporaire forgee annonce `kind = 'service'` pour une ligne
+    # inventee, tandis que la vraie table rend la nature du VRAI principal.
+    real = worker_conn.execute("SELECT id, kind FROM public.users WHERE id = %s",
+                               (principal.id,)).fetchone()
+    assert real == (principal.id, "service")
+    # et le sujet reste accessible par la fonction a cle exacte, pas par la table
+    assert worker_conn.execute("SELECT idp_subject FROM public.app_find_user(%s)",
+                               (principal.subject,)).fetchone() == (principal.subject,)
 
 
 def test_forged_temp_authorization_does_not_grant_cross_tenant_read(worker_db, worker_conn, principal, db):

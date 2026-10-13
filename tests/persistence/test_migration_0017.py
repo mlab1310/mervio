@@ -22,6 +22,8 @@ from mervio.persistence.audit import Action
 
 PREVIOUS = "0016_tenant_purge"
 HEAD = "0017_purge_recovery_audit"
+#: `0018` (SEC-05) suit `0017`. Ce module n'est plus celui de la tete du depot.
+NEXT = "0018_users_subject_visibility"
 
 REFUSAL = "organization.purge_recovery_refused"
 #: les quatre actions de `0016`, qui n'etaient pas dans l'enum avant 004.4.7
@@ -124,9 +126,16 @@ def _count(url, organization_id, event_id) -> int:
 # 1. place dans la chaine
 # =============================================================================================
 
-def test_0017_is_the_head_and_follows_0016():
-    assert migrate.revisions()[-1] == HEAD
-    assert migrate.revisions()[-2] == PREVIOUS
+def test_0017_follows_0016_and_precedes_0018():
+    """`0017` n'est plus la tete depuis `0018` (SEC-05): sa PLACE dans la chaine reste epinglee.
+
+    Les montees de ce module ciblent donc `HEAD` explicitement. Sans cela elles iraient
+    jusqu'a la tete du depot et mesureraient `0016 -> 0018` au lieu de `0016 -> 0017`.
+    """
+    revisions = migrate.revisions()
+    position = revisions.index(HEAD)
+    assert revisions[position - 1] == PREVIOUS
+    assert revisions[position + 1] == NEXT
 
 
 # =============================================================================================
@@ -136,7 +145,7 @@ def test_0017_is_the_head_and_follows_0016():
 def test_the_upgrade_adds_exactly_one_value(staged):
     before, before_valid = _constraint(staged)
     assert REFUSAL not in before and before_valid is True
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     after, after_valid = _constraint(staged)
     assert REFUSAL in after and after_valid is True
     # la liste s'allonge d'UNE valeur: aucune autre n'est ajoutee, aucune n'est retiree
@@ -147,7 +156,7 @@ def test_the_upgrade_touches_nothing_but_that_constraint(staged):
     """Perimetre DB strict: une seule ligne d'empreinte bouge, et c'est la contrainte."""
     base = _fingerprint(staged)
     assert len(base) > 500, f"la base de depart n'est pas migree: {len(base)} lignes"
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     after = _fingerprint(staged)
 
     only_before = [line for line in base if line not in after]
@@ -161,7 +170,7 @@ def test_the_upgrade_touches_nothing_but_that_constraint(staged):
 def test_the_refusal_action_is_rejected_before_and_accepted_after(staged):
     with pytest.raises(psycopg.errors.CheckViolation):
         _seed_refusal(staged)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     assert _count(staged, *_seed_refusal(staged)) == 1
 
 
@@ -172,7 +181,7 @@ def test_the_refusal_action_is_rejected_before_and_accepted_after(staged):
 def test_the_downgrade_restores_the_0016_list_not_valid(staged):
     """La liste de `0016` revient au caractere pres, et en `NOT VALID` -- mecanisme de `0008`."""
     before, before_valid = _constraint(staged)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     migrate.downgrade(staged)
     after, after_valid = _constraint(staged)
     # `pg_get_constraintdef` suffixe " NOT VALID" quand la contrainte ne l'est pas: la
@@ -183,7 +192,7 @@ def test_the_downgrade_restores_the_0016_list_not_valid(staged):
 
 
 def test_the_downgrade_refuses_new_refusals(staged):
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     migrate.downgrade(staged)
     with pytest.raises(psycopg.errors.CheckViolation):
         _seed_refusal(staged)
@@ -192,7 +201,7 @@ def test_the_downgrade_refuses_new_refusals(staged):
 def test_an_existing_refusal_survives_the_downgrade(staged):
     """Le journal est en AJOUT SEUL: une migration n'en efface rien. C'est tout le sens de
     `NOT VALID` -- la descente ne POURRAIT pas valider la contrainte contre cette ligne."""
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     organization_id, event = _seed_refusal(staged)
     migrate.downgrade(staged)
     assert _count(staged, organization_id, event) == 1, "la descente a detruit une trace d'audit"
@@ -200,10 +209,10 @@ def test_an_existing_refusal_survives_the_downgrade(staged):
 
 def test_the_upgrade_works_again_with_refusals_already_present(staged):
     """UP -> DOWN -> UP avec un evenement D-070 en base: la remontee REVALIDE la liste."""
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     organization_id, event = _seed_refusal(staged)
     migrate.downgrade(staged)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     definition, valid = _constraint(staged)
     assert REFUSAL in definition and valid is True
     assert _count(staged, organization_id, event) == 1
@@ -214,11 +223,11 @@ def test_the_upgrade_works_again_with_refusals_already_present(staged):
 def test_the_roundtrip_is_deterministic(staged):
     """UP1 == UP2, et la seule difference BASE/DOWN est la contrainte rendue `NOT VALID`."""
     base = _fingerprint(staged)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     up1 = _fingerprint(staged)
     migrate.downgrade(staged)
     down = _fingerprint(staged)
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     up2 = _fingerprint(staged)
 
     assert up1 == up2, "la montee doit etre deterministe"
@@ -251,7 +260,7 @@ def test_the_action_enum_covers_the_tenant_purge_actions_of_0016():
 def test_the_enum_and_the_constraint_agree_exactly(staged):
     """Ni plus, ni moins: une valeur dans l'enum sans contrainte serait insérable nulle part,
     une valeur en base sans enum serait ecrite et non filtrable -- le defaut de `0016`."""
-    migrate.upgrade(staged)
+    migrate.upgrade(staged, HEAD)
     definition, _ = _constraint(staged)
     in_db = {part.strip().strip("'") for part in
              definition.split("ARRAY[", 1)[1].rsplit("]", 1)[0].split(",")}

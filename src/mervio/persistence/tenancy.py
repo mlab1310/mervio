@@ -144,12 +144,10 @@ def ensure_user(database: Database, idp_subject: str) -> UUID:
     """Identifiant Mervio d'un sujet d'identite, cree au premier appel."""
     if not idp_subject or len(idp_subject) > 255:
         raise ValueError("sujet d'identite invalide")
+    # SEC-05 (revision 0018): `idp_subject` est hors de portee du role applicatif. Le
+    # provisionnement passe par une fonction a cle EXACTE, qui ne permet aucun balayage.
     with database.transaction() as conn:
-        conn.execute(
-            "INSERT INTO users (id, idp_subject) VALUES (%s, %s) ON CONFLICT (idp_subject) DO NOTHING",
-            (uuid.uuid4(), idp_subject),
-        )
-        return conn.execute("SELECT id FROM users WHERE idp_subject = %s", (idp_subject,)).fetchone()[0]
+        return conn.execute("SELECT public.app_ensure_user(%s)", (idp_subject,)).fetchone()[0]
 
 
 #: Crochet appele DANS la transaction qui cree la ressource, avec (connexion, identifiant).
@@ -201,12 +199,9 @@ class Member:
 def list_members(session: TenantSession) -> List[Member]:
     """Membres de l'organisation. Reserve au proprietaire: la liste nomme des identites."""
     with session.transaction(Permission.MANAGE_MEMBERS) as conn:
-        rows = conn.execute(
-            "SELECT m.id, m.user_id, u.idp_subject, m.role, m.created_at "
-            "FROM memberships m JOIN users u ON u.id = m.user_id "
-            "WHERE m.organization_id = %s ORDER BY m.created_at, m.id",
-            (session.organization_id,),
-        ).fetchall()
+        # SEC-05 (revision 0018): la jointure sur `users` lisait `idp_subject`. La fonction
+        # est bornee a l'organisation DU CONTEXTE et verifie elle-meme le rang `owner`.
+        rows = conn.execute("SELECT * FROM public.app_organization_members()").fetchall()
     return [Member(*r) for r in rows]
 
 
@@ -226,8 +221,7 @@ def find_user(database: Database, idp_subject: str) -> Optional[UserRecord]:
     if not isinstance(idp_subject, str) or not idp_subject or len(idp_subject) > 255:
         return None
     with database.transaction() as conn:
-        row = conn.execute("SELECT id, idp_subject, kind FROM users WHERE idp_subject = %s",
-                           (idp_subject,)).fetchone()
+        row = conn.execute("SELECT * FROM public.app_find_user(%s)", (idp_subject,)).fetchone()
     return UserRecord(*row) if row is not None else None
 
 
@@ -237,7 +231,7 @@ def describe_users(database: Database, user_ids: Iterable[UUID]) -> Dict[UUID, U
     if not wanted:
         return {}
     with database.transaction() as conn:
-        rows = conn.execute("SELECT id, idp_subject, kind FROM users WHERE id = ANY(%s)", (wanted,)).fetchall()
+        rows = conn.execute("SELECT * FROM public.app_user_identities(%s)", (wanted,)).fetchall()
     return {r[0]: UserRecord(*r) for r in rows}
 
 

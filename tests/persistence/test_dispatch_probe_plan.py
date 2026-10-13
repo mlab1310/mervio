@@ -385,6 +385,14 @@ def test_the_isolation_boundary_is_unchanged(owner):
             "app_tombstone_organization",
             "app_tombstone_organization_stores",
             "app_tombstone_store",
+            # 0018, SEC-05: les acces a cle EXACTE qui remplacent la lecture de table, plus
+            # `app_current_service_id` passee INVOKER -> DEFINER parce qu'elle lisait
+            # `idp_subject` et qu'elle alimente les politiques RLS du worker.
+            "app_current_service_id",
+            "app_ensure_user",
+            "app_find_user",
+            "app_organization_members",
+            "app_user_identities",
         }
 
 

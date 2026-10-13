@@ -158,3 +158,33 @@ dans le dépôt (`test_llm_provider.py`, `test_llm_package_imports_no_network_or
   dépôt a refusée (SQL explicite partout).
 - *Pas de pool, une connexion par requête* : paie la poignée de main et `_verify()` à chaque
   appel, ce qui compromet directement le p95.
+
+---
+
+## ADR-004.6-003 — SEC-05 : le privilège de colonne, et pourquoi pas RLS
+
+**Contexte.** `users` était la seule table de tenant sans restriction de lecture : `SELECT` était
+accordé à `mervio_app` sur **toutes** ses colonnes depuis `0001`. TD-27 proposait « restrict via
+view or policy on own row ».
+
+**Options.**
+1. Politique RLS « sa propre ligne ».
+2. Politique RLS « sa propre ligne OU co-membre », plus une fonction de provisionnement.
+3. Privilège de **colonne**, plus des fonctions `SECURITY DEFINER` à clé exacte.
+
+**Décision — option 3.** Voir [D-106](DECISIONS.md) pour le détail et la mesure.
+
+**Pourquoi.** L'option 1 est **impossible**, mesuré : `ensure_user` provisionne **sans contexte
+tenant**, donc toute politique adossée à `app_current_user_id()` refuse. L'option 2 réduit
+l'énumération sans l'éliminer — un membre pourrait toujours lister les sujets de son
+organisation. L'option 3 ferme la menace exacte : RLS ne distingue pas une lecture à clé d'un
+balayage, le privilège de colonne si.
+
+**Conséquences.**
+- Cinq définisseurs de plus, nommés dans trois inventaires de test.
+- `app_current_service_id()` passe INVOKER → DEFINER, avec `session_user` au lieu de
+  `current_user` : voir D-106, c'est une obligation, pas un choix.
+- L'`id` d'une autre ligne reste lisible, et c'est dit comme tel dans le test et dans D-106.
+
+**Rejetées.** *Vue au lieu de fonctions* : une vue ne peut pas porter le provisionnement
+(`INSERT ... ON CONFLICT`), qui est précisément le cas qu'aucune politique ne pouvait servir.

@@ -81,7 +81,9 @@ def service_principal(database: Database) -> ServicePrincipal:
         with database.transaction() as conn:
             # deux instructions: la ligne creee par la fonction n'est visible qu'a la suivante
             principal_id = conn.execute("SELECT app_ensure_service_principal()").fetchone()[0]
-            row = conn.execute("SELECT id, idp_subject FROM users WHERE id = %s", (principal_id,)).fetchone()
+            # SEC-05 (revision 0018): `idp_subject` passe par une fonction a cle exacte.
+            row = conn.execute("SELECT id, idp_subject FROM public.app_user_identities(ARRAY[%s]::uuid[])",
+                               (principal_id,)).fetchone()
     except psycopg.errors.InsufficientPrivilege:
         raise ServiceIdentityError("le role connecte n'est pas un role de service") from None
     except (psycopg.errors.UndefinedFunction, psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
@@ -92,7 +94,7 @@ def service_principal(database: Database) -> ServicePrincipal:
 def find_service(database: Database, name: str) -> UUID:
     """Identifiant du principal `service:<name>`, pour qu'un proprietaire l'autorise."""
     with database.transaction() as conn:
-        row = conn.execute("SELECT id FROM users WHERE kind = 'service' AND idp_subject = %s",
+        row = conn.execute("SELECT id FROM public.app_find_user(%s) WHERE kind = 'service'",
                            (SERVICE_SUBJECT_PREFIX + str(name),)).fetchone()
     if row is None:
         raise NotFound("service")

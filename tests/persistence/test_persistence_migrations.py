@@ -41,8 +41,9 @@ def test_revisions_are_linear_and_versioned():
                                    "0011_identity_pii_schema", "0012_dispatch_probe_plan",
                                    "0013_raw_objects", "0014_customer_erasure",
                                    "0015_raw_object_purge", "0016_tenant_purge",
-                                   "0017_purge_recovery_audit"]
-    assert migrate.head_revision() == "0017_purge_recovery_audit"
+                                   "0017_purge_recovery_audit",
+                                   "0018_users_subject_visibility"]
+    assert migrate.head_revision() == "0018_users_subject_visibility"
 
 
 def test_empty_database_upgrades_to_head(empty_database):
@@ -88,6 +89,10 @@ def test_each_revision_upgrades_and_downgrades_step_by_step(empty_database):
         # 004.4.7 (D-070): une seule contrainte elargie (`audit_events_action_check`), aucune
         # table, aucune colonne, aucun index, aucune politique, aucun role, aucun privilege
         "0017_purge_recovery_audit": set(),
+        # 004.6 (SEC-05/TD-27): `idp_subject` sort de la portee du role applicatif. Quatre
+        # fonctions d'acces a cle exacte, une fonction redeclaree, des privileges retires --
+        # aucune table, aucune colonne, aucune politique, aucune contrainte.
+        "0018_users_subject_visibility": set(),
     }
     present = {"alembic_version"}
     for revision in migrate.revisions():

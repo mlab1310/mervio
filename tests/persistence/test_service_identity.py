@@ -126,9 +126,20 @@ def test_the_application_cannot_create_a_service_principal(app_conn):
         app_conn.execute("SELECT app_ensure_service_principal()")
 
 
-def test_a_human_subject_cannot_take_the_service_prefix(db):
-    with pytest.raises(psycopg.errors.CheckViolation):
+def test_a_human_subject_cannot_take_the_service_prefix(db, owner):
+    """Le prefixe reserve est refuse DEUX fois, et les deux comptent.
+
+    SEC-05 (revision `0018`): le provisionnement passe par `app_ensure_user`, qui refuse le
+    prefixe AVANT d'ecrire -- d'ou `InsufficientPrivilege` la ou `0007` donnait
+    `CheckViolation`. La contrainte `users_service_subject_reserved` est CONSERVEE et
+    verifiee ici separement: une garantie de base ne doit pas etre remplacee en silence par
+    une garantie applicative.
+    """
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
         ensure_user(db, "service:mervio_worker_login")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        owner.execute("INSERT INTO users (id, idp_subject, kind) VALUES (%s, %s, 'human')",
+                      (uuid.uuid4(), "service:mervio_worker_login"))
 
 
 def test_the_service_identity_cannot_be_forged_by_a_setting(app_conn, worker_conn, principal, principal2):

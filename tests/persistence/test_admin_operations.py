@@ -108,7 +108,8 @@ def world(admin, tmp_path):
 
 
 def user_id(evidence, subject):
-    return evidence.execute("SELECT id FROM users WHERE idp_subject = %s", (subject,)).fetchone()[0]
+    # SEC-05 (revision 0018): resolution par la fonction a cle exacte, jamais par la table.
+    return evidence.execute("SELECT id FROM public.app_find_user(%s)", (subject,)).fetchone()[0]
 
 
 def events(evidence, organization, action=None):
@@ -139,7 +140,9 @@ def test_user_ensure_is_idempotent_and_never_creates_a_duplicate(admin, evidence
     again = admin.ok("user", "ensure", "--subject", "op|someone")
     assert first["status"] == "created" and again["status"] == "existing"
     assert first["user"] == again["user"] == {"id": first["user"]["id"], "subject": "op|someone"}
-    assert count(evidence, "SELECT count(*) FROM users WHERE idp_subject = 'op|someone'") == 1
+    # SEC-05 (revision 0018): `idp_subject` est hors de portee du role applicatif, dont
+    # `evidence` herite. La verification passe par la fonction a cle exacte.
+    assert count(evidence, "SELECT count(*) FROM public.app_find_user('op|someone')") == 1
     assert count(evidence, "SELECT count(*) FROM users WHERE kind = 'human'") == 1
 
 
@@ -745,9 +748,14 @@ def test_a_database_without_the_admin_audit_vocabulary_is_reported_as_unmigrated
     name = pg.create_empty_database("admin_0007")
     try:
         migrate.upgrade(pg.url("migrator", name), "0007_service_identity")
-        admin.ok("user", "ensure", "--subject", OWNER_A, database=name)
-        code, error = admin("org", "create", "--as", OWNER_A, "--name", "Too early", database=name)
-        assert (code, error["code"]) == (admin_errors.EXIT_SCHEMA, "schema_not_ready")
+        # SEC-05 (revision 0018): le provisionnement passe par `app_ensure_user`, absente a
+        # `0007`. Le refus arrive donc des `user ensure`, et non seulement a `org create`.
+        # La propriete testee -- un schema non migre est SIGNALE, et rien n'est ecrit -- est
+        # inchangee; elle se verifie maintenant sur les DEUX commandes.
+        for argv in (("user", "ensure", "--subject", OWNER_A),
+                     ("org", "create", "--as", OWNER_A, "--name", "Too early")):
+            code, error = admin(*argv, database=name)
+            assert (code, error["code"]) == (admin_errors.EXIT_SCHEMA, "schema_not_ready"), argv
         with psycopg.connect(pg.url("bypass", name), autocommit=True) as conn:
             assert count(conn, "SELECT count(*) FROM organizations") == 0
     finally:
