@@ -10,15 +10,30 @@
 # jsonschema (K-1, Report Contract 2.0): validation du schema en TEST uniquement;
 # sa fermeture transitive (attrs, referencing, rpds-py, jsonschema-specifications)
 # figure ci-dessous. Absente de requirements-runtime.lock: aucune dependance runtime.
+# 004.6 (D-105): cloture de l'extra `api`. `fastapi` exige `opentelemetry-api` en dependance
+# DURE depuis 0.143: c'est l'API de tracage seule, sans exporteur ni reseau tant que rien
+# n'est configure -- signale ici parce que ce n'est pas evident depuis `fastapi`.
+# `annotated-doc` et `typing-inspection` viennent de `fastapi`/`pydantic`. `httpx` et
+# `httpcore` sont de TEST uniquement (`fastapi.testclient`): absents de
+# `requirements-runtime.lock`. `exceptiongroup`, exige par `anyio`, est exclu par son
+# marqueur sur Python 3.11.
 alembic==1.20.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
 attrs==26.1.0
 boto3==1.43.98
 botocore==1.43.98
 certifi==2026.7.22
 cffi==2.1.1
 charset-normalizer==3.5.1
+click==8.5.0
 cryptography==50.0.1
+fastapi==0.143.0
 greenlet==3.5.6 ; platform_machine == "aarch64" or platform_machine == "ppc64le" or platform_machine == "x86_64" or platform_machine == "amd64" or platform_machine == "AMD64" or platform_machine == "win32" or platform_machine == "WIN32"
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
 idna==3.20
 iniconfig==2.3.0
 jmespath==1.1.0
@@ -27,11 +42,14 @@ jsonschema-specifications==2025.9.1
 Mako==1.4.1
 MarkupSafe==3.0.3
 moto==5.2.3
+opentelemetry-api==1.45.1
 packaging==26.3
 pluggy==1.6.0
 psycopg==3.3.5
 psycopg-binary==3.3.5 ; implementation_name != "pypy"
 pycparser==3.0
+pydantic==2.14.1
+pydantic_core==2.50.1
 Pygments==2.21.0
 pytest==9.1.1
 python-dateutil==2.9.0.post0
@@ -43,7 +61,10 @@ rpds-py==2026.9.1
 s3transfer==0.19.2
 six==1.17.0
 SQLAlchemy==2.0.53
+starlette==1.8.0
+typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.8.0
+uvicorn==0.54.0
 Werkzeug==3.1.9
 xmltodict==1.0.4

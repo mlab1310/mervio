@@ -3,11 +3,28 @@
 # Installe par le Dockerfile:
 #     pip install --no-deps --only-binary=:all: -r requirements-runtime.lock
 # Fermeture transitive de psycopg[binary] et alembic sur Linux (marqueurs evalues sur la plateforme).
+# 004.6 (D-105): l'image sert l'API ET le worker, donc ce verrou est desormais la cloture de
+# `persistence` + `api`, et non plus de `persistence` seul. Changement de contrat d'artefact,
+# decide et non glisse: `tests/test_container_artifacts.py` le nomme. `idna` s'ajoute, exige
+# par `anyio`. `httpx`/`httpcore`/`certifi` n'y sont PAS: outillage de test.
 alembic==1.20.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+click==8.5.0
+fastapi==0.143.0
 greenlet==3.5.6 ; platform_machine == "aarch64" or platform_machine == "ppc64le" or platform_machine == "x86_64" or platform_machine == "amd64" or platform_machine == "AMD64" or platform_machine == "win32" or platform_machine == "WIN32"
+h11==0.16.0
+idna==3.20
 Mako==1.4.1
 MarkupSafe==3.0.3
+opentelemetry-api==1.45.1
 psycopg==3.3.5
 psycopg-binary==3.3.5 ; implementation_name != "pypy"
+pydantic==2.14.1
+pydantic_core==2.50.1
 SQLAlchemy==2.0.53
+starlette==1.8.0
+typing-inspection==0.4.4
 typing_extensions==4.16.0
+uvicorn==0.54.0

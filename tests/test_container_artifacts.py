@@ -206,18 +206,29 @@ def test_the_runtime_lock_is_a_strict_subset_of_the_project_lock():
 
 
 def test_the_runtime_lock_contains_no_test_tooling():
-    assert not {"pytest", "iniconfig", "pluggy", "pygments", "packaging", "pip", "setuptools", "wheel"} & set(
-        runtime_entries())
+    # 004.6: `httpx` et `httpcore` servent `fastapi.testclient`; ils n'ont rien a faire dans
+    # l'image. Les nommer ici rend la decision de D-105 verifiable, pas seulement ecrite.
+    assert not {"pytest", "iniconfig", "pluggy", "pygments", "packaging", "pip", "setuptools", "wheel",
+                "httpx", "httpcore"} & set(runtime_entries())
 
 
-def test_the_runtime_lock_is_exactly_the_closure_of_the_persistence_extra():
+def test_the_runtime_lock_is_exactly_the_closure_of_the_persistence_and_api_extras():
+    """004.6 (D-105): l'image sert l'API **et** le worker, donc la cloture couvre DEUX extras.
+
+    Ce test s'appelait `..._of_the_persistence_extra` et affirmait la cloture de `persistence`
+    SEUL. L'elargir est un changement de CONTRAT D'ARTEFACT -- l'image contient davantage --
+    et il est nomme ici pour qu'il se decide au lieu de se subir. Ce qui ne bouge pas:
+    `dependencies == []`, donc le coeur analytique reste sans dependance runtime (D-004).
+    """
     from importlib import metadata
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    assert project["dependencies"] == [], "le moteur n'a aucune dependance: seul l'extra persistence est installe"
+    assert project["dependencies"] == [], "le moteur n'a aucune dependance: seuls des extras sont installes"
     entries = runtime_entries()
     locked = lock_entries()
     reached = set()
-    pending = [(Requirement(text), ("",)) for text in project["optional-dependencies"]["persistence"]]
+    pending = [(Requirement(text), ("",))
+               for group in ("persistence", "api")
+               for text in project["optional-dependencies"][group]]
     while pending:
         requirement, parent_extras = pending.pop()
         if not applicable(requirement, parent_extras):
