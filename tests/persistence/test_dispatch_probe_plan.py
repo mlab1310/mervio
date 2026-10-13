@@ -393,6 +393,8 @@ def test_the_isolation_boundary_is_unchanged(owner):
             "app_find_user",
             "app_organization_members",
             "app_user_identities",
+            # 0019: la revision de schema pour `readyz`, par la valeur et non par la table
+            "app_schema_revision",
         }
 
 

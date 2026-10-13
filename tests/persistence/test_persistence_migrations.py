@@ -42,8 +42,9 @@ def test_revisions_are_linear_and_versioned():
                                    "0013_raw_objects", "0014_customer_erasure",
                                    "0015_raw_object_purge", "0016_tenant_purge",
                                    "0017_purge_recovery_audit",
-                                   "0018_users_subject_visibility"]
-    assert migrate.head_revision() == "0018_users_subject_visibility"
+                                   "0018_users_subject_visibility",
+                                   "0019_readyz_revision_grant"]
+    assert migrate.head_revision() == "0019_readyz_revision_grant"
 
 
 def test_empty_database_upgrades_to_head(empty_database):
@@ -93,6 +94,9 @@ def test_each_revision_upgrades_and_downgrades_step_by_step(empty_database):
         # fonctions d'acces a cle exacte, une fonction redeclaree, des privileges retires --
         # aucune table, aucune colonne, aucune politique, aucune contrainte.
         "0018_users_subject_visibility": set(),
+        # 004.6: un seul GRANT SELECT sur `alembic_version`, pour que `readyz` puisse comparer
+        # la revision a la tete. Aucune table, aucune colonne, aucune fonction.
+        "0019_readyz_revision_grant": set(),
     }
     present = {"alembic_version"}
     for revision in migrate.revisions():

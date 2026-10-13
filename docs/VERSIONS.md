@@ -1,6 +1,6 @@
 # VERSIONS — matrice et propriétaires
 
-Huit versions circulent dans Mervio. Chacune a **un** propriétaire, et une seule raison de
+Neuf versions circulent dans Mervio. Chacune a **un** propriétaire, et une seule raison de
 bouger. Les confondre produirait exactement ce que chaque version sert à éviter : un changement
 de forme invisible pour celui qui lit l'artefact.
 
@@ -13,6 +13,7 @@ de forme invisible pour celui qui lit l'artefact.
 | `RESPONSE_SCHEMA_VERSION` | `1.0` | [`llm/contract.py`](../src/mervio/llm/contract.py) | la réponse attendue du modèle | le schéma de réponse ou une règle d'ancrage change |
 | `NORMALIZATION_VERSION` | `mervio-normalization/2` | [`persistence/snapshots.py`](../src/mervio/persistence/snapshots.py) | la normalisation CSV → `Dataset` | la normalisation change — un instantané ancien n'est alors plus comparable |
 | `CSV_SCHEMA_VERSION` | `shopify_orders_csv/1,shopify_products_csv/1,stripe_csv/1,google_ads_csv/1` | [`persistence/snapshots.py`](../src/mervio/persistence/snapshots.py) | le schéma attendu de chaque export | un connecteur lit une colonne de plus ou autrement |
+| **`API_CONTRACT`** | **`1.0`** | [`api/contract.py`](../src/mervio/api/contract.py) | la **forme** des requêtes et réponses de l'API `/v1` | une route gagne, perd ou retype un champ (D-100) |
 | `QUALITY_DOCUMENT_VERSION` | `1` | [`persistence/codec.py`](../src/mervio/persistence/codec.py) | le document `data_quality.json` livré | ce document change de forme |
 
 **Non concernées.** `GENERATOR_VERSION` et `SCHEMA_VERSION` de
@@ -21,6 +22,14 @@ données de test** et son manifeste, pas le moteur : `GENERATOR_VERSION` vaut en
 littéral qu'`ENGINE_VERSION` avant 004.5, autre contrat.
 
 ## Règles
+
+0. **`API_CONTRACT` ne suit PAS `REPORT_CONTRACT`** (D-100). Trois choses distinctes : `/v1` est
+   un **espace de noms** de chemin, `API_CONTRACT` est la **forme** des requêtes et réponses,
+   et le document OpenAPI 3.1 est l'artefact figé en CI. La route de rapport sert le rapport
+   **tel que persisté**, et `reports` est immuable : un rapport **1.x** légitimement persisté
+   doit donc rester **servi** sous `API_CONTRACT 1.0`. Coupler les deux rendrait illisible par
+   contrat une donnée que le dépôt s'est engagé à conserver lisible. Additif → mineure sans
+   nouveau préfixe ; retrait ou retypage → majeure **et** `/v2` coexistant.
 
 1. **`ENGINE_VERSION` suit la version de distribution.** `mervio.__version__` **est**
    `ENGINE_VERSION`, et `pyproject.toml` porte la même valeur. Les désynchroniser ferait livrer

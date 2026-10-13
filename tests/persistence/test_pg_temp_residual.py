@@ -251,6 +251,7 @@ def test_the_hygiene_changes_no_privilege_and_adds_no_definer(owner):
                         ("app_finalize_raw_object_purge",), ("app_find_user",),
                         ("app_organization_members",), ("app_purge_finalize_raw_object",),
                         ("app_purge_tenant_data",), ("app_redact_customer",),
+                        ("app_schema_revision",),
                         ("app_tombstone_organization",), ("app_tombstone_organization_stores",),
                         ("app_tombstone_store",), ("app_user_identities",)]
     assert owner.execute("SELECT has_function_privilege('public', 'app_ensure_service_principal()', "

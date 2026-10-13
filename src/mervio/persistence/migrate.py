@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import io
 import os
+
+import psycopg
 from pathlib import Path
 from typing import Optional
 
@@ -67,3 +69,18 @@ def current_revision(url: Optional[str] = None) -> Optional[str]:
             return MigrationContext.configure(connection).get_current_revision()
     finally:
         engine.dispose()
+
+
+def applied_revision(url: str, *, connect_timeout: int = 5) -> str:
+    """Revision courante, lue par un role APPLICATIF (Mission 004.6, revision 0019).
+
+    `current_revision` ci-dessus lit `alembic_version` par SQLAlchemy, ce qu'un role applicatif
+    ne peut pas faire: il n'a aucun privilege sur cette table, et lui en donner rendrait la
+    descente de migration non symetrique (voir l'en-tete de `0019`). La valeur passe donc par
+    `app_schema_revision()`, `SECURITY DEFINER`, qui rend la revision et rien d'autre.
+
+    Cette fonction vit ici et non dans `api/` parce que le pilote SQL est confine a la couche
+    de persistance (`tests/test_persistence_boundaries.py`).
+    """
+    with psycopg.connect(url, autocommit=True, connect_timeout=connect_timeout) as conn:
+        return conn.execute("SELECT public.app_schema_revision()").fetchone()[0]

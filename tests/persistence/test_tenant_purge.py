@@ -242,7 +242,7 @@ def test_the_erasure_functions_are_untouched(owner):
     assert definers == sorted([
         "app_ensure_service_principal", "app_finalize_raw_object_purge", "app_redact_customer",
         "app_current_service_id", "app_ensure_user", "app_find_user",
-        "app_organization_members", "app_user_identities",
+        "app_organization_members", "app_user_identities", "app_schema_revision",
         *[name for name, _ in PURGE_FUNCTIONS]])
     for name in ("app_redact_customer", "app_finalize_raw_object_purge"):
         body = owner.execute("SELECT p.prosrc FROM pg_proc p WHERE p.proname = %s", (name,)).fetchone()[0]
