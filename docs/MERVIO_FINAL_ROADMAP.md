@@ -691,8 +691,23 @@ membres et invitations (005.1), facturation (005.0), provenance détaillée (lec
 `recommendation_states`, `idempotency_keys`, rate limit), `settings.py`, `pyproject.toml` (extra `api`),
 `Dockerfile`, `docker-compose.yml`.
 
-**Database impact** — migration `0018` (D-104 : `0008` était périmé, `0008_admin_audit` est prise depuis 004.3) : `recommendation_states`, `idempotency_keys`, `rate_limit_buckets`,
-politique `users`, actions d'audit.
+**Database impact** — **plan révisé après les tranches A–E** (D-104 pour la numérotation, D-106
+pour le mécanisme, D-103 pour le report). La ligne précédente annonçait une migration unique
+`0008`, puis `0018` ; les deux étaient inexactes. Le plan réel, par ordre de livraison :
+
+| Révision | Contenu | État |
+|---|---|---|
+| `0018_users_subject_visibility` | SEC-05/TD-27 : `idp_subject` sort de la portée du rôle applicatif, quatre fonctions d'accès à clé exacte, `app_current_service_id` redéclarée | **livrée** |
+| `0019_readyz_revision_grant` | `app_schema_revision()` pour `readyz` | **livrée** |
+| à venir, avec ses routes | `idempotency_keys`, `rate_limit_buckets` | tranche d'écriture |
+| à venir, après D-103 | `recommendation_states` | **bloquée** |
+
+La **politique RLS sur `users`** annoncée ici est abandonnée : elle est **impossible**, et D-106
+donne les trois raisons mesurées. Le mécanisme retenu est le privilège de **colonne**.
+`idempotency_keys` et `rate_limit_buckets` sont livrées **avec leurs consommateurs**, comme
+`0013` l'a été avec `raw_objects` : une table sans consommateur a une forme que rien ne valide.
+`recommendation_states` attend D-103 — sa clé proposée omet `run_id`, et la mesure de stabilité
+montre que ce n'est pas neutre.
 
 **API impact** — création de `/v1`.
 

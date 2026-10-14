@@ -188,3 +188,64 @@ balayage, le privilège de colonne si.
 
 **Rejetées.** *Vue au lieu de fonctions* : une vue ne peut pas porter le provisionnement
 (`INSERT ... ON CONFLICT`), qui est précisément le cas qu'aucune politique ne pouvait servir.
+
+---
+
+## Graphe de dépendances réel des tranches (révisé le 13/10/2026)
+
+Le plan de tranches du registre de décision supposait que `recommendation_states`,
+`idempotency_keys` et `rate_limit_buckets` arrivaient tous dans une migration unique, avant la
+première route. Les tranches A à E ont montré que c'était faux sur trois points. Ce qui suit
+remplace ce plan.
+
+```
+A  documentation et décisions          LIVREE   bb7b438
+B  SEC-05, migration 0018              LIVREE   8e3ba1f
+C  extra api, verrous                  LIVREE   f53126f
+D  pool, invariant prouvé              LIVREE   0fc0cfc
+E  squelette, API_CONTRACT, gardes     LIVREE   6fbcb02
+        │
+        ├─ E'  projections PURES, sans route        PRETE A DEMARRER
+        │      rapport persisté -> corps de réponse, ETag, dérivation de `findings`
+        │      depuis les quatre sections. Aucune route enregistrée, donc aucune
+        │      surface non authentifiée. Les trois gardes AST la couvrent déjà.
+        │
+        └─ F  authentification OIDC, /v1/me         BLOQUEE PAR D-098b
+                 │
+                 └─ G  tranche verticale: route de rapport      BLOQUEE PAR F
+                          │    son parcours HTTP protégé exige une identité vérifiée
+                          │
+                          └─ H  routes de lecture restantes
+                                   │
+                                   └─ I  routes d'écriture
+                                            + migration `idempotency_keys`,
+                                              `rate_limit_buckets` DANS CETTE TRANCHE
+                                            │
+                                            └─ recommandations: statut
+                                                  + `recommendation_states`
+                                                  BLOQUEE PAR D-103
+```
+
+**Ce que « préparer sans exposer » veut dire, précisément.** La tranche **E′** écrit des
+fonctions pures et leurs tests : un rapport persisté en entrée, un corps de réponse en sortie,
+plus le calcul d'ETag et la dérivation de `findings` depuis `critical_issues` / `warnings` /
+`setup` / `opportunities`. Rien n'est enregistré auprès de l'application, donc aucune route
+non authentifiée n'existe à aucun moment. Les trois gardes AST s'appliquent dès l'écriture.
+
+**Pourquoi G reste bloquée malgré E′.** G est la tranche verticale : son intérêt est de
+traverser jeton → appartenance → `TenantSession` → persistance → HTTP en une fois, et de
+prouver du même coup « accès croisé = 404 ». Sans F, elle ne prouverait que la moitié basse,
+que E′ couvre déjà. La livrer à moitié ferait passer pour validée une isolation HTTP qui ne
+l'est pas.
+
+**Ordre documenté des deux tables de la tranche d'écriture.** `idempotency_keys` et
+`rate_limit_buckets` arrivent **dans la même migration que les routes qui les consomment**,
+jamais avant. Précédent du dépôt : `0013` a livré `raw_objects` avec son chemin d'import. Une
+table sans consommateur a une forme que rien ne valide, et son premier usage la trouve presque
+toujours fausse.
+
+**`recommendation_states` est bloquée par D-103, pour une raison mesurée.** Voir le statut du
+13/10/2026 de D-103 : `finding_id` est stable, et c'est le problème — un identifiant non scopé
+désigne une catégorie, pas une occurrence. La clé `(organisation, boutique, finding_id)` est
+sûre pour les constats scopés et fausse pour les autres. Il manque une notion d'épisode, et
+c'est un arbitrage produit.
