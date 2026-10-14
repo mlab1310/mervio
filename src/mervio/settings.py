@@ -273,6 +273,12 @@ class ApiSettings:
     jwks_cache_seconds: float = 300.0
     #: derive d'horloge toleree sur `exp`/`nbf`/`iat`. DECLAREE, jamais implicite.
     clock_skew_seconds: float = 0.0
+    #: intervalle minimal entre deux TENTATIVES de recuperation du JWKS, reussies ou non
+    #: (F.1). Il borne le flot de `kid` inventes -- mesure avant correctif: 20 requetes
+    #: produisaient 42 appels sortants -- et les boucles sur un emetteur en panne. Effet
+    #: secondaire assume: une rotation legitime est vue au plus tard apres cet intervalle.
+    #: Defaut 30 s, bornes [1, 3600].
+    min_refresh_seconds: float = 30.0
     #: bornes du pool (D-099)
     pool_min_size: int = 1
     pool_max_size: int = 10
@@ -502,6 +508,12 @@ class _Reader:
             self.fail("MERVIO_OIDC_AUDIENCE", "obligatoire: audience attendue des jetons")
         jwks_cache = self.number("MERVIO_OIDC_JWKS_CACHE_SECONDS", 300.0, 10.0, 86400.0, kind=float)
         skew = self.number("MERVIO_OIDC_CLOCK_SKEW_SECONDS", 0.0, 0.0, 300.0, kind=float)
+        min_refresh = self.number("MERVIO_OIDC_MIN_REFRESH_SECONDS", 30.0, 1.0, 3600.0, kind=float)
+        if min_refresh > jwks_cache:
+            # Un intervalle plus long que la duree de vie du cache rendrait la relecture par
+            # expiration inatteignable: le cache expirerait sans pouvoir etre renouvele.
+            self.fail("MERVIO_OIDC_MIN_REFRESH_SECONDS",
+                      "ne peut pas depasser MERVIO_OIDC_JWKS_CACHE_SECONDS")
         pool_min = self.number("MERVIO_API_POOL_MIN", 1, 1, 64)
         pool_max = self.number("MERVIO_API_POOL_MAX", 10, 1, 256)
         if pool_min > pool_max:
@@ -510,7 +522,8 @@ class _Reader:
             raise SettingsError(self.problems)
         return ApiSettings(database_url=database_url, oidc_issuer=issuer.rstrip("/"),
                            oidc_audience=audience, jwks_cache_seconds=jwks_cache,
-                           clock_skew_seconds=skew, pool_min_size=pool_min, pool_max_size=pool_max)
+                           clock_skew_seconds=skew, min_refresh_seconds=min_refresh,
+                           pool_min_size=pool_min, pool_max_size=pool_max)
 
     def settings(self) -> WorkerSettings:
         environment = self.choice("MERVIO_ENV", "development", ENVIRONMENTS)

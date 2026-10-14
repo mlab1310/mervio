@@ -100,3 +100,22 @@ def test_no_provider_name_appears_in_the_logic_of_the_source():
         logic = ast.unparse(ast.fix_missing_locations(tree)).lower()
         found = pattern.search(logic)
         assert found is None, f"{path.relative_to(root)} nomme {found.group(1)} dans sa logique"
+
+
+def test_the_minimum_refresh_interval_has_a_default_and_bounds():
+    """F.1: l'intervalle borne le flot de `kid` inventes -- 42 appels sortants pour 20
+    requetes avant correctif. Defaut 30 s, bornes [1, 3600]."""
+    assert ApiSettings.from_env(BASE).min_refresh_seconds == 30.0
+    assert ApiSettings.from_env({**BASE, "MERVIO_OIDC_MIN_REFRESH_SECONDS": "5"}
+                                ).min_refresh_seconds == 5.0
+    for invalid in ("0", "0.5", "7200"):
+        with pytest.raises(SettingsError):
+            ApiSettings.from_env({**BASE, "MERVIO_OIDC_MIN_REFRESH_SECONDS": invalid})
+
+
+def test_the_refresh_interval_cannot_exceed_the_cache_lifetime():
+    """Sinon la relecture par expiration serait inatteignable: le cache expirerait sans
+    pouvoir etre renouvele."""
+    with pytest.raises(SettingsError):
+        ApiSettings.from_env({**BASE, "MERVIO_OIDC_JWKS_CACHE_SECONDS": "30",
+                              "MERVIO_OIDC_MIN_REFRESH_SECONDS": "60"})

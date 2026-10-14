@@ -92,12 +92,40 @@ depuis l'extérieur.
 `api.auth.ALLOWED_ALGORITHMS` est une constante. Une installation ne doit pas pouvoir s'ouvrir
 à `none` ou à une famille HMAC par une variable d'environnement.
 
-### Exposition bornée du cache JWKS — énoncée, pas niée
-Une clé **retirée** par l'émetteur reste acceptée jusqu'à la prochaine relecture, donc au plus
-`MERVIO_OIDC_JWKS_CACHE_SECONDS` (plancher 10 s). À l'inverse, un `kid` **inconnu** déclenche
-une relecture immédiate, donc une clé **nouvelle** est vue sans attendre. L'asymétrie est
-voulue : on se dépêche d'accepter une clé nouvelle, pas d'oublier une ancienne — sinon chaque
-`kid` inventé deviendrait une amplification vers l'émetteur.
+### Cache JWKS : appels sortants bornés (F.1)
+La première version relisait le JWKS dès qu'un `kid` manquait, **sans intervalle minimal**, et
+chaque relecture refaisait la découverte OIDC. **Mesuré : 20 requêtes à `kid` inconnu →
+42 appels HTTP** vers l'émetteur, devant un contrôle qui précède toute authentification, donc
+sans limitation de débit. Trois corrections, chacune mesurée :
+
+| Mécanisme | Effet mesuré |
+|---|---|
+| `jwks_uri` **validé** mis en cache | une relecture coûte **1** appel au lieu de 2 ; la découverte reste **unique** |
+| **Intervalle minimal** `MERVIO_OIDC_MIN_REFRESH_SECONDS` (défaut 30 s, bornes [1, 3600], jamais > `JWKS_CACHE_SECONDS`) | 20 requêtes à `kid` inconnu → **2** appels au total |
+| Une tentative **échouée** marque l'horodatage comme une réussie | 10 appels sur émetteur en panne → **1** tentative ; aucune boucle |
+| **Recuperation unique** (verrou de récupération + double vérification) | 8 requêtes simultanées à froid → **1** récupération ; cache expiré + 8 concurrentes → **1** relecture |
+
+**Ce que l'intervalle coûte, et c'est assumé** : une rotation légitime est reconnue **au plus
+tard après `MERVIO_OIDC_MIN_REFRESH_SECONDS`**, pas instantanément. Une clé **retirée** reste
+acceptée jusqu'à la prochaine relecture, donc au plus `MERVIO_OIDC_JWKS_CACHE_SECONDS`
+(plancher 10 s).
+
+Le **chemin chaud ne prend aucun verrou de récupération** : une fois le cache rempli, les
+vérifications JWT ne se sérialisent pas. Prouvé de façon déterministe — le verrou est tenu par
+un fil et une vérification chaude répond quand même.
+
+### Trois classifications distinctes pour un JWKS qui ne sert pas de clé (F.1)
+Ne pas confondre une erreur de l'**émetteur** avec un jeton douteux : sinon on cherche le
+problème du mauvais côté.
+
+| Code interne | Situation |
+|---|---|
+| `jwks_malformed` | la **forme** est fausse : `keys` absent, ou pas une liste |
+| `jwks_without_usable_key` | la forme est bonne, le **contenu** est inutilisable : liste vide, ou aucune clé que la bibliothèque sache lire |
+| `key_id_unknown` | le JWKS est **valide** et porte des clés utilisables, mais pas celle-là. **Seul cas qui justifie une relecture** |
+
+Ces trois codes vivent dans les **journaux**. La réponse HTTP reste le **401 indifférencié** :
+aucun détail de l'état de l'émetteur ne sort.
 
 ### Provisionnement à la volée
 D-098a écrit `sub` → `users.idp_subject` via `tenancy.ensure_user`, un insert-or-get. Tout

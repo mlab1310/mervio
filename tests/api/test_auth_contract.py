@@ -113,12 +113,17 @@ def test_a_key_declared_for_another_algorithm_of_the_same_family_is_refused(rsa_
 
 def test_a_cross_family_key_declaration_is_refused_even_earlier(rsa_key):
     """Et le cas croise famille (cle RSA declarant `ES256`): `pyjwt` le refuse DES l'analyse
-    du JWK, donc avant notre controle. Le refus arrive plus tot, pas moins fort."""
+    du JWK, donc avant notre controle d'egalite.
+
+    Depuis F.1, ce refus est classe `jwks_without_usable_key` et non `jwks_malformed`: la
+    FORME du document est bonne, c'est son CONTENU qui est illisible. Le refus arrive plus
+    tot, pas moins fort, et il nomme desormais la bonne cause.
+    """
     verifier = TokenVerifier(issuer=ISSUER, audience=AUDIENCE,
                              source=RawJwks({"keys": [rsa_key.jwk(declare_alg="ES256")]}))
     with pytest.raises(TokenRejected) as excinfo:
         verifier.verify(token(rsa_key))
-    assert reason(excinfo) == "jwks_malformed"
+    assert reason(excinfo) == "jwks_without_usable_key"
 
 
 def test_a_key_without_a_declared_algorithm_is_accepted(rsa_key):
@@ -197,10 +202,15 @@ def test_a_retired_key_keeps_working_until_the_cache_is_refreshed(source, rsa_ke
 
 
 @pytest.mark.parametrize("document, expected", [
-    ({}, "jwks_malformed"), ({"keys": "pas-une-liste"}, "jwks_malformed"),
-    ({"keys": [{"kty": "inconnu"}]}, "jwks_malformed"),
+    # FORME fausse: `keys` absent, ou pas une liste.
+    ({}, "jwks_malformed"),
+    ({"keys": "pas-une-liste"}, "jwks_malformed"),
+    # Forme bonne, CONTENU inutilisable (F.1, objectif 3): c'est une erreur de l'emetteur, et
+    # elle ne doit pas etre deguisee en `kid` inconnu ni confondue avec un document mal forme.
+    ({"keys": []}, "jwks_without_usable_key"),
+    ({"keys": [{"kty": "inconnu"}]}, "jwks_without_usable_key"),
 ])
-def test_a_malformed_jwks_is_a_refusal_not_a_crash(document, expected):
+def test_a_jwks_that_cannot_serve_a_key_is_a_refusal_not_a_crash(document, expected):
     verifier = TokenVerifier(issuer=ISSUER, audience=AUDIENCE, source=RawJwks(document))
     key = Key("k1", "RS256")
     with pytest.raises(TokenRejected) as excinfo:
