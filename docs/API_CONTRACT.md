@@ -68,10 +68,64 @@ journaux.
 ## Authentification
 
 Porteur JWT, `RS256` ou `ES256` uniquement. `none` et les familles HMAC sont refusés. `iss`,
-`aud`, `exp`, `nbf`, `iat` et `kid` sont tous vérifiés. Détail : ADR-004.6-001.
+`aud`, `exp`, `nbf`, `iat`, `sub` et `kid` sont tous vérifiés. Détail : ADR-004.6-001.
 
 Un jeton valide **n'accorde rien** par lui-même : il identifie un `user_id`. L'appartenance
 décide, et le rôle (`owner` / `admin` / `analyst` / `viewer`) décide de la permission.
+
+### Le jeton ne vient que de l'en-tête `Authorization`
+Ni cookie, ni paramètre de requête. Un jeton dans une URL finit dans les journaux de tout
+intermédiaire ; un jeton en cookie demanderait une défense CSRF que cette API n'a pas.
+
+### Tout refus est un **401 indifférencié**
+Jeton absent, malformé, signature invalide, algorithme interdit, mauvais émetteur, mauvaise
+audience, expiré, pas encore valide, `kid` absent ou inconnu, sujet absent, vide, réservé ou
+trop long : **le même document, octet pour octet**. Distinguer « mauvaise audience » de
+« signature invalide » aiderait un attaquant à calibrer sa tentative suivante. Le code stable
+de la cause vit dans les journaux, jamais dans la réponse.
+
+### Un principal de service ne s'authentifie jamais par HTTP
+Un `sub` préfixé `service:` est refusé : ce serait une escalade vers l'identité du worker
+depuis l'extérieur.
+
+### Les algorithmes ne sont pas configurables
+`api.auth.ALLOWED_ALGORITHMS` est une constante. Une installation ne doit pas pouvoir s'ouvrir
+à `none` ou à une famille HMAC par une variable d'environnement.
+
+### Exposition bornée du cache JWKS — énoncée, pas niée
+Une clé **retirée** par l'émetteur reste acceptée jusqu'à la prochaine relecture, donc au plus
+`MERVIO_OIDC_JWKS_CACHE_SECONDS` (plancher 10 s). À l'inverse, un `kid` **inconnu** déclenche
+une relecture immédiate, donc une clé **nouvelle** est vue sans attendre. L'asymétrie est
+voulue : on se dépêche d'accepter une clé nouvelle, pas d'oublier une ancienne — sinon chaque
+`kid` inventé deviendrait une amplification vers l'émetteur.
+
+### Provisionnement à la volée
+D-098a écrit `sub` → `users.idp_subject` via `tenancy.ensure_user`, un insert-or-get. Tout
+jeton valide de l'émetteur configuré **crée** donc l'utilisateur s'il n'existe pas. La barrière
+est `iss` + `aud`, vérifiés avant d'atteindre la base ; une limitation de débit la complétera.
+Conséquence voulue : la réponse a la **même forme** pour un sujet connu et un sujet inconnu, de
+sorte qu'elle ne révèle pas qui est inscrit.
+
+## Routes
+
+| Route | Rôle min. | État |
+|---|---|---|
+| `GET /healthz`, `GET /readyz` | aucun | livrées (tranche E) |
+| `GET /v1/me` | authentifié | **livrée (tranche F)** |
+
+`GET /v1/me` rend `user_id`, puis une entrée par appartenance — `organization_id`, `role`,
+`name`. Elle ne porte **pas** le sujet IdP : le porteur le connaît déjà, et un document qui le
+transporte finit par apparaître dans une trace.
+
+**Elle ne porte pas encore les boutiques**, que la roadmap mentionne pour cette route. Écart
+assumé : une lecture de boutiques par organisation est exactement la surface que la tranche G
+éprouve avec sa matrice « accès croisé = 404 », et la livrer ici donnerait des lectures
+tenant-scopées sans cette matrice.
+
+**Ce que `/v1/me` ne prouve pas.** Aucune isolation entre organisations. Elle ne rend que les
+appartenances de l'appelant, donc elle ne peut pas montrer ce qui arrive quand on demande la
+ressource d'un **autre** tenant. Cette preuve est une matrice par route — succès, 401, rôle
+insuffisant, accès croisé = 404 — et c'est la tranche G qui la porte.
 
 ## Pagination
 
@@ -84,6 +138,10 @@ blanche**.
 | Suite | Objet |
 |---|---|
 | `tests/api/test_api_guards.py` | les trois gardes AST |
-| `tests/api/test_health.py` | `healthz`, `readyz` |
+| `tests/api/test_health_and_errors.py` | `healthz`, `problem+json`, en-têtes, versionnage |
+| `tests/api/test_auth_contract.py` | le contrat de jeton de D-098a, contrôle par contrôle |
+| `tests/test_settings_api.py` | `ApiSettings`, et aucun nom de fournisseur dans la logique |
+| `tests/persistence/test_api_readiness.py` | `readyz` contre une vraie base |
+| `tests/persistence/test_api_me.py` | `/v1/me`, la matrice de refus, l'absence de fuite |
 | `tests/persistence/test_pool_isolation.py` | l'invariant de sécurité du pool (D-099) |
 | `tests/persistence/test_users_visibility.py` | SEC-05 / TD-27 |

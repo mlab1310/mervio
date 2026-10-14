@@ -17,6 +17,9 @@
 # `httpcore` sont de TEST uniquement (`fastapi.testclient`): absents de
 # `requirements-runtime.lock`. `exceptiongroup`, exige par `anyio`, est exclu par son
 # marqueur sur Python 3.11.
+# 004.6 tranche F (D-098a): `pyjwt` verifie les jetons OIDC. Zero dependance runtime sur
+# Python 3.11 (`typing_extensions` n'est exige que sous 3.11). Son extra `crypto` tire
+# `cryptography`, deja present ci-dessous via `moto`: RS256 et ES256 en dependent.
 alembic==1.20.0
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -52,6 +55,7 @@ pycparser==3.0
 pydantic==2.14.1
 pydantic_core==2.50.1
 Pygments==2.21.0
+pyjwt==2.15.1
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3

@@ -26,6 +26,11 @@ uvicorn>=0.30,<1
 # D-099: pool de connexions de l'API. Meme projet que `psycopg`, donc meme licence et
 # meme usage -- bibliotheque dynamique non modifiee.
 psycopg-pool>=3.2,<4
+# D-098a: verification des jetons OIDC. Implementation JWS GENERIQUE, pas un SDK de
+# fournisseur: rien dans `src/` ne nomme Keycloak. L'extra `crypto` tire `cryptography`,
+# necessaire a RS256 et ES256. La decouverte JWKS passe par `urllib.request` (stdlib):
+# aucun client HTTP n'entre dans l'image.
+pyjwt[crypto]>=2.9,<3
 
 # Client de test de l'API, EN TEST UNIQUEMENT: `fastapi.testclient` en depend. Jamais une
 # dependance runtime, et absent de `requirements-runtime.lock`.

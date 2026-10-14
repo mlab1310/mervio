@@ -66,8 +66,16 @@ NOT_FOUND = Problem(
 FORBIDDEN = Problem(
     code="forbidden", status=403, title="Role insuffisant",
     detail="Votre role dans cette organisation n'autorise pas cette operation.")
+#: 401 INDIFFERENCIE, et c'est une decision de securite. Jeton absent, malforme, signature
+#: invalide, algorithme interdit, mauvais emetteur, mauvaise audience, expire, `kid` inconnu,
+#: sujet reserve: TOUS rendent ce document. Distinguer << mauvaise audience >> de
+#: << signature invalide >> aiderait un attaquant a calibrer sa tentative suivante, et
+#: distinguer << sujet inconnu >> de << sujet connu >> revelerait qui est inscrit. Le code
+#: STABLE de la cause vit dans les journaux (`api.auth.TokenRejected.reason`), jamais dans la
+#: reponse.
 UNAUTHENTICATED = Problem(
-    code="unauthenticated", status=401, title="Authentification requise")
+    code="unauthenticated", status=401, title="Authentification requise",
+    detail="Le jeton est absent, invalide, ou n'autorise pas cette requete.")
 INVALID_REQUEST = Problem(
     code="invalid_request", status=422, title="Requete invalide")
 NOT_READY = Problem(

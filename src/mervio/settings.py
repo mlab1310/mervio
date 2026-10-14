@@ -253,6 +253,35 @@ class AdminSettings:
         return _Reader(os.environ if environ is None else environ, socket.gethostname).admin()
 
 
+@dataclass(frozen=True)
+class ApiSettings:
+    """Ce que lit `mervio api` (004.6, tranche F).
+
+    Le FOURNISSEUR n'est pas code en dur: `oidc_issuer` et `oidc_audience` suffisent a servir
+    Keycloak, qui est le defaut ratifie (D-098b), ou tout autre fournisseur certifie OIDC.
+    Rien dans `src/` ne le nomme.
+
+    Les ALGORITHMES ne sont pas ici, et c'est deliberé: `api.auth.ALLOWED_ALGORITHMS` est une
+    constante. Une installation ne doit pas pouvoir s'ouvrir a `none` ou a une famille HMAC par
+    une variable d'environnement.
+    """
+
+    database_url: Secret = field(repr=False)
+    oidc_issuer: str
+    oidc_audience: str
+    #: duree de vie du cache JWKS. Bornee: une rotation de cles doit etre vue sans redemarrage.
+    jwks_cache_seconds: float = 300.0
+    #: derive d'horloge toleree sur `exp`/`nbf`/`iat`. DECLAREE, jamais implicite.
+    clock_skew_seconds: float = 0.0
+    #: bornes du pool (D-099)
+    pool_min_size: int = 1
+    pool_max_size: int = 10
+
+    @classmethod
+    def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "ApiSettings":
+        return _Reader(os.environ if environ is None else environ, socket.gethostname).api()
+
+
 class _Reader:
     """Lit et valide; rassemble TOUTES les erreurs avant d'echouer."""
 
@@ -458,6 +487,30 @@ class _Reader:
         if self.problems:
             raise SettingsError(self.problems)
         return AdminSettings(database_url=database_url, object_store=object_store)
+
+    def api(self) -> "ApiSettings":
+        database_url = self.database_url()
+        issuer = self.raw("MERVIO_OIDC_ISSUER")
+        if not issuer:
+            self.fail("MERVIO_OIDC_ISSUER", "obligatoire: URL de l'emetteur OIDC")
+        elif not issuer.startswith(("https://", "http://localhost", "http://127.0.0.1")):
+            # `http` en clair n'est tolere qu'en local: un emetteur joint sans TLS peut etre
+            # remplace, et le JWKS avec lui.
+            self.fail("MERVIO_OIDC_ISSUER", "https obligatoire hors de localhost")
+        audience = self.raw("MERVIO_OIDC_AUDIENCE")
+        if not audience:
+            self.fail("MERVIO_OIDC_AUDIENCE", "obligatoire: audience attendue des jetons")
+        jwks_cache = self.number("MERVIO_OIDC_JWKS_CACHE_SECONDS", 300.0, 10.0, 86400.0, kind=float)
+        skew = self.number("MERVIO_OIDC_CLOCK_SKEW_SECONDS", 0.0, 0.0, 300.0, kind=float)
+        pool_min = self.number("MERVIO_API_POOL_MIN", 1, 1, 64)
+        pool_max = self.number("MERVIO_API_POOL_MAX", 10, 1, 256)
+        if pool_min > pool_max:
+            self.fail("MERVIO_API_POOL_MIN", "ne peut pas depasser MERVIO_API_POOL_MAX")
+        if self.problems:
+            raise SettingsError(self.problems)
+        return ApiSettings(database_url=database_url, oidc_issuer=issuer.rstrip("/"),
+                           oidc_audience=audience, jwks_cache_seconds=jwks_cache,
+                           clock_skew_seconds=skew, pool_min_size=pool_min, pool_max_size=pool_max)
 
     def settings(self) -> WorkerSettings:
         environment = self.choice("MERVIO_ENV", "development", ENVIRONMENTS)

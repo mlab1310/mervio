@@ -23,9 +23,12 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from .auth import TokenRejected, TokenVerifier
 from .contract import API_CONTRACT, API_PREFIX
-from .errors import PROBLEM_MEDIA_TYPE, ApiError, INTERNAL, NOT_READY
+from .errors import PROBLEM_MEDIA_TYPE, ApiError, INTERNAL, NOT_READY, UNAUTHENTICATED
 from .health import liveness, readiness
+from .identity import resolve
+from .routes import me as me_routes
 
 #: En-tetes poses sur TOUTE reponse. Une API JSON n'est pas une page, d'ou une CSP qui
 #: n'autorise rien: aucun document de ce service n'est destine a etre rendu par un navigateur.
@@ -38,8 +41,20 @@ SECURITY_HEADERS = {
 }
 
 
-def create_app(*, database_url: Optional[str] = None) -> FastAPI:
-    """Fabrique l'application. `database_url` ne sert qu'a `readyz`, qui lit une revision."""
+#: Chemins servis SANS authentification. Liste FERMEE, et elle ne contient que de la sante.
+#: Toute route metier passe par la dependance d'authentification; une addition ici serait un
+#: endpoint non authentifie, ce que `test_only_health_is_unauthenticated` refuse.
+PUBLIC_PATHS = ("/healthz", "/readyz")
+
+
+def create_app(*, database_url: Optional[str] = None, verifier: Optional[TokenVerifier] = None,
+               database=None) -> FastAPI:
+    """Fabrique l'application.
+
+    `database_url` ne sert qu'a `readyz`, qui lit une revision. `verifier` et `database` sont
+    le seam d'authentification: sans eux, AUCUNE route metier n'est enregistree -- un squelette
+    sans identite ne doit pas pouvoir servir une route protegee par inadvertance.
+    """
     app = FastAPI(
         title="Mervio API",
         version=API_CONTRACT,
@@ -74,7 +89,50 @@ def create_app(*, database_url: Optional[str] = None) -> FastAPI:
         status = 200 if state.ready else NOT_READY.status
         return JSONResponse(state.to_dict(), status_code=status)
 
+    if verifier is not None and database is not None:
+        _authenticate(app, verifier=verifier, database=database)
+        app.include_router(me_routes.router)
+
     return app
+
+
+def _authenticate(app: FastAPI, *, verifier: TokenVerifier, database) -> None:
+    """Pose la dependance d'authentification sur TOUT ce qui n'est pas de la sante.
+
+    Un middleware, et non une dependance par route: une route ajoutee demain est protegee par
+    DEFAUT. L'oubli possible devient << exposer de la sante >>, pas << exposer une ressource >>.
+    """
+
+    @app.middleware("http")
+    async def _require_identity(request: Request, call_next):
+        if request.url.path in PUBLIC_PATHS or request.url.path == f"{API_PREFIX}/openapi.json":
+            return await call_next(request)
+        try:
+            token = _bearer(request)
+            verified = verifier.verify(token)
+            # La resolution touche la base: elle vient APRES la verification complete du
+            # jeton, jamais avant. Un jeton non verifie ne doit atteindre aucune requete SQL.
+            request.state.identity = resolve(database, verified.subject)
+        except TokenRejected:
+            # 401 INDIFFERENCIE. La cause est un code stable, destine aux journaux, pas au
+            # client -- voir le commentaire de `UNAUTHENTICATED`.
+            return _problem(UNAUTHENTICATED, request)
+        return await call_next(request)
+
+
+def _bearer(request: Request) -> str:
+    """Extrait le porteur. Aucune autre source: ni cookie, ni parametre de requete.
+
+    Un jeton dans une URL finit dans les journaux de tout intermediaire; un jeton dans un
+    cookie demande une defense CSRF que cette API n'a pas.
+    """
+    header = request.headers.get("authorization")
+    if not header:
+        raise TokenRejected("authorization_absent")
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "bearer" or not value.strip():
+        raise TokenRejected("authorization_malformed")
+    return value.strip()
 
 
 def _problem(problem, request: Request) -> JSONResponse:
