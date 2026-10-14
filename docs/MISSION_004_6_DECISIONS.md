@@ -249,3 +249,86 @@ toujours fausse.
 désigne une catégorie, pas une occurrence. La clé `(organisation, boutique, finding_id)` est
 sûre pour les constats scopés et fausse pour les autres. Il manque une notion d'épisode, et
 c'est un arbitrage produit.
+
+---
+
+## Note de décision produit — sémantique du statut d'une recommandation (D-103)
+
+**Ceci n'est pas une décision. C'est le choix à faire, avec ses conséquences mesurées.**
+`recommendation_states` n'est pas créée tant qu'il n'est pas tranché.
+
+**Le fait qui force le choix.** `finding_id` vaut `{type}` ou `{type}:{scope}`. Mesuré sur 17
+scénarios × 2 profils, graine 3 contre graine 11 : **92 identifiants non scopés conservés**,
+7 disparus, 24 apparus, **0 cas de « même type, scope différent »**. Donc un identifiant
+**non scopé** (`refunds_anomaly`, `revenue_decline`, `roas_anomaly`, `aov_anomaly`) **est** son
+type : il désigne une **catégorie**, pas une occurrence — et ces constats **vont et viennent**
+(`refunds_anomaly` disparaît dans trois configurations, réapparaît dans une autre). Un
+identifiant **scopé** (`campaign_opportunity:90010004`, `low_margin_product:<sku>`) désigne un
+objet, et y attacher un statut durable est le comportement attendu.
+
+| Option | Clé | Ce qu'un « fait » signifie | Conséquence à accepter |
+|---|---|---|---|
+| **A — par type de problème** | `(org, store, finding_id)` | « ne me reparle plus de cette catégorie » | Marquer `refunds_anomaly` fait le **supprime définitivement**, y compris une poussée genuinement nouvelle plus tard. C'est un **filtre d'affichage**, pas un suivi d'action. Simple, et dangereux si présenté comme un suivi. |
+| **B — par occurrence** | `(org, store, run_id, finding_id)` | « j'ai traité ce constat, dans ce rapport » | Aucune continuité : le même problème au rapport suivant est un constat **neuf**, non traité. Le marchand re-marque chaque semaine. Fidèle, et fatigant. |
+| **C — par épisode** | `(org, store, finding_id, episode)`, l'épisode se fermant après N périodes **sans** le constat | « j'ai traité cette poussée ; si elle revient, redis-le-moi » | Demande une règle de réouverture explicite — N, et ce que « sans le constat » veut dire quand une période manque de données. C'est le comportement qu'un marchand attend, au prix d'un état à entretenir. |
+| **D — par période** | `(org, store, finding_id, period_label)` | « traité pour la semaine du … » | Lisible et borné, mais un problème qui dure trois semaines demande trois marquages. Confond la granularité du rapport avec celle de l'action. |
+
+**Ce que la mesure dit, et ne dit pas.** Elle dit que A est faux pour les constats non scopés
+et correct pour les scopés — donc qu'une clé **unique** pour les deux familles est
+nécessairement fausse pour l'une d'elles. Elle ne dit **pas** laquelle des options B, C ou D
+sert le mieux le produit : c'est un arbitrage de produit, et il n'est pas pris ici.
+
+**Si C est retenue, ce qu'il faudra ratifier en plus :** la valeur de N, le traitement d'une
+période sans donnée, et si un changement de **sévérité** du constat rouvre l'épisode.
+
+**Travail préparatoire autorisé et fait :** la mesure de stabilité ci-dessus, et la
+démonstration du mécanisme de collision de `_slug` (quatre formes distinctes de SKU rendent le
+même identifiant ; `'é'` survit à `_slug` et viole le motif que le dépôt s'impose). Aucune
+persistance de statut n'est implémentée.
+
+---
+
+## ADR-004.6-004 — Fournisseur OIDC : Keycloak, et ce que ce choix n'engage pas
+
+**Contexte.** D-098a a ratifié le contrat de vérification de jeton, indépendant du fournisseur.
+Restait le fournisseur déployé, laissé ouvert faute de faits vérifiables.
+
+**Décision.** **Keycloak**, ratifié le 13/10/2026. Voir [D-098b](DECISIONS.md) pour les motifs,
+la vérification de certification et les réserves de coût.
+
+**Pourquoi ce choix ne change rien au code.** L'engagement reste D-098a. Keycloak entre par des
+**variables d'environnement** — URL d'émetteur, audience — et rien de `src/` ne le nomme. Aucun
+SDK propriétaire : la découverte OIDC et la validation JWT se font sur les standards, avec un
+JWKS injectable pour les tests hermétiques. Changer de fournisseur doit coûter une variable
+d'environnement, pas une refonte.
+
+**Conséquences.**
+- Le JWKS est **injecté** en test : aucun réseau, conformément à la culture du dépôt.
+- Keycloak s'adosse à PostgreSQL 14–18 : le `docker-compose.yml` n'acquiert aucun substrat
+  nouveau à exploiter.
+- À vérifier **avant production**, et consigné comme tel : coût d'exploitation, coût du support
+  commercial, et conformité de la **version déployée** à un profil de certification.
+
+**Rejetées.** *Zitadel* : techniquement apte et auto-hébergeable, mais son auto-hébergement
+communautaire est sous **AGPL**, ce qui demande une détermination juridique que cette mission
+n'a pas les moyens de trancher, et ses propres pages se contredisent sur les paliers, la devise
+et les régions. *Auth0* : sources contradictoires sur un traitement aux États-Unis sous Okta.
+
+---
+
+## `app_find_user` — portée actuelle de l'oracle d'existence
+
+**État mesuré.** Les seuls appelants de `app_find_user` et `app_ensure_user` sont la **CLI
+admin** (`admin/operations.py`, `cli/admin.py`) et le **worker**
+(`workers/resolution.py`, `persistence/service.py`). **Aucune surface HTTP ne les atteint** :
+`src/mervio/api/` ne contient que `contract`, `errors`, `health` et `app`. L'oracle exige donc
+aujourd'hui un **identifiant de base de données applicatif**, pas une requête réseau.
+
+**Ce qui est exigé avant toute exposition HTTP**, et c'est la tranche F qui l'introduira en
+résolvant le sujet d'un jeton :
+1. **identité vérifiée** — la résolution ne s'atteint qu'après validation complète du jeton
+   (D-098a) ; jamais depuis une route anonyme ;
+2. **limitation de débit** par utilisateur **et** par organisation, plus stricte sur ce chemin
+   que sur une lecture ordinaire, puisqu'un oracle se sonde en boucle ;
+3. **aucun écho** : une réponse ne doit pas distinguer « sujet inconnu » de « sujet connu mais
+   hors de votre organisation » — même règle que l'accès croisé = 404.

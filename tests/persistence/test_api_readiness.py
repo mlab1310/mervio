@@ -28,8 +28,9 @@ def test_readyz_refuses_a_schema_behind_head_even_when_the_revision_is_readable(
     """La propriete sharp: revision LISIBLE mais differente de la tete => `schema_not_at_head`.
 
     Servir des lectures contre un schema qui n'est pas celui du code produirait des reponses
-    fausses plutot qu'une panne franche. La fonction de `0019` est posee a la main ici, parce
-    qu'aucune revision livree n'est a la fois >= 0019 et < tete: c'est la tete.
+    fausses plutot qu'une panne franche. La fonction de `0019` est posee a la main ici: la base
+    est montee a `0016`, donc tres en deca de `0019`, et c'est precisement le point -- on veut
+    une revision LISIBLE mais differente de la tete.
     """
     name = pg.create_empty_database("api_readyz_behind")
     try:

@@ -256,6 +256,14 @@ def test_the_hygiene_changes_no_privilege_and_adds_no_definer(owner):
                         ("app_tombstone_store",), ("app_user_identities",)]
     assert owner.execute("SELECT has_function_privilege('public', 'app_ensure_service_principal()', "
                          "'EXECUTE')").fetchone()[0] is False
+    # 004.6 (revision 0020): la garde est GENERALISEE. `app_current_service_id` etait le seul
+    # definisseur encore executable par PUBLIC -- un privilege par defaut jamais revoque depuis
+    # `0007`, devenu genant quand `0018` l'a rendue definisseur. Verifier la classe entiere
+    # plutot qu'une fonction nommee empeche le prochain oubli du meme genre.
+    assert [r[0] for r in owner.execute(
+        "SELECT p.proname FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace "
+        "AND p.prosecdef AND has_function_privilege('public', p.oid, 'EXECUTE') "
+        "ORDER BY 1").fetchall()] == []
     for function in ("analysis_runs_require_sealed_snapshot()", "canonical_rows_guard_sealed()"):
         acl, is_owner = owner.execute(
             "SELECT proacl, pg_get_userbyid(proowner) = current_user FROM pg_proc WHERE oid = %s::regprocedure",

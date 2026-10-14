@@ -143,8 +143,18 @@ def test_a_human_subject_cannot_take_the_service_prefix(db, owner):
 
 
 def test_the_service_identity_cannot_be_forged_by_a_setting(app_conn, worker_conn, principal, principal2):
+    """L'identite de service ne se forge pas par un reglage -- et depuis `0020`, elle est
+    carrement INATTEIGNABLE depuis un role applicatif.
+
+    Avant `0020`, le role applicatif recevait `NULL`: la fonction etait executable par PUBLIC
+    (privilege par defaut jamais revoque depuis `0007`) et sa garde interne refusait. Le
+    privilege est desormais reserve a `mervio_worker`, donc le refus arrive AVANT la garde.
+    Les deux proprietes sont verifiees: le refus pour l'un, et pour l'autre le fait qu'un
+    `app.user_id` force ne deplace pas l'identite resolue.
+    """
     with raw(app_conn, user_id=principal.id) as conn:
-        assert conn.execute("SELECT app_current_service_id()").fetchone()[0] is None
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT app_current_service_id()").fetchone()
     with raw(worker_conn, user_id=principal2.id) as conn:
         assert conn.execute("SELECT app_current_service_id()").fetchone()[0] == principal.id
 
@@ -711,7 +721,11 @@ def test_a_role_removed_from_the_worker_group_loses_its_service_identity(pg, tem
             conn.execute(sql.SQL("REVOKE mervio_worker FROM {}").format(sql.Identifier(name)))
         database.close()
         with database.transaction() as conn:
-            assert conn.execute("SELECT app_current_service_id()").fetchone()[0] is None
+            # Depuis `0020`, perdre l'appartenance a `mervio_worker` fait perdre le PRIVILEGE
+            # lui-meme, pas seulement la resolution de l'identite: le refus arrive avant la
+            # garde interne. C'est strictement plus fort qu'un `NULL`.
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("SELECT app_current_service_id()").fetchone()
         with pytest.raises(ServiceIdentityError):
             service.service_principal(database)
         with pytest.raises(ServiceIdentityError):

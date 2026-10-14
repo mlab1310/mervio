@@ -118,8 +118,16 @@ class ServiceSession(TenantSession):
         if permission not in SERVICE_PERMISSIONS:
             raise PermissionDenied(permission.value, "service")
         with self.database.transaction(organization_id=self.organization_id) as conn:
-            service_id, authorized = conn.execute(
-                "SELECT app_current_service_id(), app_service_authorized(%s)", (self.organization_id,)).fetchone()
+            # Revision `0020`: les deux fonctions sont reservees a `mervio_worker`. Un role qui
+            # ne peut pas les executer n'est pas un role de service -- meme traduction que
+            # `_require_connected_principal`, pour que la frontiere de domaine ne laisse pas
+            # fuir une erreur de privilege brute.
+            try:
+                service_id, authorized = conn.execute(
+                    "SELECT app_current_service_id(), app_service_authorized(%s)",
+                    (self.organization_id,)).fetchone()
+            except psycopg.errors.InsufficientPrivilege as exc:
+                raise ServiceIdentityError(SERVICE_ROLE_REQUIRED) from exc
             if service_id != self.principal.id:
                 raise ServiceIdentityError("la connexion n'appartient pas a ce principal de service")
             if not authorized:
@@ -233,8 +241,27 @@ def authorized_organizations(database: Database, principal: ServicePrincipal, *,
     return [r[0] for r in rows]
 
 
+#: Revision `0020`: un role qui n'a pas `EXECUTE` sur `app_current_service_id` n'est pas un
+#: role de service. Le message NOMME la cause: une erreur de configuration de role est plus
+#: longue a diagnostiquer qu'un mauvais principal, donc les deux doivent se distinguer.
+SERVICE_ROLE_REQUIRED = ("le role connecte n'est pas un role de service: il n'a pas EXECUTE sur "
+                         "app_current_service_id (revision 0020, reserve a mervio_worker)")
+
+
 def _require_connected_principal(conn, principal: ServicePrincipal) -> None:
-    if conn.execute("SELECT app_current_service_id()").fetchone()[0] != principal.id:
+    """La connexion appartient-elle bien a ce principal de service?
+
+    Depuis la revision `0020`, `app_current_service_id()` n'est executable que par
+    `mervio_worker`. Un role qui ne peut PAS l'executer n'est definitivement pas le principal:
+    la frontiere de domaine le traduit, au lieu de laisser fuir une erreur de privilege brute
+    jusqu'a l'appelant. Le message nomme la cause -- une erreur de configuration de role est
+    plus longue a diagnostiquer qu'un mauvais principal, donc elle doit se distinguer.
+    """
+    try:
+        connected = conn.execute("SELECT app_current_service_id()").fetchone()[0]
+    except psycopg.errors.InsufficientPrivilege as exc:
+        raise ServiceIdentityError(SERVICE_ROLE_REQUIRED) from exc
+    if connected != principal.id:
         raise ServiceIdentityError("la connexion n'appartient pas a ce principal de service")
 
 
