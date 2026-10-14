@@ -17,11 +17,37 @@ AUCUN RESEAU DANS LES TESTS
 autre implementation. C'est la meme discipline que `llm/`, dont une garde interdit
 `socket`/`http`/`httpx`.
 
-EXPOSITION BORNEE DU CACHE, DITE PLUTOT QUE NIEE
-Un cache JWKS implique qu'une cle RETIREE par l'emetteur reste acceptee jusqu'a la prochaine
-relecture, donc au plus `jwks_cache_seconds`. C'est le prix du cache, et il est reglable
-(`MERVIO_OIDC_JWKS_CACHE_SECONDS`, borne a 10 s minimum). Le supprimer demanderait une
-relecture par requete, donc un aller-retour vers l'emetteur a chaque appel.
+TROIS DUREES DISTINCTES, ET ELLES NE MESURENT PAS LA MEME CHOSE (F.2)
+    cache_seconds        FRAICHEUR. Comptee depuis le dernier chargement REUSSI. Tant qu'elle
+                         dure, les cles servent sans aucun appel sortant.
+    max_stale_seconds    TOLERANCE, comptee EN PLUS de la fraicheur. Apres l'expiration et
+                         pendant cette periode, un cache deja valide continue de servir des
+                         cles CONNUES si l'emetteur est injoignable. Au-dela: refus.
+    min_refresh_seconds  CADENCE des tentatives reseau. Independante des deux autres: elle ne
+                         decide jamais si une cle est acceptee, seulement quand on ressaie.
+La fenetre totale d'utilisabilite est donc `cache_seconds + max_stale_seconds` depuis le
+dernier chargement REUSSI. Une tentative ECHOUEE ne deplace JAMAIS cet instant: sinon une panne
+prolongee repousserait indefiniment l'expiration des cles, ce qui est exactement ce qu'une
+revocation doit empecher.
+
+LE PAPILLONNEMENT DE F.1, ET POURQUOI IL EXISTAIT
+F.1 servait le document rassis UNIQUEMENT dans la fenetre de refroidissement, et levait dans la
+branche de tentative. Le verdict dependait donc de l'instant d'arrivee de la requete: celle qui
+declenchait la tentative etait refusee, les suivantes acceptees. Mesure, `cache_seconds=60`,
+`min_refresh_seconds=30`, emetteur en panne, 16 instants de t=60 a t=210: 10 acceptations et
+6 refus, en ALTERNANCE de periode `min_refresh_seconds`. La documentation de F.1 affirmait par
+ailleurs que le rassis etait servi << de facon coherente et borne par `cache_seconds` >>:
+faux sur les deux points.
+F.2 corrige la cause: les DEUX branches -- refroidissement et echec de tentative -- prennent
+la MEME decision, `_tolerated()`. Le verdict ne depend plus que de l'AGE du dernier chargement
+reussi, donc il est monotone: accepte tant que l'age tient dans la fenetre, refuse ensuite, et
+jamais l'inverse.
+
+CE QUE LA TOLERANCE NE FAIT PAS
+Elle ne contourne AUCUNE verification. Une signature invalide, un algorithme interdit, un
+mauvais `iss` ou `aud`, un claim manquant: tous refuses, cache rassis ou non. La tolerance ne
+porte que sur la DISPONIBILITE de cles DEJA validees. Et un `kid` absent du cache n'est jamais
+accepte: le cache ne contient pas sa cle, donc il n'y a rien a tolerer.
 
 AMPLIFICATION SUR `kid` INCONNU: CORRIGEE EN F.1, ET LA MESURE QUI L'A IMPOSEE
 La premiere version relisait le JWKS des qu'un `kid` manquait, SANS intervalle minimal, et
@@ -89,6 +115,24 @@ DEFAULT_HTTP_TIMEOUT = 5.0
 #: assez court pour qu'une rotation legitime soit vue vite, assez long pour qu'un flot ne
 #: sorte pas. Reglable par `MERVIO_OIDC_MIN_REFRESH_SECONDS`, borne a [1, 3600].
 DEFAULT_MIN_REFRESH_SECONDS = 30.0
+#: Tolerance SUPPLEMENTAIRE apres l'expiration de la fraicheur. Pendant cette periode, un
+#: cache deja VALIDE continue de servir des cles CONNUES quand l'emetteur est injoignable --
+#: et au-dela, l'authentification est refusee. 60 s par defaut, bornes [0, 3600]: `0` signifie
+#: aucune tolerance, c'est-a-dire refus des l'expiration. Reglable par
+#: `MERVIO_OIDC_MAX_STALE_SECONDS`.
+DEFAULT_MAX_STALE_SECONDS = 60.0
+
+#: Echecs de recuperation que la tolerance peut couvrir: ils disent que l'emetteur est
+#: momentanement INJOIGNABLE ou illisible, pas qu'il est devenu suspect.
+TOLERABLE_FAILURES = ("issuer_unreachable", "document_too_large", "document_not_json")
+#: Tout le reste -- `insecure_discovery_url`, `jwks_uri_outside_issuer`,
+#: `discovery_without_jwks_uri` -- est un echec d'INTEGRITE ou de CONFIGURATION, et il remonte
+#: TEL QUEL, sans tolerance. Un document de decouverte altere ou un emetteur joint sans TLS
+#: n'est pas un hoquet: continuer a servir en silence masquerait un probleme de confiance, et
+#: l'operateur verrait `issuer_unreachable` la ou le defaut est ailleurs.
+#: Compromis assume: un attaquant capable d'alterer la decouverte obtient un refus de service
+#: plutot qu'une degradation silencieuse. C'est le sens choisi, parce qu'un `jwks_uri` qui
+#: change d'hote peut aussi etre une migration LEGITIME -- et elle demande un humain.
 
 
 class TokenRejected(Exception):
@@ -148,11 +192,13 @@ class HttpJwksSource:
 
     def __init__(self, issuer: str, *, cache_seconds: float = 300.0,
                  min_refresh_seconds: float = DEFAULT_MIN_REFRESH_SECONDS,
+                 max_stale_seconds: float = DEFAULT_MAX_STALE_SECONDS,
                  timeout: float = DEFAULT_HTTP_TIMEOUT,
                  clock=time.monotonic, fetch=None) -> None:
         self._issuer = issuer.rstrip("/")
         self._cache_seconds = cache_seconds
         self._min_refresh_seconds = min_refresh_seconds
+        self._max_stale_seconds = max_stale_seconds
         self._timeout = timeout
         self._clock = clock
         self._fetch = fetch if fetch is not None else _fetch_json
@@ -167,6 +213,9 @@ class HttpJwksSource:
         #: coute un appel au lieu de deux. La validation n'est pas sautee, elle est faite une
         #: fois et son resultat est conserve.
         self._jwks_uri: Optional[str] = None
+        #: raison du dernier echec de recuperation. Conservee pour qu'une panne ne soit pas
+        #: MASQUEE par la tolerance: elle est servie, mais elle reste nommee et lisible.
+        self._last_failure: Optional[str] = None
 
     # -- contrat `JwksSource` --------------------------------------------------------------
     def jwks(self) -> Mapping[str, Any]:
@@ -183,13 +232,37 @@ class HttpJwksSource:
         return self._load(ignore_freshness=True)
 
     # -- mecanique -------------------------------------------------------------------------
+    def _age(self) -> Optional[float]:
+        """Age du dernier chargement REUSSI. `None` s'il n'y en a jamais eu."""
+        if self._document is None or self._fetched_at is None:
+            return None
+        return self._clock() - self._fetched_at
+
     def _fresh(self) -> bool:
-        return (self._document is not None and self._fetched_at is not None
-                and (self._clock() - self._fetched_at) < self._cache_seconds)
+        age = self._age()
+        return age is not None and age < self._cache_seconds
 
     def _cooling_down(self) -> bool:
         return (self._attempted_at is not None
                 and (self._clock() - self._attempted_at) < self._min_refresh_seconds)
+
+    def _tolerated(self) -> Mapping[str, Any]:
+        """Document utilisable quand une recuperation n'est pas possible MAINTENANT.
+
+        C'est la SEULE decision de tolerance du module, et les deux branches qui en ont besoin
+        -- refroidissement et echec de tentative -- l'appellent toutes les deux. C'est ce qui
+        supprime le papillonnement de F.1: le verdict ne depend plus de l'instant d'arrivee de
+        la requete, mais uniquement de l'AGE du dernier chargement reussi.
+
+        A appeler sous `_state_lock`.
+        """
+        age = self._age()
+        if age is None:
+            # Cache initialement vide: on n'accepte JAMAIS un jeton sans jeu de cles valide.
+            raise TokenRejected("issuer_unreachable", self._last_failure or "aucun jeu de cles")
+        if age < self._cache_seconds + self._max_stale_seconds:
+            return self._document  # type: ignore[return-value]
+        raise TokenRejected("jwks_too_stale", f"age {age:.0f}s, {self._last_failure or 'expire'}")
 
     def _load(self, *, ignore_freshness: bool) -> Mapping[str, Any]:
         # CHEMIN CHAUD: aucun verrou de recuperation, donc aucune serialisation.
@@ -204,19 +277,47 @@ class HttpJwksSource:
                 if not ignore_freshness and self._fresh():
                     return self._document  # type: ignore[return-value]
                 if self._cooling_down():
-                    # Dans la fenetre: on ne sort pas. Le document courant, meme rassis, vaut
-                    # mieux qu'un appel; s'il n'y en a aucun, c'est un refus franc.
-                    if self._document is not None:
-                        return self._document
-                    raise TokenRejected("issuer_unreachable", "intervalle de relecture")
-                # Marque AVANT l'appel: un echec coute une fenetre, comme une reussite.
+                    # Trop tot pour ressayer: meme decision que si on avait essaye et echoue.
+                    return self._tolerated()
+                # Marque AVANT l'appel: un echec coute une fenetre, comme une reussite. Ne
+                # touche PAS `_fetched_at`, qui ne bouge qu'a un chargement reussi.
                 self._attempted_at = self._clock()
 
-            document = self._retrieve()
+            try:
+                document = self._retrieve()
+            except TokenRejected as failure:
+                with self._state_lock:
+                    self._last_failure = failure.reason
+                if failure.reason not in TOLERABLE_FAILURES:
+                    # Echec d'INTEGRITE ou de CONFIGURATION: il remonte tel quel. Le masquer
+                    # derriere la tolerance ferait chercher une panne reseau devant un
+                    # probleme de confiance.
+                    raise
+                with self._state_lock:
+                    # MEME decision que la branche de refroidissement: c'est l'invariant qui
+                    # rend le verdict monotone.
+                    return self._tolerated()
+
             with self._state_lock:
                 self._document = document
                 self._fetched_at = self._clock()
+                self._last_failure = None
             return document
+
+    def state(self) -> dict:
+        """Etat du cache, sans secret: pour la supervision et un futur `readyz`.
+
+        Une panne servie par tolerance reste ainsi NOMMEE, donc non masquee.
+        """
+        with self._state_lock:
+            age = self._age()
+            return {"has_keys": self._document is not None,
+                    "age_seconds": None if age is None else round(age, 3),
+                    "fresh": self._fresh(),
+                    "cache_seconds": self._cache_seconds,
+                    "max_stale_seconds": self._max_stale_seconds,
+                    "min_refresh_seconds": self._min_refresh_seconds,
+                    "last_failure": self._last_failure}
 
     def _retrieve(self) -> Mapping[str, Any]:
         """Un seul appel quand le `jwks_uri` est connu, deux la premiere fois."""

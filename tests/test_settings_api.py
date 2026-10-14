@@ -119,3 +119,24 @@ def test_the_refresh_interval_cannot_exceed_the_cache_lifetime():
     with pytest.raises(SettingsError):
         ApiSettings.from_env({**BASE, "MERVIO_OIDC_JWKS_CACHE_SECONDS": "30",
                               "MERVIO_OIDC_MIN_REFRESH_SECONDS": "60"})
+
+
+def test_the_stale_tolerance_has_a_default_and_bounds():
+    """F.2: la tolerance est DISTINCTE de la fraicheur et de la cadence de relecture."""
+    settings = ApiSettings.from_env(BASE)
+    assert settings.max_stale_seconds == 60.0
+    assert (settings.jwks_cache_seconds, settings.min_refresh_seconds) == (300.0, 30.0)
+    assert ApiSettings.from_env({**BASE, "MERVIO_OIDC_MAX_STALE_SECONDS": "0"}
+                                ).max_stale_seconds == 0.0, "0 = aucune tolerance, licite"
+    for invalid in ("-1", "3601"):
+        with pytest.raises(SettingsError):
+            ApiSettings.from_env({**BASE, "MERVIO_OIDC_MAX_STALE_SECONDS": invalid})
+
+
+def test_the_three_durations_are_independent_settings():
+    """Aucune des trois ne se deduit des autres: elles ne mesurent pas la meme chose."""
+    settings = ApiSettings.from_env({**BASE, "MERVIO_OIDC_JWKS_CACHE_SECONDS": "120",
+                                     "MERVIO_OIDC_MIN_REFRESH_SECONDS": "15",
+                                     "MERVIO_OIDC_MAX_STALE_SECONDS": "900"})
+    assert (settings.jwks_cache_seconds, settings.min_refresh_seconds,
+            settings.max_stale_seconds) == (120.0, 15.0, 900.0)

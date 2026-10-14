@@ -106,9 +106,46 @@ sans limitation de débit. Trois corrections, chacune mesurée :
 | **Recuperation unique** (verrou de récupération + double vérification) | 8 requêtes simultanées à froid → **1** récupération ; cache expiré + 8 concurrentes → **1** relecture |
 
 **Ce que l'intervalle coûte, et c'est assumé** : une rotation légitime est reconnue **au plus
-tard après `MERVIO_OIDC_MIN_REFRESH_SECONDS`**, pas instantanément. Une clé **retirée** reste
-acceptée jusqu'à la prochaine relecture, donc au plus `MERVIO_OIDC_JWKS_CACHE_SECONDS`
-(plancher 10 s).
+tard après `MERVIO_OIDC_MIN_REFRESH_SECONDS`**, pas instantanément.
+
+### Trois durées distinctes, et elles ne mesurent pas la même chose (F.2)
+
+> **Correction de la documentation de F.1.** Elle affirmait que le cache périmé était servi
+> « de façon cohérente et borné par `cache_seconds` ». **Faux sur les deux points**, et mesuré :
+> le document périmé n'était servi que dans la fenêtre de refroidissement, donc le verdict
+> **alternait** — 16 instants donnaient 10 acceptations et 6 refus en alternance — et un
+> document périmé pouvait être servi bien au-delà de `cache_seconds`.
+
+| Réglage | Mesure | Défaut | Bornes |
+|---|---|---|---|
+| `MERVIO_OIDC_JWKS_CACHE_SECONDS` | **fraîcheur**, depuis le dernier chargement **réussi** | 300 s | [10, 86400] |
+| `MERVIO_OIDC_MAX_STALE_SECONDS` | **tolérance en plus**, pendant laquelle un cache déjà validé sert encore des clés **connues** si l'émetteur est injoignable | 60 s | [0, 3600] — `0` = refus dès l'expiration |
+| `MERVIO_OIDC_MIN_REFRESH_SECONDS` | **cadence** des tentatives réseau ; n'accepte jamais une clé à elle seule | 30 s | [1, 3600], et ≤ `JWKS_CACHE_SECONDS` |
+
+La fenêtre totale d'utilisabilité vaut **`cache_seconds + max_stale_seconds`** depuis le dernier
+chargement **réussi**. Une tentative **échouée** ne déplace jamais cet instant : sinon une panne
+prolongée repousserait indéfiniment l'expiration des clés, ce qu'une révocation doit empêcher.
+
+**Verdict monotone.** Les deux branches qui peuvent manquer de clés fraîches — refroidissement
+et échec de tentative — prennent la **même** décision. Le verdict ne dépend donc que de l'**âge**
+du dernier chargement réussi : accepté tant que l'âge tient dans la fenêtre, refusé ensuite, et
+jamais l'inverse. Mesuré sur le scénario exact qui papillonnait : **6 acceptations puis
+10 refus, sans aucune transition refus → acceptation**.
+
+**Conséquences en disponibilité et en révocation.** Une tolérance longue protège d'une panne de
+l'émetteur et **retarde d'autant** la prise d'effet d'une révocation de clé : au pire
+`cache_seconds + max_stale_seconds`. Une tolérance nulle fait l'inverse — révocation immédiate
+à l'expiration, et indisponibilité dès que l'émetteur hoquette. Le défaut (300 + 60 = 360 s)
+privilégie la disponibilité ; `MERVIO_OIDC_MAX_STALE_SECONDS=0` privilégie la révocation.
+
+**La tolérance ne contourne aucune vérification.** Une signature invalide, un algorithme
+interdit, un mauvais `iss` ou `aud`, un claim manquant : tous refusés, cache périmé ou non. Et
+un `kid` **absent** du cache n'est jamais accepté — il n'y a rien à tolérer. Un refus pour cache
+trop vieux porte son propre code, `jwks_too_stale`, distinct de `issuer_unreachable`.
+
+**La panne n'est pas masquée.** `HttpJwksSource.state()` expose `fresh`, `age_seconds`,
+`last_failure` et les trois durées — sans aucun secret. Une panne servie par tolérance reste
+donc **nommée** et lisible.
 
 Le **chemin chaud ne prend aucun verrou de récupération** : une fois le cache rempli, les
 vérifications JWT ne se sérialisent pas. Prouvé de façon déterministe — le verrou est tenu par

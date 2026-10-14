@@ -279,6 +279,15 @@ class ApiSettings:
     #: secondaire assume: une rotation legitime est vue au plus tard apres cet intervalle.
     #: Defaut 30 s, bornes [1, 3600].
     min_refresh_seconds: float = 30.0
+    #: tolerance SUPPLEMENTAIRE apres l'expiration de la fraicheur (F.2). Pendant cette
+    #: periode, un cache deja valide continue de servir des cles CONNUES si l'emetteur est
+    #: injoignable; au-dela, l'authentification est refusee. La fenetre totale depuis le
+    #: dernier chargement REUSSI vaut donc `jwks_cache_seconds + max_stale_seconds`, et une
+    #: tentative echouee ne la repousse jamais. Defaut 60 s, bornes [0, 3600]; `0` signifie
+    #: aucune tolerance, c'est-a-dire refus des l'expiration.
+    #: Compromis: une tolerance longue protege d'une panne de l'emetteur et retarde d'autant
+    #: la prise d'effet d'une REVOCATION de cle.
+    max_stale_seconds: float = 60.0
     #: bornes du pool (D-099)
     pool_min_size: int = 1
     pool_max_size: int = 10
@@ -509,6 +518,7 @@ class _Reader:
         jwks_cache = self.number("MERVIO_OIDC_JWKS_CACHE_SECONDS", 300.0, 10.0, 86400.0, kind=float)
         skew = self.number("MERVIO_OIDC_CLOCK_SKEW_SECONDS", 0.0, 0.0, 300.0, kind=float)
         min_refresh = self.number("MERVIO_OIDC_MIN_REFRESH_SECONDS", 30.0, 1.0, 3600.0, kind=float)
+        max_stale = self.number("MERVIO_OIDC_MAX_STALE_SECONDS", 60.0, 0.0, 3600.0, kind=float)
         if min_refresh > jwks_cache:
             # Un intervalle plus long que la duree de vie du cache rendrait la relecture par
             # expiration inatteignable: le cache expirerait sans pouvoir etre renouvele.
@@ -523,6 +533,7 @@ class _Reader:
         return ApiSettings(database_url=database_url, oidc_issuer=issuer.rstrip("/"),
                            oidc_audience=audience, jwks_cache_seconds=jwks_cache,
                            clock_skew_seconds=skew, min_refresh_seconds=min_refresh,
+                           max_stale_seconds=max_stale,
                            pool_min_size=pool_min, pool_max_size=pool_max)
 
     def settings(self) -> WorkerSettings:
