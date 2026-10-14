@@ -278,6 +278,9 @@ class ApiSettings:
     #: produisaient 42 appels sortants -- et les boucles sur un emetteur en panne. Effet
     #: secondaire assume: une rotation legitime est vue au plus tard apres cet intervalle.
     #: Defaut 30 s, bornes [1, 3600].
+    #: INDEPENDANTE par ce qu'elle MESURE, pas par ses effets: elle ne decide jamais a elle
+    #: seule qu'une cle est acceptee, mais elle determine s'il existe une occasion de
+    #: renouveler la tolerance AVANT son expiration -- voir `max_stale_seconds`.
     min_refresh_seconds: float = 30.0
     #: tolerance SUPPLEMENTAIRE apres l'expiration de la fraicheur (F.2). Pendant cette
     #: periode, un cache deja valide continue de servir des cles CONNUES si l'emetteur est
@@ -287,6 +290,15 @@ class ApiSettings:
     #: aucune tolerance, c'est-a-dire refus des l'expiration.
     #: Compromis: une tolerance longue protege d'une panne de l'emetteur et retarde d'autant
     #: la prise d'effet d'une REVOCATION de cle.
+    #: RELATION RECOMMANDEE avec la cadence: `max_stale_seconds >= min_refresh_seconds`. La
+    #: tolerance n'absorbe une panne SANS refus visible que si une tentative autorisee ET
+    #: reussie peut avoir lieu DANS la fenetre; sinon elle ne fait que retarder le refus.
+    #: Mesure, `cache_seconds=300`, emetteur revenu pendant la tolerance: avec 60/30, zero
+    #: refus; avec 10/30, 20 s de refus (t=310 a t=329) alors que l'emetteur etait revenu a
+    #: t=305, le rechargement n'etant permis qu'a t=330. Les defauts (60 et 30) satisfont la
+    #: relation. `max_stale_seconds < min_refresh_seconds` reste LEGAL et n'est pas une
+    #: validation oubliee: `0` est le cas limite deja ratifie, et une tolerance courte est un
+    #: choix d'exploitant. Le contrat ne l'interdit pas, il en nomme la consequence.
     max_stale_seconds: float = 60.0
     #: bornes du pool (D-099)
     pool_min_size: int = 1

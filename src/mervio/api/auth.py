@@ -23,12 +23,39 @@ TROIS DUREES DISTINCTES, ET ELLES NE MESURENT PAS LA MEME CHOSE (F.2)
     max_stale_seconds    TOLERANCE, comptee EN PLUS de la fraicheur. Apres l'expiration et
                          pendant cette periode, un cache deja valide continue de servir des
                          cles CONNUES si l'emetteur est injoignable. Au-dela: refus.
-    min_refresh_seconds  CADENCE des tentatives reseau. Independante des deux autres: elle ne
-                         decide jamais si une cle est acceptee, seulement quand on ressaie.
+    min_refresh_seconds  CADENCE des tentatives reseau. Independante par ce qu'elle MESURE:
+                         elle ne decide jamais si une cle est acceptee, seulement quand on
+                         ressaie. Independante par ses EFFETS, non -- voir plus bas.
 La fenetre totale d'utilisabilite est donc `cache_seconds + max_stale_seconds` depuis le
 dernier chargement REUSSI. Une tentative ECHOUEE ne deplace JAMAIS cet instant: sinon une panne
 prolongee repousserait indefiniment l'expiration des cles, ce qui est exactement ce qu'une
 revocation doit empecher.
+
+CE QUE LA CADENCE IMPOSE A LA TOLERANCE, ET LA MESURE QUI LE MONTRE
+La tolerance n'absorbe une panne SANS refus visible que si une tentative autorisee ET reussie
+peut avoir lieu DANS la fenetre de tolerance. La premiere tentative a lieu a l'expiration de la
+fraicheur; son echec marque `_attempted_at`, donc la suivante attend `min_refresh_seconds`. La
+relation RECOMMANDEE est par consequent `max_stale_seconds >= min_refresh_seconds`.
+Mesure, `cache_seconds=300`, trafic d'une requete par seconde, emetteur revenu PENDANT la
+tolerance:
+    60/30  retour a t=315, tentative a t=330 < 360  ->  ZERO refus, panne absorbee
+    10/30  retour a t=305, tentative a t=330 > 310  ->  20 s de refus, t=310 a t=329
+Dans les deux cas la fenetre vaut bien `cache_seconds + max_stale_seconds` (dernier accepte a
+t=359 et t=309, premier refus a t=360 et t=310, `jwks_too_stale`) et le verdict reste MONOTONE
+pendant la panne: zero transition refus -> acceptation. `max_stale_seconds < min_refresh_seconds`
+reste donc LEGAL -- ce n'est pas une validation oubliee -- mais la tolerance s'y reduit a un
+REPORT du refus, sans possibilite de retablissement pendant ce delai.
+
+TROIS INSTANTS A NE PAS CONFONDRE DANS UN RETABLISSEMENT
+    tentative AUTORISEE  au plus tard `min_refresh_seconds` apres la derniere tentative,
+                         reussie ou non. C'est le SEUL des trois qui soit borne.
+    tentative EFFECTIVE  a la premiere requete arrivee apres cet instant: il n'y a AUCUN
+                         rafraichisseur en arriere-plan, la recuperation est tiree par le
+                         trafic. Mesure, 10/30, aucune requete entre t=311 et t=400: aucun
+                         appel sortant avant t=400.
+    RETABLISSEMENT       a la premiere tentative effective qui REUSSIT. Si l'emetteur reste
+                         indisponible, aucune borne ne s'applique: les refus durent autant
+                         que la panne.
 
 LE PAPILLONNEMENT DE F.1, ET POURQUOI IL EXISTAIT
 F.1 servait le document rassis UNIQUEMENT dans la fenetre de refroidissement, et levait dans la

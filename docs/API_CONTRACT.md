@@ -151,6 +151,57 @@ Le **chemin chaud ne prend aucun verrou de récupération** : une fois le cache 
 vérifications JWT ne se sérialisent pas. Prouvé de façon déterministe — le verrou est tenu par
 un fil et une vérification chaude répond quand même.
 
+### Ce que la cadence impose à la tolérance (F.2, complément mesuré)
+
+La tolérance n'absorbe une panne **sans refus visible** que si une tentative de rafraîchissement
+**autorisée et réussie** peut avoir lieu **à l'intérieur** de la fenêtre de tolérance. Or la
+première tentative a lieu à l'expiration de la fraîcheur, et son échec marque l'horodatage de
+tentative : la suivante n'est permise qu'après `MERVIO_OIDC_MIN_REFRESH_SECONDS`. La condition
+recommandée est donc **`max_stale_seconds >= min_refresh_seconds`**.
+
+Mesuré sur le harnais déterministe, `cache_seconds = 300`, émetteur en panne à partir de
+`t = 0⁺`, une requête par seconde :
+
+| Observation | A — `max_stale=60`, `min_refresh=30` | B — `max_stale=10`, `min_refresh=30` |
+|---|---|---|
+| dernière acceptation | `t = 359` | `t = 309` |
+| premier refus | `t = 360`, `jwks_too_stale` | `t = 310`, `jwks_too_stale` |
+| instants des tentatives réseau | 300, 330, 360, 390, 420 | 300, 330, 360, 390, 420 |
+| transitions refus → acceptation pendant la panne | **0** | **0** |
+| émetteur revenu **dans** la tolérance | retour `t = 315` → **aucun refus**, rechargement à `t = 330` | retour `t = 305` → **20 s de refus** (`t = 310` à `t = 329`), rechargement à `t = 330` |
+
+Dans les deux cas la fenêtre d'utilisabilité vaut bien `cache_seconds + max_stale_seconds` et le
+verdict reste **monotone pendant la panne**. La différence est ailleurs : en A une tentative tombe
+**dans** la fenêtre (`330 < 360`), donc une panne plus courte que la tolérance est absorbée sans
+aucun refus ; en B aucune tentative n'y tombe (`330 > 310`), donc la tolérance ne fait que
+**retarder le refus** de 10 s — mesuré : 20 s de refus alors que l'émetteur était revenu depuis
+`t = 305`.
+
+**`max_stale_seconds < min_refresh_seconds` reste légal, et ce n'est pas une validation oubliée.**
+`max_stale_seconds = 0` est le cas limite déjà ratifié — refus dès l'expiration, révocation
+privilégiée — et une tolérance courte est un choix d'exploitant légitime. Le contrat ne l'interdit
+donc pas ; il en **nomme la conséquence**. Les défauts (`60` et `30`) satisfont la relation
+recommandée.
+
+**La cadence est indépendante par ce qu'elle MESURE, pas par ses effets.** Elle ne décide jamais
+à elle seule qu'une clé est acceptée — cela reste vrai. Mais elle détermine s'il existe une
+occasion de renouveler la tolérance avant son expiration, donc elle conditionne ce que la
+tolérance apporte réellement.
+
+**Délai de rétablissement : trois instants qu'il ne faut pas confondre.**
+
+| Instant | Ce qui le détermine |
+|---|---|
+| tentative **autorisée** | au plus tard `min_refresh_seconds` après la dernière tentative, réussie **ou non** |
+| tentative **effective** | la **première requête** arrivée après cet instant : il n'existe **aucun rafraîchisseur en arrière-plan** |
+| **rétablissement** | la première tentative effective qui **réussit** |
+
+Seul le premier est borné par `min_refresh_seconds`. Mesuré en B avec un trafic interrompu entre
+`t = 311` et `t = 400` : la tentative est autorisée dès `t = 330`, **aucun appel sortant** n'a lieu
+avant `t = 400`, et le rétablissement est à `t = 400`. Sans trafic, la tolérance n'est donc jamais
+renouvelée d'elle-même. Et si l'émetteur reste indisponible, **aucune borne de rétablissement ne
+s'applique** : les refus durent autant que la panne.
+
 ### Trois classifications distinctes pour un JWKS qui ne sert pas de clé (F.1)
 Ne pas confondre une erreur de l'**émetteur** avec un jeton douteux : sinon on cherche le
 problème du mauvais côté.

@@ -392,3 +392,118 @@ def test_an_availability_failure_is_tolerated_and_an_integrity_one_is_not():
     assert "jwks_uri_outside_issuer" not in TOLERABLE_FAILURES
     assert "insecure_discovery_url" not in TOLERABLE_FAILURES
     assert "discovery_without_jwks_uri" not in TOLERABLE_FAILURES
+
+
+# -- la CADENCE face a la TOLERANCE: `max_stale_seconds < min_refresh_seconds` -------------
+#
+# Configuration LEGALE et volontairement non interdite. Ce bloc epingle ce qu'elle produit
+# reellement, mesure sur ce meme harnais: la tolerance n'absorbe une panne sans refus visible
+# que si une tentative autorisee ET reussie peut avoir lieu DANS la fenetre de tolerance.
+# Reglages: `cache_seconds=300`, donc fenetre `[300, 300 + max_stale_seconds)`.
+
+TOLERANCE_COURTE = dict(cache_seconds=300.0, max_stale_seconds=10.0,
+                        min_refresh_seconds=30.0)
+TOLERANCE_LONGUE = dict(cache_seconds=300.0, max_stale_seconds=60.0,
+                        min_refresh_seconds=30.0)
+
+
+def test_a_tolerance_shorter_than_the_cadence_only_postpones_the_refusal():
+    """Panne continue. La fenetre reste `cache + max_stale` et le verdict reste MONOTONE: ce
+    n'est donc pas le papillonnement de F.1 qui revient. Mesure: dernier accepte t=309,
+    premier refus t=310, tentatives a 300/330/360/390/420."""
+    key = Key("k1", "RS256")
+    emetteur, clock = Issuer([key]), Clock()
+    source, verifier = build(emetteur, clock, **TOLERANCE_COURTE)
+    verifier.verify(token(key))                      # cache rempli a t=0
+    emetteur.down = True
+
+    tentatives, verdicts = [], []
+    for moment in range(0, 421):
+        clock.at(float(moment))
+        avant = len(emetteur.calls)
+        verdicts.append((float(moment), verdict(verifier, key)))
+        if len(emetteur.calls) > avant:
+            tentatives.append(float(moment))
+
+    acceptes = [t for t, v in verdicts if v == "accepte"]
+    refuses = [(t, v) for t, v in verdicts if v != "accepte"]
+    assert acceptes[-1] == 309.0 and refuses[0] == (310.0, "jwks_too_stale")
+    assert {v for _, v in refuses} == {"jwks_too_stale"}
+    # La cadence n'est PAS suspendue par l'expiration de la tolerance: on ressaie toujours.
+    assert tentatives == [300.0, 330.0, 360.0, 390.0, 420.0]
+    sequence = [v == "accepte" for _, v in verdicts]
+    assert not any(not sequence[i] and sequence[i + 1] for i in range(len(sequence) - 1)), \
+        "aucune transition refus -> acceptation tant que l'emetteur est en panne"
+    assert source._fetched_at == 0.0, "aucune tentative echouee ne deplace le chargement REUSSI"
+
+
+def test_a_tolerance_shorter_than_the_cadence_refuses_although_the_issuer_is_back():
+    """LE POINT DE LA TOLERANCE COURTE. L'emetteur revient a t=305, DANS la tolerance, mais la
+    prochaine tentative n'est permise qu'a t=330: 20 s de refus (t=310 a t=329) alors que les
+    cles etaient disponibles. Le retablissement suit une tentative autorisee ET reussie, pas
+    le retour de l'emetteur."""
+    key = Key("k1", "RS256")
+    emetteur, clock = Issuer([key]), Clock()
+    source, verifier = build(emetteur, clock, **TOLERANCE_COURTE)
+    verifier.verify(token(key))
+    emetteur.down = True
+
+    refuses, appels_pendant_le_retour = [], 0
+    for moment in range(300, 331):
+        if moment == 305:
+            emetteur.down = False                    # retour, DANS la fenetre de tolerance
+        clock.at(float(moment))
+        avant = len(emetteur.calls)
+        if verdict(verifier, key) != "accepte":
+            refuses.append(float(moment))
+        if moment > 305 and moment < 330 and len(emetteur.calls) > avant:
+            appels_pendant_le_retour += 1
+
+    assert refuses == [float(t) for t in range(310, 330)], "20 s de refus, emetteur disponible"
+    assert appels_pendant_le_retour == 0, "aucune tentative avant l'instant autorise t=330"
+    assert source._fetched_at == 330.0, "rechargement a la premiere tentative autorisee"
+    assert source.state()["fresh"] is True and source.state()["last_failure"] is None
+
+
+def test_a_tolerance_longer_than_the_cadence_absorbs_the_same_outage_without_a_refusal():
+    """Le contraste qui justifie la relation recommandee: memes 300 s de fraicheur, meme
+    cadence, meme panne, tolerance 60 au lieu de 10 -- une tentative tombe DANS la fenetre
+    (330 < 360) et la panne devient invisible."""
+    key = Key("k1", "RS256")
+    emetteur, clock = Issuer([key]), Clock()
+    source, verifier = build(emetteur, clock, **TOLERANCE_LONGUE)
+    verifier.verify(token(key))
+    emetteur.down = True
+
+    verdicts = []
+    for moment in range(300, 361):
+        if moment == 315:
+            emetteur.down = False
+        clock.at(float(moment))
+        verdicts.append(verdict(verifier, key))
+
+    assert set(verdicts) == {"accepte"}, "aucun refus: la tolerance a pu etre renouvelee"
+    assert source._fetched_at == 330.0
+
+
+def test_an_allowed_attempt_is_not_an_effective_one_without_traffic():
+    """Trois instants distincts. La tentative est AUTORISEE des t=330, mais la recuperation est
+    tiree par le TRAFIC: sans requete entre t=311 et t=400, aucun appel sortant n'a lieu et le
+    retablissement n'arrive qu'a t=400. Aucun rafraichisseur en arriere-plan."""
+    key = Key("k1", "RS256")
+    emetteur, clock = Issuer([key]), Clock()
+    source, verifier = build(emetteur, clock, **TOLERANCE_COURTE)
+    verifier.verify(token(key))
+    emetteur.down = True
+    clock.at(300.0)
+    assert verdict(verifier, key) == "accepte"       # tentative echouee, tolerance appliquee
+    emetteur.down = False                            # l'emetteur revient des t=300+
+    clock.at(311.0)
+    assert verdict(verifier, key) == "jwks_too_stale"
+    appels = len(emetteur.calls)
+
+    clock.at(400.0)                                  # 70 s apres l'instant AUTORISE (t=330)
+    assert len(emetteur.calls) == appels, "aucun appel sortant sans requete entrante"
+    assert verdict(verifier, key) == "accepte"
+    assert len(emetteur.calls) == appels + 1, "la tentative a lieu A la requete, pas avant"
+    assert source._fetched_at == 400.0

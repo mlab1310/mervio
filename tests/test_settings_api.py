@@ -133,6 +133,25 @@ def test_the_stale_tolerance_has_a_default_and_bounds():
             ApiSettings.from_env({**BASE, "MERVIO_OIDC_MAX_STALE_SECONDS": invalid})
 
 
+def test_a_tolerance_shorter_than_the_refresh_interval_is_accepted_on_purpose():
+    """CHOIX DELIBERE, pas une validation manquante. `max_stale_seconds < min_refresh_seconds`
+    est licite: `0` -- le cas limite deja ratifie -- en est l'extreme, et une tolerance courte
+    est un choix d'exploitant qui privilegie la revocation. Sa consequence est documentee et
+    mesuree (voir `tests/api/test_jwks_stale_policy.py`): aucune tentative ne tombe dans la
+    fenetre, donc la tolerance ne fait que REPORTER le refus. Une contrainte
+    `max_stale >= min_refresh` serait non monotone -- il faudrait exempter `0` -- et rien ne
+    devient inatteignable ici, contrairement a `min_refresh > cache_seconds`."""
+    settings = ApiSettings.from_env({**BASE, "MERVIO_OIDC_JWKS_CACHE_SECONDS": "300",
+                                     "MERVIO_OIDC_MAX_STALE_SECONDS": "10",
+                                     "MERVIO_OIDC_MIN_REFRESH_SECONDS": "30"})
+    assert settings.max_stale_seconds == 10.0
+    assert settings.min_refresh_seconds == 30.0
+    assert settings.max_stale_seconds < settings.min_refresh_seconds
+    # Et les defauts, eux, satisfont la relation RECOMMANDEE.
+    defauts = ApiSettings.from_env(BASE)
+    assert defauts.max_stale_seconds >= defauts.min_refresh_seconds
+
+
 def test_the_three_durations_are_independent_settings():
     """Aucune des trois ne se deduit des autres: elles ne mesurent pas la meme chose."""
     settings = ApiSettings.from_env({**BASE, "MERVIO_OIDC_JWKS_CACHE_SECONDS": "120",
