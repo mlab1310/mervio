@@ -49,16 +49,18 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from ..persistence.errors import NotFound, PermissionDenied
 from .auth import TokenRejected, TokenVerifier
 from .contract import API_CONTRACT, API_PREFIX
-from .errors import (PROBLEM_MEDIA_TYPE, ApiError, FORBIDDEN, INTERNAL, NOT_FOUND, NOT_READY,
-                     UNAUTHENTICATED)
+from .errors import (PROBLEM_MEDIA_TYPE, ApiError, FORBIDDEN, INTERNAL, INVALID_REQUEST,
+                     NOT_FOUND, NOT_READY, UNAUTHENTICATED)
 from .health import liveness, readiness
 from .identity import resolve
 from .routes import me as me_routes
+from .routes import reports as report_routes
 
 #: En-tetes poses sur TOUTE reponse. Une API JSON n'est pas une page, d'ou une CSP qui
 #: n'autorise rien: aucun document de ce service n'est destine a etre rendu par un navigateur.
@@ -116,6 +118,13 @@ def create_app(*, database_url: Optional[str] = None, verifier: Optional[TokenVe
         # Ni `permission` ni `role` ne sortent: le document est le meme pour tout refus de role.
         return _problem(FORBIDDEN, request)
 
+    @app.exception_handler(RequestValidationError)
+    async def _invalide(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # Le defaut de FastAPI rend `application/json` et REPRODUIT la valeur recue
+        # (`"input": "pas-un-uuid"`). Les deux violent le contrat: le type de media est
+        # `problem+json`, et une reponse d'erreur ne reproduit jamais l'entree.
+        return _problem(INVALID_REQUEST, request)
+
     @app.exception_handler(Exception)
     async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
         # Aucun echo, aucune trace: un defaut interne ne decrit pas la requete qui l'a revele.
@@ -134,6 +143,7 @@ def create_app(*, database_url: Optional[str] = None, verifier: Optional[TokenVe
     if verifier is not None and database is not None:
         _authenticate(app, verifier=verifier, database=database)
         app.include_router(me_routes.router)
+        app.include_router(report_routes.build_router(database))
 
     return app
 

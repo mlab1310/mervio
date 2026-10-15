@@ -257,6 +257,7 @@ ne les atteint pas et reste un 500. Comportement d'avant G-0, conservé volontai
 |---|---|---|
 | `GET /healthz`, `GET /readyz` | aucun | livrées (tranche E) |
 | `GET /v1/me` | authentifié | **livrée (tranche F)** |
+| `GET /v1/stores/{store_id}/analysis-runs/{run_id}/report` | `viewer` | **livrée (tranche G-2)** |
 
 `GET /v1/me` rend `user_id`, puis une entrée par appartenance — `organization_id`, `role`,
 `name`. Elle ne porte **pas** le sujet IdP : le porteur le connaît déjà, et un document qui le
@@ -269,8 +270,62 @@ tenant-scopées sans cette matrice.
 
 **Ce que `/v1/me` ne prouve pas.** Aucune isolation entre organisations. Elle ne rend que les
 appartenances de l'appelant, donc elle ne peut pas montrer ce qui arrive quand on demande la
-ressource d'un **autre** tenant. Cette preuve est une matrice par route — succès, 401, rôle
-insuffisant, accès croisé = 404 — et c'est la tranche G qui la porte.
+ressource d'un **autre** tenant. Cette preuve est une matrice par route, et c'est la route de
+rapport qui la porte depuis G-2 — voir la section suivante.
+
+## La route de rapport (G-2)
+
+`GET /v1/stores/{store_id}/analysis-runs/{run_id}/report`, rôle minimum `viewer`.
+
+| Cas | Réponse |
+|---|---|
+| rapport accessible | `200`, `application/json`, **les octets persistés**, en-tête `ETag` fort |
+| `If-None-Match` correspondant | `304`, sans corps, validateur répété |
+| rapport, exécution ou boutique absents | `404` `not_found` |
+| ressource d'une **autre** organisation | `404` `not_found`, **document identique** au cas absent |
+| identifiants croisés (boutique de A, exécution de B) | `404` `not_found`, même document |
+| jeton absent, invalide ou expiré | `401` `unauthenticated` indifférencié |
+| `store_id` ou `run_id` non-UUID | `422` `invalid_request` |
+
+**L'organisation n'est ni fournie, ni devinée.** Le chemin ne porte aucune organisation — la
+garde AST 3 l'interdit. Mais sous quelle organisation lire ? On ne peut pas le demander à la
+base avant d'avoir un contexte : sans contexte, `app_current_organization_id()` vaut `NULL`,
+les politiques ne rendent aucune ligne, et une lecture hors contexte serait exactement l'oracle
+que l'isolation interdit. La route **essaie donc chaque appartenance de l'appelant**, chacune
+dans son propre `TenantSession`. Chaque tentative est bornée par RLS à une organisation dont il
+est membre : aucune ne peut atteindre un tenant étranger. La première qui trouve gagne ; sinon,
+`404`. Coût : au plus une requête par appartenance.
+
+**Un seul chemin produit les quatre `404`.** `get_report_for_run` filtre sur
+`(organization_id, store_id, analysis_run_id)` en une seule condition : une combinaison croisée
+ne trouve rien, exactement comme un identifiant inventé. Il n'y a donc pas quatre chemins à
+garder alignés. Vérifié octet pour octet, `instance` mis à part — il porte le chemin, qui
+diffère par construction.
+
+**Ce que la boucle n'avale pas.** Seul `NotFound` fait passer à l'appartenance suivante ; un
+`PermissionDenied` remonte tel quel et devient un `403`. Le cas est aujourd'hui **inatteignable**
+— `READ` exige `viewer`, le rôle le plus bas de la matrice — mais la boucle ne décide pas à la
+place de la matrice si celle-ci change.
+
+**Les octets servis sont ceux qui sont persistés**, et l'`ETag` est leur empreinte vérifiée
+(G-1). Aucune re-sérialisation : la réponse est construite sans passer par un encodeur JSON.
+
+### Trois limites constatées, à arbitrer
+
+1. **`Cache-Control: no-store` et `ETag` se contredisent.** L'en-tête global de la tranche E
+   pose `no-store` sur toute réponse ; un client qui l'honore ne conservera pas le validateur et
+   n'émettra jamais `If-None-Match`. Le `304` reste correct et testé, mais sa valeur pratique
+   dépend d'un client qui conserve l'`ETag` de lui-même. Le résoudre demanderait `private,
+   no-cache` sur cette route — une modification d'une règle de sécurité globale, donc une
+   décision, non prise ici.
+2. **Le `405` n'est pas un `problem+json`.** Une méthode non prévue rend
+   `{"detail":"Method Not Allowed"}` en `application/json`. **Antérieur à G-2** : `POST /healthz`
+   se comporte déjà ainsi. Le catalogue est fermé et ne contient pas de code `405` ; en ajouter
+   un est une décision.
+3. **`instance` porte le chemin de la requête**, donc un segment malformé y réapparaît. C'est le
+   comportement contractuel depuis la tranche E, pour tous les problèmes : le chemin est ce que
+   l'appelant a lui-même écrit. Rien d'autre de la requête ne sort, et aucun détail du
+   validateur.
 
 ## Pagination
 
@@ -289,5 +344,6 @@ blanche**.
 | `tests/test_settings_api.py` | `ApiSettings`, et aucun nom de fournisseur dans la logique |
 | `tests/persistence/test_api_readiness.py` | `readyz` contre une vraie base |
 | `tests/persistence/test_api_me.py` | `/v1/me`, la matrice de refus, l'absence de fuite |
+| `tests/persistence/test_api_report.py` | la route de rapport : octets, ETag, 304, matrice d'accès croisé |
 | `tests/persistence/test_pool_isolation.py` | l'invariant de sécurité du pool (D-099) |
 | `tests/persistence/test_users_visibility.py` | SEC-05 / TD-27 |

@@ -240,7 +240,11 @@ def test_a_skeleton_without_a_verifier_serves_no_business_route(clean):
         assert c.get(f"{API_PREFIX}/openapi.json").json()["paths"] == {}
 
 
-def test_the_openapi_document_now_declares_exactly_one_route(client):
+def test_the_openapi_document_declares_exactly_the_delivered_routes(client):
+    """Ensemble FERME, jamais un minimum: une route de plus fait echouer ce test. `/v1/me`
+    (tranche F) et le rapport (tranche G-2) sont les deux seules livrees."""
     document = client.get(f"{API_PREFIX}/openapi.json").json()
-    assert list(document["paths"]) == [ME]
+    rapport = f"{API_PREFIX}/stores/{{store_id}}/analysis-runs/{{run_id}}/report"
+    assert sorted(document["paths"]) == sorted([ME, rapport])
     assert list(document["paths"][ME]) == ["get"]
+    assert list(document["paths"][rapport]) == ["get"]
