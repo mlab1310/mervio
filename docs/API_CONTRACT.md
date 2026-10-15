@@ -222,6 +222,35 @@ est `iss` + `aud`, vérifiés avant d'atteindre la base ; une limitation de déb
 Conséquence voulue : la réponse a la **même forme** pour un sujet connu et un sujet inconnu, de
 sorte qu'elle ne révèle pas qui est inscrit.
 
+## Des erreurs de persistance aux refus HTTP (G-0)
+
+Deux erreurs de la couche de persistance, et **deux seulement**, deviennent des refus client :
+
+| Erreur de persistance | Réponse |
+|---|---|
+| `NotFound` | 404 `not_found` |
+| `PermissionDenied` | 403 `forbidden` |
+
+**Mesuré avant G-0, sur `0dbb8a4`** : les trois cas — `NotFound`, `TenantAccessDenied`,
+`PermissionDenied` — rendaient `500 internal_error`. Un accès croisé aurait donc été un 500, et
+la propriété « tenant croisé et inexistant sont indiscernables », promise plus haut, était
+**inatteignable**.
+
+**L'indiscernabilité est structurelle.** `TenantAccessDenied` hérite de `NotFound`, et la
+recherche de gestionnaire remonte la hiérarchie : les deux atteignent le même gestionnaire, qui
+rend le même document constant. Aucun code de `api/` ne nomme `TenantAccessDenied` — vérifié par
+l'AST — donc rien ne peut cesser de les confondre par inadvertance. Comparé **octet pour octet**,
+corps et en-têtes, sur le **même chemin** : `instance` porte le chemin, donc comparer deux
+chemins différents ne prouverait rien.
+
+**Tout le reste demeure un 500.** `MoneyPrecisionError`, `SchemaNotReady`, `ImportRejected`,
+`JobStateError` décrivent un défaut interne, pas une requête client fautive ; les traduire en 4xx
+ferait chercher le problème du mauvais côté. La liste est fermée et un test négatif la verrouille.
+
+**Limite connue.** Les gestionnaires vivent à l'intérieur de la pile de middlewares : une erreur
+de persistance levée par le middleware d'authentification — donc par la résolution d'identité —
+ne les atteint pas et reste un 500. Comportement d'avant G-0, conservé volontairement et testé.
+
 ## Routes
 
 | Route | Rôle min. | État |
@@ -254,6 +283,7 @@ blanche**.
 | Suite | Objet |
 |---|---|
 | `tests/api/test_api_guards.py` | les trois gardes AST |
+| `tests/api/test_error_translation.py` | la traduction des erreurs de persistance (G-0) |
 | `tests/api/test_health_and_errors.py` | `healthz`, `problem+json`, en-têtes, versionnage |
 | `tests/api/test_auth_contract.py` | le contrat de jeton de D-098a, contrôle par contrôle |
 | `tests/test_settings_api.py` | `ApiSettings`, et aucun nom de fournisseur dans la logique |

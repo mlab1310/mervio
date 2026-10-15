@@ -15,6 +15,34 @@ L'API NE CALCULE RIEN ET NE VALIDE RIEN
 Elle n'importe ni le moteur analytique (garde 1) ni le validateur de schema (garde 2). Elle
 projette ce que le moteur a produit et que la persistance a scelle; et elle ne peut pas rejeter
 a la lecture un rapport 1.x legitimement persiste.
+
+DEUX ERREURS DE PERSISTANCE, ET DEUX SEULEMENT, DEVIENNENT DES REFUS CLIENT (G-0)
+    NotFound             -> 404 `not_found`
+    PermissionDenied     -> 403 `forbidden`
+Avant G-0, les deux remontaient au gestionnaire generique: MESURE sur `0dbb8a4`, les trois cas
+-- `NotFound`, `TenantAccessDenied`, `PermissionDenied` -- rendaient 500 `internal_error`. Un
+acces croise aurait donc ete un 500, et la propriete << tenant croise et inexistant sont
+indiscernables >> aurait ete inatteignable.
+
+L'INDISCERNABILITE EST STRUCTURELLE, PAS DISCIPLINAIRE
+`TenantAccessDenied` HERITE de `NotFound` (`persistence/errors.py`), et la recherche de
+gestionnaire remonte la hierarchie: les deux atteignent donc le MEME gestionnaire, qui rend le
+MEME document constant. Aucun code ne les distingue, donc aucun code ne peut cesser de les
+confondre par inadvertance. Teste octet pour octet, sur le MEME chemin -- `instance` porte le
+chemin, donc comparer deux chemins differents ne prouverait rien.
+
+CE QUI RESTE UN 500, ET POURQUOI
+Toutes les autres erreurs de persistance. `MoneyPrecisionError`, `SchemaNotReady`,
+`ImportRejected`, `JobStateError` ne decrivent pas une requete client fautive mais un defaut
+interne; les traduire en 4xx ferait chercher le probleme du mauvais cote. La traduction est
+donc une liste FERMEE de deux entrees, et un test negatif le verrouille.
+
+LIMITE CONNUE: LE MIDDLEWARE N'EST PAS COUVERT PAR CES GESTIONNAIRES
+Les gestionnaires vivent dans `ExceptionMiddleware`, a l'INTERIEUR de la pile de middlewares.
+Une erreur de persistance levee par `_require_identity` -- donc par `resolve()` -- ne les
+atteint pas et reste un 500. C'est le comportement d'avant G-0, conserve volontairement: la
+resolution d'identite n'est pas une lecture de ressource, et rendre 404 sur << votre
+appartenance a disparu pendant la requete >> decrirait un etat interne. Teste explicitement.
 """
 from __future__ import annotations
 
@@ -23,9 +51,11 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from ..persistence.errors import NotFound, PermissionDenied
 from .auth import TokenRejected, TokenVerifier
 from .contract import API_CONTRACT, API_PREFIX
-from .errors import PROBLEM_MEDIA_TYPE, ApiError, INTERNAL, NOT_READY, UNAUTHENTICATED
+from .errors import (PROBLEM_MEDIA_TYPE, ApiError, FORBIDDEN, INTERNAL, NOT_FOUND, NOT_READY,
+                     UNAUTHENTICATED)
 from .health import liveness, readiness
 from .identity import resolve
 from .routes import me as me_routes
@@ -73,6 +103,18 @@ def create_app(*, database_url: Optional[str] = None, verifier: Optional[TokenVe
     @app.exception_handler(ApiError)
     async def _api_error(request: Request, exc: ApiError) -> JSONResponse:
         return _problem(exc.problem, request)
+
+    @app.exception_handler(NotFound)
+    async def _absent(request: Request, exc: NotFound) -> JSONResponse:
+        # `TenantAccessDenied` HERITE de `NotFound`, donc elle arrive ICI sans etre nommee:
+        # l'indiscernabilite est produite par la hierarchie, pas par une discipline d'ecriture.
+        # Aucun attribut de l'exception n'est lu -- ni `kind`, ni son message.
+        return _problem(NOT_FOUND, request)
+
+    @app.exception_handler(PermissionDenied)
+    async def _refuse(request: Request, exc: PermissionDenied) -> JSONResponse:
+        # Ni `permission` ni `role` ne sortent: le document est le meme pour tout refus de role.
+        return _problem(FORBIDDEN, request)
 
     @app.exception_handler(Exception)
     async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
